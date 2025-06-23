@@ -1,26 +1,20 @@
-import sys
-import time
+# multimodel_gui.py
 import os
+import time
 import cv2
 import numpy as np
 import psutil
 import onnxruntime as ort
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QHBoxLayout, QVBoxLayout
+from PyQt6.QtWidgets import QMainWindow, QLabel
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
+from PyQt6 import uic
 
-# 모델 및 데이터 경로 설정
-target_model = "./yolov3_neubla.onnx"
-resnet_model_path = "./resnet50.onnx"
-resnet_image_dir = "./imagenet-sample-images"
-input_video = "./stockholm_1280x720.mp4"
 input_width = input_height = 608
 
-# ImageNet 클래스 이름 로드
 with open("imagenet_classes.txt", "r") as f:
     imagenet_classes = [line.strip() for line in f.readlines()]
 
-# COCO 클래스 이름 정의
 coco_classes = [
     "person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck",
     "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
@@ -57,7 +51,6 @@ def draw_detections(img, box, score, class_id):
     label = f"{class_name} {score:.2f}"
     x, y, w, h = box
     cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-    # 빨간색 텍스트
     cv2.putText(img, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
 def postprocessing(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
@@ -105,67 +98,25 @@ def get_cpu_metrics(interval=0):
         "Interrupts": interrupts
     }
 
-class UnifiedViewer(QWidget):
+class UnifiedViewer(QMainWindow):
     def __init__(self):
         super().__init__()
+        uic.loadUi("multimodel_display_layout.ui", self)
 
-        self.setWindowTitle("YOLO + ResNet Unified Viewer with CPU & NPU Monitor")
-        self.resize(1280, 640)
+        self.yolo_label = self.findChild(QLabel, "yolo_label")
+        self.resnet_label = self.findChild(QLabel, "resnet_label")
+        self.yolo_info_label = self.findChild(QLabel, "yolo_info_label")
+        self.cpu_info_label = self.findChild(QLabel, "cpu_info_label")
+        self.npu_info_label = self.findChild(QLabel, "npu_info_label")
 
-        # -------------------- 상단 영상 뷰어 --------------------
-        video_layout = QHBoxLayout()
-        self.yolo_label = QLabel()
-        self.resnet_label = QLabel()
-        self.yolo_label.setFixedSize(640, 480)
-        self.resnet_label.setFixedSize(640, 480)
-        self.yolo_label.setScaledContents(True)
-        self.resnet_label.setScaledContents(True)
-        video_layout.addWidget(self.yolo_label)
-        video_layout.addWidget(self.resnet_label)
-
-        # -------------------- 상단 추론 정보 라벨 (YOLO + ResNet) --------------------
-        self.yolo_info_label = QLabel()
-        self.yolo_info_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.yolo_info_label.setStyleSheet("font-size: 14px; padding: 4px;")
-        self.yolo_info_label.setTextFormat(Qt.TextFormat.RichText)
-
-        # -------------------- CPU / NPU 정보 라벨 --------------------
-        self.cpu_info_label = QLabel()
-        self.npu_info_label = QLabel()
-        for label in [self.cpu_info_label, self.npu_info_label]:
-            label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-            label.setStyleSheet("font-size: 13px; padding: 4px;")
-            label.setTextFormat(Qt.TextFormat.RichText)
-            # 필요 시 고정 높이 제거 또는 줄이기
-            label.setFixedHeight(100)
-
-        cpu_npu_layout = QHBoxLayout()
-        cpu_npu_layout.addWidget(self.cpu_info_label)
-        cpu_npu_layout.addWidget(self.npu_info_label)
-
-        # -------------------- 하단 정보 레이아웃 --------------------
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(4)  # YOLO FPS와 CPU info 사이 간격 최소화
-        info_layout.addWidget(self.yolo_info_label)
-        info_layout.addLayout(cpu_npu_layout)
-
-        # -------------------- 전체 레이아웃 --------------------
-        main_layout = QVBoxLayout()
-        main_layout.addLayout(video_layout)
-        main_layout.addLayout(info_layout)
-        self.setLayout(main_layout)
-
-        # -------------------- 모델 로딩 --------------------
-        self.yolo_session = ort.InferenceSession(target_model)
-        self.resnet_session = ort.InferenceSession(resnet_model_path)
-
-        self.cap = cv2.VideoCapture(input_video)
-        self.resnet_images = [os.path.join(resnet_image_dir, f)
-                              for f in os.listdir(resnet_image_dir)
+        self.yolo_session = ort.InferenceSession("./yolov3_neubla.onnx")
+        self.resnet_session = ort.InferenceSession("./resnet50.onnx")
+        self.cap = cv2.VideoCapture("./stockholm_1280x720.mp4")
+        self.resnet_images = [os.path.join("./imagenet-sample-images", f)
+                              for f in os.listdir("./imagenet-sample-images")
                               if f.lower().endswith(('jpg', 'jpeg', 'png'))]
         self.resnet_index = 0
 
-        # -------------------- 추론 성능 측정 초기화 --------------------
         self.yolo_total_infer_time = 0.0
         self.yolo_infer_count = 0
         self.yolo_avg_infer_time = 0.0
@@ -176,10 +127,8 @@ class UnifiedViewer(QWidget):
         self.resnet_avg_infer_time = 0.0
         self.resnet_avg_fps = 0.0
 
-        # -------------------- CPU 통계 초기화 --------------------
         self.prev_cpu_stats = get_cpu_metrics(interval=0)
 
-        # -------------------- 타이머 설정 --------------------
         self.yolo_timer = QTimer()
         self.yolo_timer.timeout.connect(self.update_yolo)
         self.yolo_timer.start(30)
@@ -199,23 +148,18 @@ class UnifiedViewer(QWidget):
             return
 
         input_tensor, (w, h) = preprocess_yolo(frame)
-
         infer_start = time.time()
         try:
             output = self.yolo_session.run(None, {"input": input_tensor})
         except Exception as e:
             print(f"[YOLO ERROR] {e}")
             return
-
         infer_end = time.time()
 
         result = postprocessing(output, frame, w, h)
         self.yolo_label.setPixmap(convert_cv_qt(result))
 
-        # 현재 추론 시간
-        current_infer_time = (infer_end - infer_start) * 1000.0  # ms
-
-        # 누적 계산
+        current_infer_time = (infer_end - infer_start) * 1000.0
         self.yolo_total_infer_time += current_infer_time
         self.yolo_infer_count += 1
         self.yolo_avg_infer_time = self.yolo_total_infer_time / self.yolo_infer_count
@@ -247,34 +191,27 @@ class UnifiedViewer(QWidget):
         cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
         self.resnet_label.setPixmap(convert_cv_qt(img))
 
-        # 현재 추론 시간
-        current_infer_time = (infer_end - infer_start) * 1000.0  # ms
-
-        # 누적 계산
+        current_infer_time = (infer_end - infer_start) * 1000.0
         self.resnet_total_infer_time += current_infer_time
         self.resnet_infer_count += 1
         self.resnet_avg_infer_time = self.resnet_total_infer_time / self.resnet_infer_count
         self.resnet_avg_fps = 1000.0 / self.resnet_avg_infer_time if self.resnet_avg_infer_time > 0 else 0.0
 
     def update_cpu_npu_usage(self):
-        # 현재 CPU 통계 획득
         current = get_cpu_metrics(interval=0)
         prev = self.prev_cpu_stats
         delta_ctx = current["Context_Switches"] - prev["Context_Switches"]
         delta_int = current["Interrupts"] - prev["Interrupts"]
         load1, load5, load15 = current["Load_Average"]
 
-        # ▶ YOLO + ResNet 정보를 한 줄로 통합 출력 (왼쪽 위)
         self.yolo_info_label.setText(
             f"<b>YOLO</b> Avg FPS: {self.yolo_avg_fps:.1f} "
-            f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>)"
-            f" | "
+            f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>) | "
             f"<b><span style='color: purple;'>ResNet</span></b> Avg FPS: "
             f"<span style='color: purple;'>{self.resnet_avg_fps:.1f}</span> "
             f"(<span style='color: purple;'>{self.resnet_avg_infer_time:.1f} ms</span>)"
         )
 
-        # ▶ CPU 정보 출력 (왼쪽 하단)
         self.cpu_info_label.setText(
             f"<b><span style='color: blue;'>CPU</span></b><br>"
             f"Usage: {current['CPU_Usage_percent']:.1f} %<br>"
@@ -282,7 +219,6 @@ class UnifiedViewer(QWidget):
             f"CtxSwitches/sec: {delta_ctx} | Int/sec: {delta_int}"
         )
 
-        # ▶ NPU 정보 출력 (오른쪽 하단) - 임의 값
         self.npu_info_label.setText(
             f"<b><span style='color: green;'>NPU</span></b><br>"
             f"Usage: 42.0 %<br>"
@@ -290,14 +226,4 @@ class UnifiedViewer(QWidget):
             f"CtxSwitches/sec: 12 | Int/sec: 3"
         )
 
-        # 이전 상태 갱신
         self.prev_cpu_stats = current
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    viewer = UnifiedViewer()
-    viewer.show()
-    sys.exit(app.exec())
-
-
