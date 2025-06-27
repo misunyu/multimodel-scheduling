@@ -56,24 +56,7 @@ class ONNXProfiler(QMainWindow):
 
         self.set_tree_root(default_folder)
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
-        self.init_npu()
 
-    def init_npu(self):
-        driver1 = NeublaDriver()
-        driver2 = NeublaDriver()
-
-        assert driver1.Init(0) == 0
-        assert driver1.Close() == 0
-
-        assert driver2.Init(1) == 0
-        assert driver2.Close() == 0
-
-
-    def closeEvent(self, event):
-
-        self.log_output.appendPlainText("[Exit] Application is closing...")
-        print("[Exit] Application is closing...")
-        super().closeEvent(event)
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
@@ -225,15 +208,53 @@ class ONNXProfiler(QMainWindow):
         self.log_output.appendPlainText(f"[{label}] Profiling {o_file}")
         print(f"[{label}] Profiling {o_file}")
 
-        # Simulated execution
-        start_load = time.time()
-        time.sleep(0.01)
-        end_load = time.time()
-        load_time_ms = (end_load - start_load) * 1000.0
+        # # Simulated execution
+        # start_load = time.time()
+        # time.sleep(0.01)
+        # end_load = time.time()
+        # load_time_ms = (end_load - start_load) * 1000.0
+        #
+        # start_infer = time.time()
+        # time.sleep(0.003)
+        # end_infer = time.time()
+        # infer_time_ms = (end_infer - start_infer) * 1000.0
 
-        start_infer = time.time()
-        time.sleep(0.003)
-        end_infer = time.time()
-        infer_time_ms = (end_infer - start_infer) * 1000.0
+        npu_num = 0
+        if label == "NPU2":
+            npu_num = 1
+
+        load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
 
         return o_file, load_time_ms, infer_time_ms
+
+
+    def process_yolo_npu(npu_num, o_path):
+        # print(f"==== Start Driver #{npu_num} ====")
+        try:
+            driver = NeublaDriver()
+            assert driver.Init(npu_num) == 0
+
+            start_load = time.time()
+            assert driver.LoadModel(o_path) == 0
+            end_load = time.time()
+            load_time_ms = (end_load - start_load) * 1000.0
+
+            random_input = np.random.rand(3, 608, 608).astype(np.uint8)
+            input_data = random_input.tobytes()
+
+            start_infer = time.time()
+            assert driver.SendInput(input_data, 3 * 608 * 608) == 0
+            assert driver.Launch() == 0
+            raw_outputs = driver.ReceiveOutputs()
+            end_infer = time.time()
+            infer_time_ms = (end_infer - start_infer) * 1000.0
+
+            assert driver.Close() == 0
+
+        except Exception as e:
+            assert driver.Close() == 0
+            print(e)
+            print("Error occured. Closed successfully.")
+            exit()
+
+        return load_time_ms, infer_time_ms
