@@ -12,14 +12,15 @@ from PyQt6.QtWidgets import (
     QHeaderView
 )
 from PyQt6.QtGui import QFileSystemModel
-
+from NeublaDriver import NeublaDriver
 
 class ONNXProfiler(QMainWindow):
+
     def __init__(self):
         super().__init__()
         uic.loadUi("onnx_profiler_display_modify.ui", self)
 
-        # Connect UI elements
+        # UI 연결
         self.folder_input = self.findChild(QLineEdit, "folder_input")
         self.browse_button = self.findChild(QPushButton, "browse_button")
         self.profile_button = self.findChild(QPushButton, "profile_button")
@@ -31,13 +32,11 @@ class ONNXProfiler(QMainWindow):
         self.npu1_table = self.findChild(QTableWidget, "npu1_table")
         self.npu2_table = self.findChild(QTableWidget, "npu2_table")
 
-        # Stretch columns
         for table in [self.cpu_table, self.npu1_table, self.npu2_table]:
             header = table.horizontalHeader()
             header.setStretchLastSection(True)
             header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
-        # File system model
         self.fs_model = QFileSystemModel()
         self.fs_model.setReadOnly(True)
         self.fs_model.setNameFilters(["*.onnx", "*.o"])
@@ -47,7 +46,6 @@ class ONNXProfiler(QMainWindow):
         self.model_tree_view.header().setStretchLastSection(True)
         self.model_tree_view.header().setDefaultSectionSize(300)
 
-        # Default folder
         default_folder = os.path.join(os.getcwd(), "models")
         if not os.path.isdir(default_folder):
             default_folder = os.getcwd()
@@ -58,6 +56,24 @@ class ONNXProfiler(QMainWindow):
 
         self.set_tree_root(default_folder)
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
+        self.init_npu()
+
+    def init_npu(self):
+        driver1 = NeublaDriver()
+        driver2 = NeublaDriver()
+
+        assert driver1.Init(0) == 0
+        assert driver1.Close() == 0
+
+        assert driver2.Init(1) == 0
+        assert driver2.Close() == 0
+
+
+    def closeEvent(self, event):
+
+        self.log_output.appendPlainText("[Exit] Application is closing...")
+        print("[Exit] Application is closing...")
+        super().closeEvent(event)
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
@@ -92,41 +108,66 @@ class ONNXProfiler(QMainWindow):
             self.log_output.appendPlainText("[Start] Profiling models...\n")
             QApplication.processEvents()
 
+        # 초기화
         self.init_table(self.cpu_table)
         self.init_table(self.npu1_table)
         self.init_table(self.npu2_table)
 
+        # 1. ONNX 파일 프로파일링 (CPU)
         onnx_files = []
         for dirpath, _, filenames in os.walk(root_folder):
             for f in filenames:
                 if f.endswith(".onnx"):
                     onnx_files.append(os.path.join(dirpath, f))
 
-        for row, model_path in enumerate(onnx_files):
+        for model_path in onnx_files:
             model_file = os.path.basename(model_path)
-
             self.log_output.appendPlainText(f"[Start] Loading {model_file}...")
             QApplication.processEvents()
 
             try:
                 load_ms, infer_ms, input_shape = self.profile_model_cpu(model_path)
-                npu1_load, npu1_infer = self.profile_model_npu1(model_file)
-                npu2_load, npu2_infer = self.profile_model_npu2(model_file)
+                self.insert_result_row(self.cpu_table, model_file, load_ms, infer_ms)
 
                 index = self.fs_model.index(model_path)
-                display_name = f"{model_file} (CPU: {infer_ms:.1f}ms / NPU1: {npu1_infer:.1f}ms)"
+                display_name = f"{model_file} (CPU: {infer_ms:.1f}ms)"
                 self.fs_model.setData(index, display_name, role=Qt.ItemDataRole.DisplayRole)
 
-                self.insert_result_row(self.cpu_table, row, model_file, load_ms, infer_ms)
-                self.insert_result_row(self.npu1_table, row, model_file, npu1_load, npu1_infer)
-                self.insert_result_row(self.npu2_table, row, model_file, npu2_load, npu2_infer)
-
                 self.log_output.appendPlainText(f"[Done] {model_file} - CPU: {infer_ms:.1f}ms\n")
+
             except Exception as e:
                 index = self.fs_model.index(model_path)
                 error_display = f"{model_file} (Error: {str(e)})"
                 self.fs_model.setData(index, error_display, role=Qt.ItemDataRole.DisplayRole)
                 self.log_output.appendPlainText(f"[Error] {model_file}: {str(e)}\n")
+
+            self.log_output.verticalScrollBar().setValue(self.log_output.verticalScrollBar().maximum())
+            QApplication.processEvents()
+
+        # 2. .o 파일 프로파일링 (NPU1/NPU2)
+        o_files = list({os.path.join(dirpath, f)
+                        for dirpath, _, filenames in os.walk(root_folder)
+                        for f in filenames if f.endswith(".o")})
+
+        for o_path in o_files:
+            o_file = os.path.basename(o_path)
+            self.log_output.appendPlainText(f"[Start] Loading {o_file}...")
+            QApplication.processEvents()
+
+            try:
+                # NPU1
+                o_file1, npu1_load, npu1_infer = self.profile_model_npu(o_path, "NPU1")
+                self.insert_result_row(self.npu1_table, o_file1, npu1_load, npu1_infer)
+
+                # NPU2
+                o_file2, npu2_load, npu2_infer = self.profile_model_npu(o_path, "NPU2")
+                self.insert_result_row(self.npu2_table, o_file2, npu2_load, npu2_infer)
+
+                self.log_output.appendPlainText(
+                    f"[Done] {o_file} - NPU1: {npu1_infer:.1f}ms / NPU2: {npu2_infer:.1f}ms\n"
+                )
+            except Exception as e:
+                self.log_output.appendPlainText(f"[Error] {o_file}: {str(e)}\n")
 
             self.log_output.verticalScrollBar().setValue(self.log_output.verticalScrollBar().maximum())
             QApplication.processEvents()
@@ -137,7 +178,8 @@ class ONNXProfiler(QMainWindow):
         table.setHorizontalHeaderLabels(["Model Name", "Load Time (ms)", "Inference Time (ms)"])
         table.setRowCount(0)
 
-    def insert_result_row(self, table, row, model_file, load_ms, infer_ms):
+    def insert_result_row(self, table, model_file, load_ms, infer_ms):
+        row = table.rowCount()
         table.insertRow(row)
         table.setItem(row, 0, QTableWidgetItem(model_file))
         table.setItem(row, 1, QTableWidgetItem(f"{load_ms:.1f}"))
@@ -178,12 +220,20 @@ class ONNXProfiler(QMainWindow):
 
         return load_time_ms, infer_time_ms, shape
 
-    def profile_model_npu1(self, model_file):
-        load_time_ms = np.random.uniform(20.0, 30.0)
-        infer_time_ms = np.random.uniform(2.0, 4.0)
-        return load_time_ms, infer_time_ms
+    def profile_model_npu(self, o_path, label):
+        o_file = os.path.basename(o_path)
+        self.log_output.appendPlainText(f"[{label}] Profiling {o_file}")
+        print(f"[{label}] Profiling {o_file}")
 
-    def profile_model_npu2(self, model_file):
-        load_time_ms = np.random.uniform(18.0, 28.0)
-        infer_time_ms = np.random.uniform(2.0, 4.0)
-        return load_time_ms, infer_time_ms
+        # Simulated execution
+        start_load = time.time()
+        time.sleep(0.01)
+        end_load = time.time()
+        load_time_ms = (end_load - start_load) * 1000.0
+
+        start_infer = time.time()
+        time.sleep(0.003)
+        end_infer = time.time()
+        infer_time_ms = (end_infer - start_infer) * 1000.0
+
+        return o_file, load_time_ms, infer_time_ms
