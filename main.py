@@ -11,7 +11,7 @@ from PyQt6.QtGui import QImage, QPixmap
 
 # 모델 및 데이터 경로 설정
 target_model = "./yolov3_neubla.onnx"
-resnet_model_path = "./resnet50.onnx"
+resnet_model_path = "models/resnet50/model/resnet50.onnx"
 resnet_image_dir = "./imagenet-sample-images"
 input_video = "./stockholm_1280x720.mp4"
 input_width = input_height = 608

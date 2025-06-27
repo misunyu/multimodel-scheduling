@@ -7,7 +7,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
 
     # .ui 파일이 실행 경로에 있는지 확인 (필요시 디버깅용)
-    ui_path = os.path.join(os.path.dirname(__file__), "onnx_profiler_display.ui")
+    ui_path = os.path.join(os.path.dirname(__file__), "onnx_profiler_display_modify.ui")
     if not os.path.exists(ui_path):
         raise FileNotFoundError(f".ui 파일이 존재하지 않습니다: {ui_path}")
 
