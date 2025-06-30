@@ -270,8 +270,14 @@ class ONNXProfiler(QMainWindow):
         return load_time_ms, infer_time_ms, []
 
     def profile_model_npu(self, o_path, label):
+        npu_num = 0 if label == "NPU1" else 1
 
-        # Simulated execution
+        # yolov3로 시작하는 경우 실제 NPU 실행
+        if os.path.basename(o_path).startswith("yolov3"):
+            load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
+            return load_time_ms, infer_time_ms, []
+
+        # 그 외의 경우 시뮬레이션
         start_load = time.time()
         time.sleep(0.01)
         end_load = time.time()
@@ -282,16 +288,9 @@ class ONNXProfiler(QMainWindow):
         end_infer = time.time()
         infer_time_ms = (end_infer - start_infer) * 1000.0
 
-        npu_num = 0
-        if label == "NPU2":
-            npu_num = 1
-
-        # load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
-
         return load_time_ms, infer_time_ms, []
 
-    def process_yolo_npu(npu_num, o_path):
-        # print(f"==== Start Driver #{npu_num} ====")
+    def process_yolo_npu(self, npu_num, o_path):
         try:
             driver = NeublaDriver()
             assert driver.Init(npu_num) == 0
@@ -314,13 +313,14 @@ class ONNXProfiler(QMainWindow):
             assert driver.Close() == 0
 
         except Exception as e:
-            assert driver.Close() == 0
-            print(e)
-            print("Error occured. Closed successfully.")
+            try:
+                driver.Close()
+            except:
+                pass
+            print(f"[Error] NPU{npu_num}: {e}")
             exit()
 
         return load_time_ms, infer_time_ms
-
 
     def contains_custom_op(self, onnx_path):
         try:
