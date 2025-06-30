@@ -42,9 +42,12 @@ class ONNXProfiler(QMainWindow):
         self.fs_model.setNameFilters(["*.onnx", "*.o"])
         self.fs_model.setNameFilterDisables(False)
         self.model_tree_view.setModel(self.fs_model)
-        self.model_tree_view.setMinimumWidth(500)
+        self.model_tree_view.setMinimumWidth(320)
         self.model_tree_view.header().setStretchLastSection(True)
         self.model_tree_view.header().setDefaultSectionSize(300)
+        self.model_tree_view.setColumnWidth(1, 60)
+        self.model_tree_view.setColumnHidden(2, True)  # Type 열 숨김
+        self.model_tree_view.setColumnHidden(3, True)  # Type 열 숨김
 
         default_folder = os.path.join(os.getcwd(), "models")
         if not os.path.isdir(default_folder):
@@ -107,7 +110,7 @@ class ONNXProfiler(QMainWindow):
 
         valid_model_onnx = {}  # key: model_name, value: (load, infer)
 
-        # CPU profiling (only record successful runs)
+        # CPU profiling
         for path in onnx_files:
             try:
                 if self.contains_custom_op(path):
@@ -118,7 +121,6 @@ class ONNXProfiler(QMainWindow):
                 rel_path = os.path.relpath(path, root_folder)
                 self.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms)
 
-                # only count for */model/*.onnx
                 parts = rel_path.split(os.sep)
                 if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
                     model_key = parts[0]
@@ -145,61 +147,72 @@ class ONNXProfiler(QMainWindow):
         self.total_table = self.findChild(QTableWidget, "total_table")
         if self.total_table:
             self.total_table.clear()
-            self.total_table.setColumnCount(3)
+            self.total_table.setColumnCount(5)
             self.total_table.setHorizontalHeaderLabels([
                 "Model",
-                "CPU Only Total Time (ms)",
-                "CPU + NPU Combined Time (ms)"
+                "CPU Inference Time (ms)",
+                "NPU Load Time (ms)",
+                "NPU Inference Time (ms)",
+                "Total Time (CPU + NPU, ms)"
             ])
             self.total_table.setRowCount(0)
 
             header = self.total_table.horizontalHeader()
             header.setStretchLastSection(True)
-            for i in range(3):
+            for i in range(5):
                 header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
 
-            # NPU 평균 추론 시간 계산
-            def collect_npu_times(table):
-                times = {}
+            # Helper function to gather averages
+            def collect_npu_values(table, column_index):
+                values = {}
                 for row in range(table.rowCount()):
                     name_item = table.item(row, 0)
                     if not name_item:
                         continue
-                    parts = name_item.text().split(os.sep)
-                    if len(parts) < 1:
-                        continue
-                    model_name = parts[0]
+                    model_name = name_item.text().split(os.sep)[0]
                     try:
-                        infer = float(table.item(row, 2).text())
-                        if model_name not in times:
-                            times[model_name] = []
-                        times[model_name].append(infer)
+                        val = float(table.item(row, column_index).text())
+                        if model_name not in values:
+                            values[model_name] = []
+                        values[model_name].append(val)
                     except:
                         continue
-                return times
+                return {k: np.mean(v) for k, v in values.items()}
 
-            npu1_times = collect_npu_times(self.npu1_table)
-            npu2_times = collect_npu_times(self.npu2_table)
+            # Gather data from NPU1 and NPU2 tables
+            npu1_load = collect_npu_values(self.npu1_table, 1)
+            npu1_infer = collect_npu_values(self.npu1_table, 2)
+            npu2_load = collect_npu_values(self.npu2_table, 1)
+            npu2_infer = collect_npu_values(self.npu2_table, 2)
 
-            all_models = set(valid_model_onnx.keys()).union(npu1_times.keys()).union(npu2_times.keys())
+            all_models = set(valid_model_onnx.keys()).union(
+                npu1_load.keys(), npu2_load.keys(), npu1_infer.keys(), npu2_infer.keys()
+            )
 
             for model in sorted(all_models):
-                cpu_total = sum(valid_model_onnx.get(model, [0.0, 0.0]))
-                npu_total = np.mean(npu1_times.get(model, []) + npu2_times.get(model, [])) if (
-                            npu1_times.get(model) or npu2_times.get(model)) else 0.0
-                combined = cpu_total + npu_total
+                cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
+                npu_load_avg = np.mean([
+                    v for v in [npu1_load.get(model), npu2_load.get(model)] if v is not None
+                ]) if (npu1_load.get(model) or npu2_load.get(model)) else 0.0
+                npu_infer_avg = np.mean([
+                    v for v in [npu1_infer.get(model), npu2_infer.get(model)] if v is not None
+                ]) if (npu1_infer.get(model) or npu2_infer.get(model)) else 0.0
+                total = cpu_infer + npu_load_avg + npu_infer_avg
 
                 row = self.total_table.rowCount()
                 self.total_table.insertRow(row)
                 self.total_table.setItem(row, 0, QTableWidgetItem(model))
-                self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_total:.1f}"))
-                self.total_table.setItem(row, 2, QTableWidgetItem(f"{combined:.1f}"))
+                self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
+                self.total_table.setItem(row, 2, QTableWidgetItem(f"{npu_load_avg:.1f}"))
+                self.total_table.setItem(row, 3, QTableWidgetItem(f"{npu_infer_avg:.1f}"))
+                self.total_table.setItem(row, 4, QTableWidgetItem(f"{total:.1f}"))
 
     def init_table(self, table):
         table.clear()
         table.setColumnCount(3)
         table.setHorizontalHeaderLabels(["Model Name", "Load Time (ms)", "Inference Time (ms)"])
         table.setRowCount(0)
+
 
     def insert_result_row(self, table, model_file, load_ms, infer_ms):
         row = table.rowCount()
@@ -217,9 +230,21 @@ class ONNXProfiler(QMainWindow):
     def get_dummy_input(self, input_tensor):
         name = input_tensor.name
         shape = [self.safe_shape_value(s) for s in input_tensor.shape]
-        if len(shape) < 3:
+
+        # --- name 기반 예외 처리 (image_shape 같은 경우) ---
+        if name.lower() == "image_shape" or shape == [2] or shape == [1, 2]:
+            shape = [1, 2]  # 정확히 모델이 기대하는 2D 형태
+
+        # --- fallback: 너무 작거나 정의 안 된 경우 기본값 제공 ---
+        elif not shape or len(shape) < 3:
             shape = [1, 3, 224, 224]
 
+        # --- 공간 차원 보정 (Conv 오류 방지) ---
+        elif len(shape) == 4 and (shape[-1] < 4 or shape[-2] < 4):
+            shape[-1] = max(shape[-1], 32)
+            shape[-2] = max(shape[-2], 32)
+
+        # --- dtype 처리 ---
         dtype = input_tensor.type
         if 'float' in dtype:
             np_dtype = np.float32
@@ -230,11 +255,12 @@ class ONNXProfiler(QMainWindow):
         else:
             raise ValueError(f"Unsupported input type: {dtype}")
 
-        data = (
-            np.random.randint(0, 256, size=shape).astype(np_dtype)
-            if np_dtype == np.uint8 else
-            np.random.rand(*shape).astype(np_dtype)
-        )
+        # --- dummy data 생성 ---
+        if np_dtype == np.uint8:
+            data = np.random.randint(0, 256, size=shape).astype(np_dtype)
+        else:
+            data = np.random.rand(*shape).astype(np_dtype)
+
         return name, data
 
     def profile_model_cpu(self, model_path):
