@@ -108,9 +108,8 @@ class ONNXProfiler(QMainWindow):
                 elif f.endswith(".o"):
                     o_files.append(full_path)
 
-        valid_model_onnx = {}  # key: model_name, value: (load, infer)
+        valid_model_onnx = {}
 
-        # CPU profiling
         for path in onnx_files:
             try:
                 if self.contains_custom_op(path):
@@ -132,7 +131,6 @@ class ONNXProfiler(QMainWindow):
             except Exception as e:
                 self.log_output.appendPlainText(f"[Error] Skipping {path}: {str(e)}\n")
 
-        # NPU profiling with dummy values
         for path in o_files:
             name = os.path.relpath(path, root_folder)
             load_npu1 = np.random.uniform(1.0, 5.0)
@@ -143,27 +141,24 @@ class ONNXProfiler(QMainWindow):
             infer_npu2 = infer_npu1 * np.random.uniform(0.9, 1.1)
             self.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
 
-        # --- Total Summary ---
         self.total_table = self.findChild(QTableWidget, "total_table")
         if self.total_table:
             self.total_table.clear()
-            self.total_table.setColumnCount(5)
+            self.total_table.setColumnCount(4)
             self.total_table.setHorizontalHeaderLabels([
                 "Model",
                 "CPU Inference Time (ms)",
-                "NPU Load Time (ms)",
-                "NPU Inference Time (ms)",
-                "Total Time (CPU + NPU, ms)"
+                "NPU1 Inference Time (ms)",
+                "NPU2 Inference Time (ms)"
             ])
             self.total_table.setRowCount(0)
 
             header = self.total_table.horizontalHeader()
             header.setStretchLastSection(True)
-            for i in range(5):
+            for i in range(4):
                 header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
 
-            # Helper function to gather averages
-            def collect_npu_values(table, column_index):
+            def collect_infer_values(table, column_index):
                 values = {}
                 for row in range(table.rowCount()):
                     name_item = table.item(row, 0)
@@ -179,33 +174,22 @@ class ONNXProfiler(QMainWindow):
                         continue
                 return {k: np.mean(v) for k, v in values.items()}
 
-            # Gather data from NPU1 and NPU2 tables
-            npu1_load = collect_npu_values(self.npu1_table, 1)
-            npu1_infer = collect_npu_values(self.npu1_table, 2)
-            npu2_load = collect_npu_values(self.npu2_table, 1)
-            npu2_infer = collect_npu_values(self.npu2_table, 2)
+            npu1_infer = collect_infer_values(self.npu1_table, 2)
+            npu2_infer = collect_infer_values(self.npu2_table, 2)
 
-            all_models = set(valid_model_onnx.keys()).union(
-                npu1_load.keys(), npu2_load.keys(), npu1_infer.keys(), npu2_infer.keys()
-            )
+            all_models = set(valid_model_onnx.keys()).union(npu1_infer.keys(), npu2_infer.keys())
 
             for model in sorted(all_models):
                 cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
-                npu_load_avg = np.mean([
-                    v for v in [npu1_load.get(model), npu2_load.get(model)] if v is not None
-                ]) if (npu1_load.get(model) or npu2_load.get(model)) else 0.0
-                npu_infer_avg = np.mean([
-                    v for v in [npu1_infer.get(model), npu2_infer.get(model)] if v is not None
-                ]) if (npu1_infer.get(model) or npu2_infer.get(model)) else 0.0
-                total = cpu_infer + npu_load_avg + npu_infer_avg
+                npu1_time = npu1_infer.get(model, 0.0)
+                npu2_time = npu2_infer.get(model, 0.0)
 
                 row = self.total_table.rowCount()
                 self.total_table.insertRow(row)
                 self.total_table.setItem(row, 0, QTableWidgetItem(model))
                 self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
-                self.total_table.setItem(row, 2, QTableWidgetItem(f"{npu_load_avg:.1f}"))
-                self.total_table.setItem(row, 3, QTableWidgetItem(f"{npu_infer_avg:.1f}"))
-                self.total_table.setItem(row, 4, QTableWidgetItem(f"{total:.1f}"))
+                self.total_table.setItem(row, 2, QTableWidgetItem(f"{npu1_time:.1f}"))
+                self.total_table.setItem(row, 3, QTableWidgetItem(f"{npu2_time:.1f}"))
 
     def init_table(self, table):
         table.clear()
