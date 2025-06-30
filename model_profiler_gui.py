@@ -142,7 +142,7 @@ class ONNXProfiler(QMainWindow):
 
             # load_npu2 = load_npu1 * np.random.uniform(0.9, 1.1)
             # infer_npu2 = infer_npu1 * np.random.uniform(0.9, 1.1)
-            load_npu1, infer_npu1, _ = self.profile_model_npu(path, "NPU2")
+            load_npu2, infer_npu2, _ = self.profile_model_npu(path, "NPU2")
             self.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
 
         self.total_table = self.findChild(QTableWidget, "total_table")
