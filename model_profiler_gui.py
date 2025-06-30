@@ -148,21 +148,23 @@ class ONNXProfiler(QMainWindow):
         self.total_table = self.findChild(QTableWidget, "total_table")
         if self.total_table:
             self.total_table.clear()
-            self.total_table.setColumnCount(4)
+            self.total_table.setColumnCount(6)
             self.total_table.setHorizontalHeaderLabels([
                 "Model",
                 "CPU Inference Time (ms)",
+                "NPU1 Load Time (ms)",
                 "NPU1 Inference Time (ms)",
+                "NPU2 Load Time (ms)",
                 "NPU2 Inference Time (ms)"
             ])
             self.total_table.setRowCount(0)
 
             header = self.total_table.horizontalHeader()
             header.setStretchLastSection(True)
-            for i in range(4):
+            for i in range(6):
                 header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
 
-            def collect_infer_values(table, column_index):
+            def collect_values(table, col_index):
                 values = {}
                 for row in range(table.rowCount()):
                     name_item = table.item(row, 0)
@@ -170,30 +172,36 @@ class ONNXProfiler(QMainWindow):
                         continue
                     model_name = name_item.text().split(os.sep)[0]
                     try:
-                        val = float(table.item(row, column_index).text())
-                        if model_name not in values:
-                            values[model_name] = []
-                        values[model_name].append(val)
+                        val = float(table.item(row, col_index).text())
+                        values.setdefault(model_name, []).append(val)
                     except:
                         continue
                 return {k: np.mean(v) for k, v in values.items()}
 
-            npu1_infer = collect_infer_values(self.npu1_table, 2)
-            npu2_infer = collect_infer_values(self.npu2_table, 2)
+            npu1_load = collect_values(self.npu1_table, 1)
+            npu1_infer = collect_values(self.npu1_table, 2)
+            npu2_load = collect_values(self.npu2_table, 1)
+            npu2_infer = collect_values(self.npu2_table, 2)
 
-            all_models = set(valid_model_onnx.keys()).union(npu1_infer.keys(), npu2_infer.keys())
+            all_models = set(valid_model_onnx.keys()).union(
+                npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
+            )
 
             for model in sorted(all_models):
                 cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
-                npu1_time = npu1_infer.get(model, 0.0)
-                npu2_time = npu2_infer.get(model, 0.0)
+                load1 = npu1_load.get(model, 0.0)
+                infer1 = npu1_infer.get(model, 0.0)
+                load2 = npu2_load.get(model, 0.0)
+                infer2 = npu2_infer.get(model, 0.0)
 
                 row = self.total_table.rowCount()
                 self.total_table.insertRow(row)
                 self.total_table.setItem(row, 0, QTableWidgetItem(model))
                 self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
-                self.total_table.setItem(row, 2, QTableWidgetItem(f"{npu1_time:.1f}"))
-                self.total_table.setItem(row, 3, QTableWidgetItem(f"{npu2_time:.1f}"))
+                self.total_table.setItem(row, 2, QTableWidgetItem(f"{load1:.1f}"))
+                self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))
+                self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
+                self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
 
     def init_table(self, table):
         table.clear()
