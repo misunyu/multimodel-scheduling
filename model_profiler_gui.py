@@ -10,7 +10,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QLineEdit, QPushButton,
     QFileDialog, QTreeView, QPlainTextEdit,
     QTableWidget, QTableWidgetItem, QApplication,
-    QHeaderView, QVBoxLayout
+    QHeaderView, QVBoxLayout, QCheckBox, QTabWidget, QWidget,
+    QLabel, QHBoxLayout
 )
 from PyQt6.QtGui import QFileSystemModel
 from PyQt6.QtGui import QColor, QBrush
@@ -20,14 +21,23 @@ from PyQt6.QtWidgets import QLabel, QHBoxLayout
 
 CUSTOM_OP_PREFIXES = ["com.neubla"]
 
-
-# === Initialization ===
 class ONNXProfiler(QMainWindow):
-
-# === Initialization ===
     def __init__(self):
         super().__init__()
         uic.loadUi("onnx_profiler_display_modify.ui", self)
+
+        self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
+        self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")  # <-- 여기가 핵심!
+        self.npu2_tab = self.findChild(QWidget, "npu2_tab")
+
+        # 탭 활성/비활성 함수 정의 및 연결
+        def update_npu2_tab_enabled():
+            index = self.result_tabs.indexOf(self.npu2_tab)
+            if index != -1:
+                self.result_tabs.setTabEnabled(index, self.enable_npu2_checkbox.isChecked())
+
+        self.enable_npu2_checkbox.stateChanged.connect(update_npu2_tab_enabled)
+        update_npu2_tab_enabled()
 
         self.folder_input = self.findChild(QLineEdit, "folder_input")
         self.browse_button = self.findChild(QPushButton, "browse_button")
@@ -36,7 +46,6 @@ class ONNXProfiler(QMainWindow):
         self.model_tree_view = self.findChild(QTreeView, "model_tree_view")
         self.log_output = self.findChild(QPlainTextEdit, "log_output")
 
-        # 범례 QLabel 생성
         self.legend_label = QLabel()
         self.legend_label.setText(
             "<span style='background-color:#cce6ff;'>&nbsp;&nbsp;&nbsp;</span> CPU &nbsp;&nbsp;"
@@ -45,7 +54,6 @@ class ONNXProfiler(QMainWindow):
         )
         self.legend_label.setStyleSheet("font-size: 12px; padding: 2px;")
 
-        # rightLayout에 legend_label을 로그창 위에 추가
         right_layout = self.findChild(QVBoxLayout, "rightLayout")
         if right_layout:
             index = right_layout.indexOf(self.log_output)
@@ -55,6 +63,11 @@ class ONNXProfiler(QMainWindow):
         self.cpu_table = self.findChild(QTableWidget, "cpu_table")
         self.npu1_table = self.findChild(QTableWidget, "npu1_table")
         self.npu2_table = self.findChild(QTableWidget, "npu2_table")
+
+        self.npu2_table.setVisible(self.enable_npu2_checkbox.isChecked())
+        self.enable_npu2_checkbox.stateChanged.connect(
+            lambda: self.npu2_table.setVisible(self.enable_npu2_checkbox.isChecked())
+        )
 
         for table in [self.cpu_table, self.npu1_table, self.npu2_table]:
             header = table.horizontalHeader()
@@ -70,8 +83,8 @@ class ONNXProfiler(QMainWindow):
         self.model_tree_view.header().setStretchLastSection(True)
         self.model_tree_view.header().setDefaultSectionSize(300)
         self.model_tree_view.setColumnWidth(1, 60)
-        self.model_tree_view.setColumnHidden(2, True)  # Type 열 숨김
-        self.model_tree_view.setColumnHidden(3, True)  # Type 열 숨김
+        self.model_tree_view.setColumnHidden(2, True)
+        self.model_tree_view.setColumnHidden(3, True)
 
         default_folder = os.path.join(os.getcwd(), "models")
         if not os.path.isdir(default_folder):
@@ -86,7 +99,6 @@ class ONNXProfiler(QMainWindow):
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
 
 
-# === File Browsing ===
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
         if folder:
@@ -94,15 +106,11 @@ class ONNXProfiler(QMainWindow):
             self.set_tree_root(folder)
             QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(folder))
 
-
-# === File Browsing ===
     def set_tree_root(self, folder):
         self.fs_model.setRootPath(folder)
         index = self.fs_model.index(folder)
         self.model_tree_view.setRootIndex(index)
 
-
-# === File Browsing ===
     def expand_parents_of_onnx_files(self, root_folder):
         for dirpath, _, filenames in os.walk(root_folder):
             for f in filenames:
@@ -114,8 +122,6 @@ class ONNXProfiler(QMainWindow):
                         self.model_tree_view.expand(parent)
                         parent = parent.parent()
 
-
-# === Profiling ===
     def run_profiling(self):
         root_folder = self.folder_input.text().strip()
         if not os.path.isdir(root_folder):
@@ -169,21 +175,18 @@ class ONNXProfiler(QMainWindow):
 
         for path in o_files:
             name = os.path.relpath(path, root_folder)
-            # load_npu1 = np.random.uniform(1.0, 5.0)
-            # infer_npu1 = np.random.uniform(10.0, 50.0)
             load_npu1, infer_npu1, _ = self.profile_model_npu(path, "NPU1")
             self.insert_result_row(self.npu1_table, name, load_npu1, infer_npu1)
 
             self.log_output.appendPlainText(f"[NPU1] {name}")
             self.log_output.appendPlainText(f"       Load: {load_npu1:.1f} ms, Inference: {infer_npu1:.1f} ms\n")
 
-            # load_npu2 = load_npu1 * np.random.uniform(0.9, 1.1)
-            # infer_npu2 = infer_npu1 * np.random.uniform(0.9, 1.1)
-            load_npu2, infer_npu2, _ = self.profile_model_npu(path, "NPU2")
-            self.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
+            if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
+                load_npu2, infer_npu2, _ = self.profile_model_npu(path, "NPU2")
+                self.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
 
-            self.log_output.appendPlainText(f"[NPU2] {name}")
-            self.log_output.appendPlainText(f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
+                self.log_output.appendPlainText(f"[NPU2] {name}")
+                self.log_output.appendPlainText(f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
 
         self.total_table = self.findChild(QTableWidget, "total_table")
         if self.total_table:
@@ -218,7 +221,6 @@ class ONNXProfiler(QMainWindow):
                         continue
                 return {k: np.mean(v) for k, v in values.items()}
 
-            # 모델별 CPU 파티션 시간 모으기 (prefix 기준)
             cpu_infer_per_partition = {}
             for row in range(self.cpu_table.rowCount()):
                 path_item = self.cpu_table.item(row, 0)
@@ -347,8 +349,6 @@ class ONNXProfiler(QMainWindow):
 
         return load_time_ms, infer_time_ms, []
 
-
-# === Profiling ===
     def profile_model_npu(self, o_path, label):
         npu_num = 0 if label == "NPU1" else 1
         basename = os.path.basename(o_path)
@@ -469,8 +469,6 @@ class ONNXProfiler(QMainWindow):
     #
     #     return load_time_ms, infer_time_ms
 
-
-# === Analysis and UI Update ===
     def contains_custom_op(self, onnx_path):
         try:
             model = onnx.load(onnx_path)
@@ -482,13 +480,11 @@ class ONNXProfiler(QMainWindow):
             self.log_output.appendPlainText(f"[Error] ONNX parse failed: {onnx_path}: {e}\n")
             return True
 
-
     # === Analysis and UI Update ===
     def highlight_deploy_results(self):
         if not self.total_table:
             return
 
-        # 모델별 실행 시간 저장용
         models = []
         times = []  # [(cpu, npu1, npu2)]
 
@@ -499,13 +495,18 @@ class ONNXProfiler(QMainWindow):
                 npu1_infer_item = self.total_table.item(row, 3)
                 npu2_infer_item = self.total_table.item(row, 5)
 
-                if not model_item or not cpu_infer_item or not npu1_infer_item or not npu2_infer_item:
+                if not model_item or not cpu_infer_item or not npu1_infer_item:
                     continue
 
                 model = model_item.text()
                 cpu_infer = float(cpu_infer_item.text())
                 npu1_infer = float(npu1_infer_item.text())
-                npu2_infer = float(npu2_infer_item.text())
+
+                # NPU2 체크 여부 확인
+                if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked() and npu2_infer_item:
+                    npu2_infer = float(npu2_infer_item.text())
+                else:
+                    npu2_infer = float('inf')  # 배치에서 제외
 
                 models.append((row, model))
                 times.append((cpu_infer, npu1_infer, npu2_infer))
@@ -513,26 +514,27 @@ class ONNXProfiler(QMainWindow):
             except Exception as e:
                 print(f"[Warning] Skipping row {row}: {e}")
 
-        # 각 디바이스별 누적 로드 추적
         load = {"CPU": 0.0, "NPU1": 0.0, "NPU2": 0.0}
         assignments = []
 
         for idx, (cpu_t, npu1_t, npu2_t) in enumerate(times):
+            device_candidates = ["CPU", "NPU1"]
+            if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
+                device_candidates.append("NPU2")
+
             best_device = min(
-                ["CPU", "NPU1", "NPU2"],
+                device_candidates,
                 key=lambda d: load[d] + (cpu_t if d == "CPU" else npu1_t if d == "NPU1" else npu2_t)
             )
             assignments.append(best_device)
             load[best_device] += cpu_t if best_device == "CPU" else npu1_t if best_device == "NPU1" else npu2_t
 
-        # 색상 정의
         brush_map = {
-            "CPU": QBrush(QColor(200, 230, 255)),  # 하늘색
-            "NPU1": QBrush(QColor(255, 255, 204)),  # 노랑
-            "NPU2": QBrush(QColor(255, 214, 153)),  # 주황
+            "CPU": QBrush(QColor(200, 230, 255)),
+            "NPU1": QBrush(QColor(255, 255, 204)),
+            "NPU2": QBrush(QColor(255, 214, 153)),
         }
 
-        # 배치 결과 색상 적용
         for i, (row_idx, _) in enumerate(models):
             brush = brush_map.get(assignments[i])
             if brush:
