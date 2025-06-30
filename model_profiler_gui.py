@@ -288,7 +288,7 @@ class ONNXProfiler(QMainWindow):
 
         # load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
 
-        return o_file, load_time_ms, infer_time_ms
+        return load_time_ms, infer_time_ms, []
 
     def process_yolo_npu(npu_num, o_path):
         # print(f"==== Start Driver #{npu_num} ====")
