@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
     QHeaderView
 )
 from PyQt6.QtGui import QFileSystemModel
+from NeublaDriver import NeublaDriver
+
 
 CUSTOM_OP_PREFIXES = ["com.neubla"]
 
@@ -133,12 +135,14 @@ class ONNXProfiler(QMainWindow):
 
         for path in o_files:
             name = os.path.relpath(path, root_folder)
-            load_npu1 = np.random.uniform(1.0, 5.0)
-            infer_npu1 = np.random.uniform(10.0, 50.0)
+            # load_npu1 = np.random.uniform(1.0, 5.0)
+            # infer_npu1 = np.random.uniform(10.0, 50.0)
+            load_npu1, infer_npu1, _ = self.profile_model_npu(path, "NPU1")
             self.insert_result_row(self.npu1_table, name, load_npu1, infer_npu1)
 
-            load_npu2 = load_npu1 * np.random.uniform(0.9, 1.1)
-            infer_npu2 = infer_npu1 * np.random.uniform(0.9, 1.1)
+            # load_npu2 = load_npu1 * np.random.uniform(0.9, 1.1)
+            # infer_npu2 = infer_npu1 * np.random.uniform(0.9, 1.1)
+            load_npu1, infer_npu1, _ = self.profile_model_npu(path, "NPU2")
             self.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
 
         self.total_table = self.findChild(QTableWidget, "total_table")
@@ -265,6 +269,62 @@ class ONNXProfiler(QMainWindow):
 
         return load_time_ms, infer_time_ms, []
 
+    def profile_model_npu(self, o_path, label):
+        o_file = os.path.basename(o_path)
+        self.log_output.appendPlainText(f"[{label}] Profiling {o_file}")
+        print(f"[{label}] Profiling {o_file}")
+
+        # Simulated execution
+        start_load = time.time()
+        time.sleep(0.01)
+        end_load = time.time()
+        load_time_ms = (end_load - start_load) * 1000.0
+
+        start_infer = time.time()
+        time.sleep(0.003)
+        end_infer = time.time()
+        infer_time_ms = (end_infer - start_infer) * 1000.0
+
+        npu_num = 0
+        if label == "NPU2":
+            npu_num = 1
+
+        # load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
+
+        return o_file, load_time_ms, infer_time_ms
+
+    def process_yolo_npu(npu_num, o_path):
+        # print(f"==== Start Driver #{npu_num} ====")
+        try:
+            driver = NeublaDriver()
+            assert driver.Init(npu_num) == 0
+
+            start_load = time.time()
+            assert driver.LoadModel(o_path) == 0
+            end_load = time.time()
+            load_time_ms = (end_load - start_load) * 1000.0
+
+            random_input = np.random.rand(3, 608, 608).astype(np.uint8)
+            input_data = random_input.tobytes()
+
+            start_infer = time.time()
+            assert driver.SendInput(input_data, 3 * 608 * 608) == 0
+            assert driver.Launch() == 0
+            raw_outputs = driver.ReceiveOutputs()
+            end_infer = time.time()
+            infer_time_ms = (end_infer - start_infer) * 1000.0
+
+            assert driver.Close() == 0
+
+        except Exception as e:
+            assert driver.Close() == 0
+            print(e)
+            print("Error occured. Closed successfully.")
+            exit()
+
+        return load_time_ms, infer_time_ms
+
+
     def contains_custom_op(self, onnx_path):
         try:
             model = onnx.load(onnx_path)
@@ -275,3 +335,4 @@ class ONNXProfiler(QMainWindow):
         except Exception as e:
             self.log_output.appendPlainText(f"[Error] ONNX parse failed: {onnx_path}: {e}\n")
             return True
+

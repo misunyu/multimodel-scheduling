@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 import onnx
 import onnxruntime as ort
-import torch
 
 from NeublaDriver import NeublaDriver
 
