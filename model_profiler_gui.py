@@ -270,9 +270,6 @@ class ONNXProfiler(QMainWindow):
         return load_time_ms, infer_time_ms, []
 
     def profile_model_npu(self, o_path, label):
-        o_file = os.path.basename(o_path)
-        self.log_output.appendPlainText(f"[{label}] Profiling {o_file}")
-        print(f"[{label}] Profiling {o_file}")
 
         # Simulated execution
         start_load = time.time()
