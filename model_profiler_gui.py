@@ -20,7 +20,11 @@ from PyQt6.QtWidgets import QLabel, QHBoxLayout
 
 CUSTOM_OP_PREFIXES = ["com.neubla"]
 
+
+# === Initialization ===
 class ONNXProfiler(QMainWindow):
+
+# === Initialization ===
     def __init__(self):
         super().__init__()
         uic.loadUi("onnx_profiler_display_modify.ui", self)
@@ -76,11 +80,13 @@ class ONNXProfiler(QMainWindow):
         self.folder_input.setText(default_folder)
         self.browse_button.clicked.connect(self.browse_folder)
         self.profile_button.clicked.connect(self.run_profiling)
-        self.generate_button.clicked.connect(self.highlight_better_cpu_models)
+        self.generate_button.clicked.connect(self.highlight_deploy_results)
 
         self.set_tree_root(default_folder)
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
 
+
+# === File Browsing ===
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
         if folder:
@@ -88,11 +94,15 @@ class ONNXProfiler(QMainWindow):
             self.set_tree_root(folder)
             QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(folder))
 
+
+# === File Browsing ===
     def set_tree_root(self, folder):
         self.fs_model.setRootPath(folder)
         index = self.fs_model.index(folder)
         self.model_tree_view.setRootIndex(index)
 
+
+# === File Browsing ===
     def expand_parents_of_onnx_files(self, root_folder):
         for dirpath, _, filenames in os.walk(root_folder):
             for f in filenames:
@@ -104,6 +114,8 @@ class ONNXProfiler(QMainWindow):
                         self.model_tree_view.expand(parent)
                         parent = parent.parent()
 
+
+# === Profiling ===
     def run_profiling(self):
         root_folder = self.folder_input.text().strip()
         if not os.path.isdir(root_folder):
@@ -181,9 +193,9 @@ class ONNXProfiler(QMainWindow):
                 "Model",
                 "CPU Inf. (ms)",
                 "NPU1 Load (ms)",
-                "NPU1 Inf. (ms)",
+                "NPU1 + CPU Inf. (ms)",
                 "NPU2 Load (ms)",
-                "NPU2 Inf. (ms)"
+                "NPU2 + CPU Inf. (ms)"
             ])
             self.total_table.setRowCount(0)
 
@@ -206,6 +218,20 @@ class ONNXProfiler(QMainWindow):
                         continue
                 return {k: np.mean(v) for k, v in values.items()}
 
+            # 모델별 CPU 파티션 시간 모으기 (prefix 기준)
+            cpu_infer_per_partition = {}
+            for row in range(self.cpu_table.rowCount()):
+                path_item = self.cpu_table.item(row, 0)
+                infer_item = self.cpu_table.item(row, 2)
+                if not path_item or not infer_item:
+                    continue
+                rel_path = path_item.text()
+                infer_time = float(infer_item.text())
+                model_key = rel_path.split(os.sep)[0]
+                part_name = os.path.basename(rel_path)
+                if "_p0" in part_name or "_p2" in part_name:
+                    cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
+
             npu1_load = collect_values(self.npu1_table, 1)
             npu1_infer = collect_values(self.npu1_table, 2)
             npu2_load = collect_values(self.npu2_table, 1)
@@ -217,22 +243,28 @@ class ONNXProfiler(QMainWindow):
 
             for model in sorted(all_models):
                 cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
+
                 load1 = npu1_load.get(model, 0.0)
-                infer1 = npu1_infer.get(model, 0.0)
+                infer1_base = npu1_infer.get(model, 0.0)
+                extra_cpu_infer = sum(cpu_infer_per_partition.get(model, []))  # ✅ 추가
+                infer1 = infer1_base + extra_cpu_infer  # ✅ 합산
+
                 load2 = npu2_load.get(model, 0.0)
-                infer2 = npu2_infer.get(model, 0.0)
+                infer2_base = npu2_infer.get(model, 0.0)
+                # extra_cpu_infer2 = sum(cpu_infer_per_partition.get(model, []))  # ✅ _p0, _p2 CPU 시간 더함
+                infer2 = infer2_base + extra_cpu_infer
 
                 row = self.total_table.rowCount()
                 self.total_table.insertRow(row)
                 self.total_table.setItem(row, 0, QTableWidgetItem(model))
                 self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
                 self.total_table.setItem(row, 2, QTableWidgetItem(f"{load1:.1f}"))
-                self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))
+                self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))  # ✅ 수정
                 self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
                 self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
 
 
-
+# === Table Management ===
     def init_table(self, table):
         table.clear()
         table.setColumnCount(3)
@@ -240,6 +272,8 @@ class ONNXProfiler(QMainWindow):
         table.setRowCount(0)
 
 
+
+# === Table Management ===
     def insert_result_row(self, table, model_file, load_ms, infer_ms):
         row = table.rowCount()
         table.insertRow(row)
@@ -247,12 +281,16 @@ class ONNXProfiler(QMainWindow):
         table.setItem(row, 1, QTableWidgetItem(f"{load_ms:.1f}"))
         table.setItem(row, 2, QTableWidgetItem(f"{infer_ms:.1f}"))
 
+
+# === Inference Input Generation ===
     def safe_shape_value(self, s):
         try:
             return 1 if s is None or s == 'None' else int(s)
         except (ValueError, TypeError):
             return 1
 
+
+# === Inference Input Generation ===
     def get_dummy_input(self, input_tensor):
         name = input_tensor.name
         shape = [self.safe_shape_value(s) for s in input_tensor.shape]
@@ -289,6 +327,8 @@ class ONNXProfiler(QMainWindow):
 
         return name, data
 
+
+# === Profiling ===
     def profile_model_cpu(self, model_path):
         start_load = time.time()
         session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
@@ -307,6 +347,8 @@ class ONNXProfiler(QMainWindow):
 
         return load_time_ms, infer_time_ms, []
 
+
+# === Profiling ===
     def profile_model_npu(self, o_path, label):
         npu_num = 0 if label == "NPU1" else 1
         basename = os.path.basename(o_path)
@@ -427,6 +469,8 @@ class ONNXProfiler(QMainWindow):
     #
     #     return load_time_ms, infer_time_ms
 
+
+# === Analysis and UI Update ===
     def contains_custom_op(self, onnx_path):
         try:
             model = onnx.load(onnx_path)
@@ -438,30 +482,62 @@ class ONNXProfiler(QMainWindow):
             self.log_output.appendPlainText(f"[Error] ONNX parse failed: {onnx_path}: {e}\n")
             return True
 
-    def highlight_better_cpu_models(self):
+
+    # === Analysis and UI Update ===
+    def highlight_deploy_results(self):
         if not self.total_table:
             return
 
+        # 모델별 실행 시간 저장용
+        models = []
+        times = []  # [(cpu, npu1, npu2)]
+
         for row in range(self.total_table.rowCount()):
             try:
+                model_item = self.total_table.item(row, 0)
                 cpu_infer_item = self.total_table.item(row, 1)
                 npu1_infer_item = self.total_table.item(row, 3)
                 npu2_infer_item = self.total_table.item(row, 5)
 
-                if not cpu_infer_item or not npu1_infer_item or not npu2_infer_item:
+                if not model_item or not cpu_infer_item or not npu1_infer_item or not npu2_infer_item:
                     continue
 
+                model = model_item.text()
                 cpu_infer = float(cpu_infer_item.text())
                 npu1_infer = float(npu1_infer_item.text())
                 npu2_infer = float(npu2_infer_item.text())
 
-                if cpu_infer < npu1_infer and cpu_infer < npu2_infer:
-                    # 옅은 파란색 배경 설정
-                    light_blue = QBrush(QColor(200, 230, 255))
-                    for col in range(self.total_table.columnCount()):
-                        item = self.total_table.item(row, col)
-                        if item:
-                            item.setBackground(light_blue)
+                models.append((row, model))
+                times.append((cpu_infer, npu1_infer, npu2_infer))
+
             except Exception as e:
                 print(f"[Warning] Skipping row {row}: {e}")
+
+        # 각 디바이스별 누적 로드 추적
+        load = {"CPU": 0.0, "NPU1": 0.0, "NPU2": 0.0}
+        assignments = []
+
+        for idx, (cpu_t, npu1_t, npu2_t) in enumerate(times):
+            best_device = min(
+                ["CPU", "NPU1", "NPU2"],
+                key=lambda d: load[d] + (cpu_t if d == "CPU" else npu1_t if d == "NPU1" else npu2_t)
+            )
+            assignments.append(best_device)
+            load[best_device] += cpu_t if best_device == "CPU" else npu1_t if best_device == "NPU1" else npu2_t
+
+        # 색상 정의
+        brush_map = {
+            "CPU": QBrush(QColor(200, 230, 255)),  # 하늘색
+            "NPU1": QBrush(QColor(255, 255, 204)),  # 노랑
+            "NPU2": QBrush(QColor(255, 214, 153)),  # 주황
+        }
+
+        # 배치 결과 색상 적용
+        for i, (row_idx, _) in enumerate(models):
+            brush = brush_map.get(assignments[i])
+            if brush:
+                for col in range(self.total_table.columnCount()):
+                    item = self.total_table.item(row_idx, col)
+                    if item:
+                        item.setBackground(brush)
 
