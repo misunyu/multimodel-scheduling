@@ -141,6 +141,9 @@ class ONNXProfiler(QMainWindow):
                 rel_path = os.path.relpath(path, root_folder)
                 self.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms)
 
+                self.log_output.appendPlainText(f"[CPU] {rel_path}")
+                self.log_output.appendPlainText(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+
                 parts = rel_path.split(os.sep)
                 if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
                     model_key = parts[0]
@@ -159,10 +162,16 @@ class ONNXProfiler(QMainWindow):
             load_npu1, infer_npu1, _ = self.profile_model_npu(path, "NPU1")
             self.insert_result_row(self.npu1_table, name, load_npu1, infer_npu1)
 
+            self.log_output.appendPlainText(f"[NPU1] {name}")
+            self.log_output.appendPlainText(f"       Load: {load_npu1:.1f} ms, Inference: {infer_npu1:.1f} ms\n")
+
             # load_npu2 = load_npu1 * np.random.uniform(0.9, 1.1)
             # infer_npu2 = infer_npu1 * np.random.uniform(0.9, 1.1)
             load_npu2, infer_npu2, _ = self.profile_model_npu(path, "NPU2")
             self.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
+
+            self.log_output.appendPlainText(f"[NPU2] {name}")
+            self.log_output.appendPlainText(f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
 
         self.total_table = self.findChild(QTableWidget, "total_table")
         if self.total_table:
