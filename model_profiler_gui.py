@@ -151,11 +151,11 @@ class ONNXProfiler(QMainWindow):
             self.total_table.setColumnCount(6)
             self.total_table.setHorizontalHeaderLabels([
                 "Model",
-                "CPU Inference Time (ms)",
-                "NPU1 Load Time (ms)",
-                "NPU1 Inference Time (ms)",
-                "NPU2 Load Time (ms)",
-                "NPU2 Inference Time (ms)"
+                "CPU Inf. (ms)",
+                "NPU1 Load (ms)",
+                "NPU1 Inf. (ms)",
+                "NPU2 Load (ms)",
+                "NPU2 Inf. (ms)"
             ])
             self.total_table.setRowCount(0)
 
@@ -206,7 +206,7 @@ class ONNXProfiler(QMainWindow):
     def init_table(self, table):
         table.clear()
         table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Model Name", "Load Time (ms)", "Inference Time (ms)"])
+        table.setHorizontalHeaderLabels(["Model", "Load (ms)", "Inf. (ms)"])
         table.setRowCount(0)
 
 
