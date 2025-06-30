@@ -284,17 +284,20 @@ class ONNXProfiler(QMainWindow):
         if os.path.basename(o_path).startswith("yolov3"):
             load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
             return load_time_ms, infer_time_ms, []
+        elif os.path.basename(o_path).startswith("resnet50"):
+            load_time_ms, infer_time_ms = self.process_resnet50_npu(npu_num, o_path)
+            return load_time_ms, infer_time_ms, []
+        else:
+            # 그 외의 경우 시뮬레이션
+            start_load = time.time()
+            time.sleep(0.01)
+            end_load = time.time()
+            load_time_ms = (end_load - start_load) * 1000.0
 
-        # 그 외의 경우 시뮬레이션
-        start_load = time.time()
-        time.sleep(0.01)
-        end_load = time.time()
-        load_time_ms = (end_load - start_load) * 1000.0
-
-        start_infer = time.time()
-        time.sleep(0.003)
-        end_infer = time.time()
-        infer_time_ms = (end_infer - start_infer) * 1000.0
+            start_infer = time.time()
+            time.sleep(0.003)
+            end_infer = time.time()
+            infer_time_ms = (end_infer - start_infer) * 1000.0
 
         return load_time_ms, infer_time_ms, []
 
@@ -313,6 +316,38 @@ class ONNXProfiler(QMainWindow):
 
             start_infer = time.time()
             assert driver.SendInput(input_data, 3 * 608 * 608) == 0
+            assert driver.Launch() == 0
+            raw_outputs = driver.ReceiveOutputs()
+            end_infer = time.time()
+            infer_time_ms = (end_infer - start_infer) * 1000.0
+
+            assert driver.Close() == 0
+
+        except Exception as e:
+            try:
+                driver.Close()
+            except:
+                pass
+            print(f"[Error] NPU{npu_num}: {e}")
+            exit()
+
+        return load_time_ms, infer_time_ms
+
+    def process_resnet50_npu(self, npu_num, o_path):
+        try:
+            driver = NeublaDriver()
+            assert driver.Init(npu_num) == 0
+
+            start_load = time.time()
+            assert driver.LoadModel(o_path) == 0
+            end_load = time.time()
+            load_time_ms = (end_load - start_load) * 1000.0
+
+            random_input = np.random.rand(3, 224, 224).astype(np.uint8)
+            input_data = random_input.tobytes()
+
+            start_infer = time.time()
+            assert driver.SendInput(input_data, 3 * 224 * 224) == 0
             assert driver.Launch() == 0
             raw_outputs = driver.ReceiveOutputs()
             end_infer = time.time()
