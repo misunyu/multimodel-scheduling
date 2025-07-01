@@ -10,12 +10,16 @@ from PyQt6.QtWidgets import (
     QMainWindow, QLineEdit, QPushButton,
     QFileDialog, QTreeView, QPlainTextEdit,
     QTableWidget, QTableWidgetItem, QApplication,
-    QHeaderView, QVBoxLayout, QCheckBox, QTabWidget, QWidget, QDialog
+    QHeaderView, QVBoxLayout, QCheckBox, QTabWidget, QWidget, QDialog,
+    QSplitter
 )
 from PyQt6.QtGui import QFileSystemModel
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import QLabel
 from PyQt6.QtGui import QFont
+
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 # from NeublaDriver import NeublaDriver
 
@@ -586,19 +590,24 @@ class ONNXProfiler(QMainWindow):
 
     from PyQt6.QtGui import QColor, QBrush
 
+    from PyQt6.QtWidgets import QSplitter
+
     def show_partition_assignment_dialog(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Partition Assignment Overview")
-        layout = QVBoxLayout(dialog)
 
+        # QSplitter로 상하 분할
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # 테이블 설정
         table = QTableWidget()
         table.setColumnCount(3)
         table.setHorizontalHeaderLabels(["Model", "Device", "Partition"])
-        all_rows = []
 
+        all_rows = []
         root_folder = self.folder_input.text().strip()
 
-        # 색상 리스트 정의 (필요시 더 추가 가능)
+        # 색상 팔레트
         row_colors = [
             QColor(240, 248, 255),  # AliceBlue
             QColor(255, 250, 205),  # LemonChiffon
@@ -607,8 +616,7 @@ class ONNXProfiler(QMainWindow):
             QColor(245, 245, 220),  # Beige
             QColor(230, 230, 250),  # Lavender
         ]
-
-        color_map = {}  # model_prefix → QColor
+        color_map = {}
         color_index = 0
 
         for model_prefix, device in self.assignment_results:
@@ -621,23 +629,21 @@ class ONNXProfiler(QMainWindow):
 
             model_written = False
 
-            # 디바이스별 파일 정리
+            # 디바이스에 맞는 파일 추가
             if device == "CPU":
                 target_files = cpu_files
-                dev_label = "CPU"
             else:
                 target_files = npu_files
-                dev_label = device
 
             if not target_files:
-                all_rows.append((model_prefix, dev_label, "(None)", model_color))
+                all_rows.append((model_prefix, device, "(None)", model_color))
             else:
                 for i, f in enumerate(sorted(target_files)):
                     model_col = model_prefix if not model_written else ""
-                    all_rows.append((model_col, dev_label if i == 0 else "", f, model_color))
+                    all_rows.append((model_col, device if i == 0 else "", f, model_color))
                     model_written = True
 
-            # CPU 파티션도 추가
+            # CPU 파티션도 별도로 추가
             if cpu_files and device != "CPU":
                 for i, f in enumerate(sorted(cpu_files)):
                     model_col = model_prefix if not model_written else ""
@@ -647,21 +653,18 @@ class ONNXProfiler(QMainWindow):
         # 테이블 채우기
         table.setRowCount(len(all_rows))
         for i, (model, dev, part, brush) in enumerate(all_rows):
-            # Model 열 (bold)
             model_item = QTableWidgetItem(model)
             model_item.setBackground(brush)
-            if model:  # 모델명이 비어있지 않을 때만 bold 처리
+            if model:
                 font = QFont()
                 font.setBold(True)
                 model_item.setFont(font)
             table.setItem(i, 0, model_item)
 
-            # Device 열
             dev_item = QTableWidgetItem(dev)
             dev_item.setBackground(brush)
             table.setItem(i, 1, dev_item)
 
-            # Partition 열
             part_item = QTableWidgetItem(part)
             part_item.setBackground(brush)
             table.setItem(i, 2, part_item)
@@ -671,10 +674,90 @@ class ONNXProfiler(QMainWindow):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
-        layout.addWidget(table)
+        # 테이블과 차트를 QSplitter로 연결
+        splitter.addWidget(table)
+        splitter.addWidget(self.create_inference_bar_chart())
+        splitter.setStretchFactor(0, 4)  # 테이블이 넓게
+        splitter.setStretchFactor(1, 1)  # 차트가 좁게
+
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(splitter)
         dialog.setLayout(layout)
-        dialog.resize(600, 320)
-        dialog.show()
+        dialog.resize(720, 600)
+        dialog.show()  # 비모달
+
+    def create_inference_bar_chart(self):
+        root_folder = self.folder_input.text().strip()
+
+        # 파티션 수에 따라 적절한 높이 설정
+        total_partitions = 0
+        for model_prefix, device in self.assignment_results:
+            npu_files, cpu_files = self.find_partition_files(root_folder, model_prefix, device)
+            total_partitions += len(npu_files) + len(cpu_files)
+
+        fig_height = max(3.5, 0.5 * total_partitions)  # 높이 조정
+        fig = Figure(figsize=(6, fig_height))
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
+
+        labels = []
+        durations = []
+
+        device_table_map = {
+            "CPU": self.cpu_table,
+            "NPU1": self.npu1_table,
+            "NPU2": self.npu2_table,
+        }
+
+        # 추론 시간 가져오기: 파일명 끝이 같으면 매칭
+        def get_inference_time(partition_name, primary_device):
+            tables_to_search = [device_table_map.get(primary_device)]
+            if primary_device != "CPU":
+                tables_to_search.append(self.cpu_table)
+
+            for table in tables_to_search:
+                if not table:
+                    continue
+                for row in range(table.rowCount()):
+                    model_item = table.item(row, 0)
+                    infer_item = table.item(row, 2)
+                    if model_item and infer_item:
+                        model_path = model_item.text()
+                        if model_path.endswith(partition_name):
+                            try:
+                                return float(infer_item.text())
+                            except:
+                                return None
+            return None
+
+        for model_prefix, device in self.assignment_results:
+            npu_files, cpu_files = self.find_partition_files(root_folder, model_prefix, device)
+
+            if device == "CPU":
+                for f in cpu_files:
+                    dur = get_inference_time(f, "CPU")
+                    if dur is not None:
+                        labels.append(f"{f} (CPU)")
+                        durations.append(dur)
+            else:
+                for f in npu_files:
+                    dur = get_inference_time(f, device)
+                    if dur is not None:
+                        labels.append(f"{f} ({device})")
+                        durations.append(dur)
+                for f in cpu_files:
+                    dur = get_inference_time(f, "CPU")
+                    if dur is not None:
+                        labels.append(f"{f} (CPU)")
+                        durations.append(dur)
+
+        ax.barh(labels, durations, color="skyblue")
+        ax.set_xlabel("Inference Time (ms)")
+        ax.invert_yaxis()
+        ax.tick_params(axis='y', labelsize=9)
+        fig.tight_layout()
+        return canvas
+
 
 
 
