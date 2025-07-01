@@ -10,13 +10,14 @@ from PyQt6.QtWidgets import (
     QMainWindow, QLineEdit, QPushButton,
     QFileDialog, QTreeView, QPlainTextEdit,
     QTableWidget, QTableWidgetItem, QApplication,
-    QHeaderView, QVBoxLayout, QCheckBox, QTabWidget, QWidget,
-    QLabel, QHBoxLayout
+    QHeaderView, QVBoxLayout, QCheckBox, QTabWidget, QWidget, QDialog
 )
 from PyQt6.QtGui import QFileSystemModel
 from PyQt6.QtGui import QColor, QBrush
-from PyQt6.QtWidgets import QLabel, QHBoxLayout
-from NeublaDriver import NeublaDriver
+from PyQt6.QtWidgets import QLabel
+from PyQt6.QtGui import QFont
+
+# from NeublaDriver import NeublaDriver
 
 
 CUSTOM_OP_PREFIXES = ["com.neubla"]
@@ -27,7 +28,7 @@ class ONNXProfiler(QMainWindow):
         uic.loadUi("onnx_profiler_display_modify.ui", self)
 
         self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
-        self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")  # <-- 여기가 핵심!
+        self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")
         self.npu2_tab = self.findChild(QWidget, "npu2_tab")
 
         # 탭 활성/비활성 함수 정의 및 연결
@@ -45,6 +46,7 @@ class ONNXProfiler(QMainWindow):
         self.generate_button = self.findChild(QPushButton, "generate_button")
         self.model_tree_view = self.findChild(QTreeView, "model_tree_view")
         self.log_output = self.findChild(QPlainTextEdit, "log_output")
+        self.total_table = self.findChild(QTableWidget, "total_table")
 
         self.legend_label = QLabel()
         self.legend_label.setText(
@@ -97,6 +99,12 @@ class ONNXProfiler(QMainWindow):
 
         self.set_tree_root(default_folder)
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
+
+        self.assignment_results = []  # (model_name, device) 목록 저장용
+
+        self.show_assignment_button = self.findChild(QPushButton, "show_assignment_button")
+        if self.show_assignment_button:
+            self.show_assignment_button.clicked.connect(self.show_partition_assignment_dialog)
 
 
     def browse_folder(self):
@@ -188,7 +196,6 @@ class ONNXProfiler(QMainWindow):
                 self.log_output.appendPlainText(f"[NPU2] {name}")
                 self.log_output.appendPlainText(f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
 
-        self.total_table = self.findChild(QTableWidget, "total_table")
         if self.total_table:
             self.total_table.clear()
             self.total_table.setColumnCount(6)
@@ -253,7 +260,6 @@ class ONNXProfiler(QMainWindow):
 
                 load2 = npu2_load.get(model, 0.0)
                 infer2_base = npu2_infer.get(model, 0.0)
-                # extra_cpu_infer2 = sum(cpu_infer_per_partition.get(model, []))  # ✅ _p0, _p2 CPU 시간 더함
                 infer2 = infer2_base + extra_cpu_infer
 
                 row = self.total_table.rowCount()
@@ -353,121 +359,111 @@ class ONNXProfiler(QMainWindow):
         npu_num = 0 if label == "NPU1" else 1
         basename = os.path.basename(o_path)
 
-        # yolov3로 시작하는 경우 실제 NPU 실행
-        if os.path.basename(o_path).startswith("yolov3"):
-            load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
+        # # yolov3로 시작하는 경우 실제 NPU 실행
+        # if os.path.basename(o_path).startswith("yolov3"):
+        #     load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
+        #     return load_time_ms, infer_time_ms, []
+        # elif os.path.basename(o_path).startswith("resnet50"):
+        #     load_time_ms, infer_time_ms = self.process_resnet50_npu(npu_num, o_path)
+        #     return load_time_ms, infer_time_ms, []
+        # else:
+
+        simulated_profiles = {
+            "resnet50": {
+                "NPU1": (15.8, 38.6),
+                "NPU2": (77.1, 38.8),
+            },
+            "yolov3_small": {
+                "NPU1": (104.3, 60.9),
+                "NPU2": (430.6, 82.7),
+            },
+            "yolov3_big": {
+                "NPU1": (107.0, 87.4),
+                "NPU2": (467.5, 110.4),
+            },
+        }
+        # 모델명 접두어 매칭
+        matched_key = next((key for key in simulated_profiles if basename.startswith(key)), None)
+        if matched_key and label in simulated_profiles[matched_key]:
+            load_time_ms, infer_time_ms = simulated_profiles[matched_key][label]
             return load_time_ms, infer_time_ms, []
-        elif os.path.basename(o_path).startswith("resnet50"):
-            load_time_ms, infer_time_ms = self.process_resnet50_npu(npu_num, o_path)
-            return load_time_ms, infer_time_ms, []
-        else:
 
-            if basename.startswith("resnet50"):
-                if label == "NPU1":
-                    load_time_ms = 15.8
-                    infer_time_ms = 38.6
-                else:  # NPU2
-                    load_time_ms = 77.1
-                    infer_time_ms = 38.8
-                return load_time_ms, infer_time_ms, []
+        # 시뮬레이션 값이 없는 경우: 기본 짧은 대기 시뮬레이션
+        start_load = time.time()
+        time.sleep(0.01)
+        end_load = time.time()
+        load_time_ms = (end_load - start_load) * 1000.0
 
-                # yolov3_small 시뮬레이션 값
-            elif basename.startswith("yolov3_small"):
-                if label == "NPU1":
-                    load_time_ms = 104.3
-                    infer_time_ms = 60.9
-                else:  # NPU2
-                    load_time_ms = 430.6
-                    infer_time_ms = 82.7
-                return load_time_ms, infer_time_ms, []
-
-                # yolov3_big 시뮬레이션 값
-            elif basename.startswith("yolov3_big"):
-                if label == "NPU1":
-                    load_time_ms = 107.0
-                    infer_time_ms = 87.4
-                else:  # NPU2
-                    load_time_ms = 467.5
-                    infer_time_ms = 110.4
-                return load_time_ms, infer_time_ms, []
-
-                # 그 외의 경우 일반 시뮬레이션
-            start_load = time.time()
-            time.sleep(0.01)
-            end_load = time.time()
-            load_time_ms = (end_load - start_load) * 1000.0
-
-            start_infer = time.time()
-            time.sleep(0.003)
-            end_infer = time.time()
-            infer_time_ms = (end_infer - start_infer) * 1000.0
-
+        start_infer = time.time()
+        time.sleep(0.003)
+        end_infer = time.time()
+        infer_time_ms = (end_infer - start_infer) * 1000.0
 
         return load_time_ms, infer_time_ms, []
 
-    def process_yolo_npu(self, npu_num, o_path):
-        try:
-            driver = NeublaDriver()
-            assert driver.Init(npu_num) == 0
-
-            start_load = time.time()
-            assert driver.LoadModel(o_path) == 0
-            end_load = time.time()
-            load_time_ms = (end_load - start_load) * 1000.0
-
-            random_input = np.random.rand(3, 608, 608).astype(np.uint8)
-            input_data = random_input.tobytes()
-
-            start_infer = time.time()
-            assert driver.SendInput(input_data, 3 * 608 * 608) == 0
-            assert driver.Launch() == 0
-            raw_outputs = driver.ReceiveOutputs()
-            end_infer = time.time()
-            infer_time_ms = (end_infer - start_infer) * 1000.0
-
-            assert driver.Close() == 0
-
-        except Exception as e:
-            try:
-                driver.Close()
-            except:
-                pass
-            print(f"[Error] NPU{npu_num}: {e}")
-            exit()
-
-        return load_time_ms, infer_time_ms
-
-    def process_resnet50_npu(self, npu_num, o_path):
-        try:
-            driver = NeublaDriver()
-            assert driver.Init(npu_num) == 0
-
-            start_load = time.time()
-            assert driver.LoadModel(o_path) == 0
-            end_load = time.time()
-            load_time_ms = (end_load - start_load) * 1000.0
-
-            random_input = np.random.rand(3, 224, 224).astype(np.uint8)
-            input_data = random_input.tobytes()
-
-            start_infer = time.time()
-            assert driver.SendInput(input_data, 3 * 224 * 224) == 0
-            assert driver.Launch() == 0
-            raw_outputs = driver.ReceiveOutputs()
-            end_infer = time.time()
-            infer_time_ms = (end_infer - start_infer) * 1000.0
-
-            assert driver.Close() == 0
-
-        except Exception as e:
-            try:
-                driver.Close()
-            except:
-                pass
-            print(f"[Error] NPU{npu_num}: {e}")
-            exit()
-
-        return load_time_ms, infer_time_ms
+    # def process_yolo_npu(self, npu_num, o_path):
+    #     try:
+    #         driver = NeublaDriver()
+    #         assert driver.Init(npu_num) == 0
+    #
+    #         start_load = time.time()
+    #         assert driver.LoadModel(o_path) == 0
+    #         end_load = time.time()
+    #         load_time_ms = (end_load - start_load) * 1000.0
+    #
+    #         random_input = np.random.rand(3, 608, 608).astype(np.uint8)
+    #         input_data = random_input.tobytes()
+    #
+    #         start_infer = time.time()
+    #         assert driver.SendInput(input_data, 3 * 608 * 608) == 0
+    #         assert driver.Launch() == 0
+    #         raw_outputs = driver.ReceiveOutputs()
+    #         end_infer = time.time()
+    #         infer_time_ms = (end_infer - start_infer) * 1000.0
+    #
+    #         assert driver.Close() == 0
+    #
+    #     except Exception as e:
+    #         try:
+    #             driver.Close()
+    #         except:
+    #             pass
+    #         print(f"[Error] NPU{npu_num}: {e}")
+    #         exit()
+    #
+    #     return load_time_ms, infer_time_ms
+    #
+    # def process_resnet50_npu(self, npu_num, o_path):
+    #     try:
+    #         driver = NeublaDriver()
+    #         assert driver.Init(npu_num) == 0
+    #
+    #         start_load = time.time()
+    #         assert driver.LoadModel(o_path) == 0
+    #         end_load = time.time()
+    #         load_time_ms = (end_load - start_load) * 1000.0
+    #
+    #         random_input = np.random.rand(3, 224, 224).astype(np.uint8)
+    #         input_data = random_input.tobytes()
+    #
+    #         start_infer = time.time()
+    #         assert driver.SendInput(input_data, 3 * 224 * 224) == 0
+    #         assert driver.Launch() == 0
+    #         raw_outputs = driver.ReceiveOutputs()
+    #         end_infer = time.time()
+    #         infer_time_ms = (end_infer - start_infer) * 1000.0
+    #
+    #         assert driver.Close() == 0
+    #
+    #     except Exception as e:
+    #         try:
+    #             driver.Close()
+    #         except:
+    #             pass
+    #         print(f"[Error] NPU{npu_num}: {e}")
+    #         exit()
+    #
+    #     return load_time_ms, infer_time_ms
 
     def contains_custom_op(self, onnx_path):
         try:
@@ -512,7 +508,8 @@ class ONNXProfiler(QMainWindow):
                 times.append((cpu_infer, npu1_infer, npu2_infer))
 
             except Exception as e:
-                print(f"[Warning] Skipping row {row}: {e}")
+                if self.log_output:
+                    self.log_output.appendPlainText(f"[Warning] Skipping row {row}: {e}")
 
         load = {"CPU": 0.0, "NPU1": 0.0, "NPU2": 0.0}
         assignments = []
@@ -542,4 +539,142 @@ class ONNXProfiler(QMainWindow):
                     item = self.total_table.item(row_idx, col)
                     if item:
                         item.setBackground(brush)
+
+        # 모델별 배치 결과 저장
+        self.assignment_results = [
+            (model_name, device)
+            for (_, model_name), device in zip(models, assignments)
+        ]
+
+        print("assignment_results:", self.assignment_results)
+
+    def find_partition_files(self, root_folder, model_prefix, device):
+        npu_files = []
+        cpu_partition_files = []
+
+        model_base_dir = os.path.join(root_folder, model_prefix)
+
+        if device == "CPU":
+            model_dir = os.path.join(model_base_dir, "model")
+            if os.path.isdir(model_dir):
+                for f in sorted(os.listdir(model_dir)):
+                    if f.endswith(".onnx") and f.startswith(model_prefix):
+                        cpu_partition_files.append(f)
+
+        elif device in ("NPU1", "NPU2"):
+            npu_code_dir = os.path.join(model_base_dir, "npu_code")
+            partitions_dir = os.path.join(model_base_dir, "partitions")
+
+            o_file_basenames = set()
+
+            # 1) .o 파일 수집
+            if os.path.isdir(npu_code_dir):
+                for f in sorted(os.listdir(npu_code_dir)):
+                    if f.endswith(".o") and f.startswith(model_prefix):
+                        npu_files.append(f)
+                        o_file_basenames.add(os.path.splitext(f)[0])  # "yolov3_big_p1" 등
+
+            # 2) .onnx 파일 중 .o와 같은 베이스 이름은 제외
+            if os.path.isdir(partitions_dir):
+                for f in sorted(os.listdir(partitions_dir)):
+                    if f.endswith(".onnx") and f.startswith(model_prefix):
+                        base = os.path.splitext(f)[0]
+                        if base not in o_file_basenames:
+                            cpu_partition_files.append(f)
+
+        return npu_files, cpu_partition_files
+
+    from PyQt6.QtGui import QColor, QBrush
+
+    def show_partition_assignment_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Partition Assignment Overview")
+        layout = QVBoxLayout(dialog)
+
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Model", "Device", "Partition"])
+        all_rows = []
+
+        root_folder = self.folder_input.text().strip()
+
+        # 색상 리스트 정의 (필요시 더 추가 가능)
+        row_colors = [
+            QColor(240, 248, 255),  # AliceBlue
+            QColor(255, 250, 205),  # LemonChiffon
+            QColor(224, 255, 255),  # LightCyan
+            QColor(255, 228, 225),  # MistyRose
+            QColor(245, 245, 220),  # Beige
+            QColor(230, 230, 250),  # Lavender
+        ]
+
+        color_map = {}  # model_prefix → QColor
+        color_index = 0
+
+        for model_prefix, device in self.assignment_results:
+            if model_prefix not in color_map:
+                color_map[model_prefix] = row_colors[color_index % len(row_colors)]
+                color_index += 1
+
+            model_color = QBrush(color_map[model_prefix])
+            npu_files, cpu_files = self.find_partition_files(root_folder, model_prefix, device)
+
+            model_written = False
+
+            # 디바이스별 파일 정리
+            if device == "CPU":
+                target_files = cpu_files
+                dev_label = "CPU"
+            else:
+                target_files = npu_files
+                dev_label = device
+
+            if not target_files:
+                all_rows.append((model_prefix, dev_label, "(None)", model_color))
+            else:
+                for i, f in enumerate(sorted(target_files)):
+                    model_col = model_prefix if not model_written else ""
+                    all_rows.append((model_col, dev_label if i == 0 else "", f, model_color))
+                    model_written = True
+
+            # CPU 파티션도 추가
+            if cpu_files and device != "CPU":
+                for i, f in enumerate(sorted(cpu_files)):
+                    model_col = model_prefix if not model_written else ""
+                    all_rows.append((model_col, "CPU" if i == 0 else "", f, model_color))
+                    model_written = True
+
+        # 테이블 채우기
+        table.setRowCount(len(all_rows))
+        for i, (model, dev, part, brush) in enumerate(all_rows):
+            # Model 열 (bold)
+            model_item = QTableWidgetItem(model)
+            model_item.setBackground(brush)
+            if model:  # 모델명이 비어있지 않을 때만 bold 처리
+                font = QFont()
+                font.setBold(True)
+                model_item.setFont(font)
+            table.setItem(i, 0, model_item)
+
+            # Device 열
+            dev_item = QTableWidgetItem(dev)
+            dev_item.setBackground(brush)
+            table.setItem(i, 1, dev_item)
+
+            # Partition 열
+            part_item = QTableWidgetItem(part)
+            part_item.setBackground(brush)
+            table.setItem(i, 2, part_item)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+
+        layout.addWidget(table)
+        dialog.setLayout(layout)
+        dialog.resize(600, 320)
+        dialog.show()
+
+
 
