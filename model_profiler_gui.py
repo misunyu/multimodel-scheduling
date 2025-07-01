@@ -21,7 +21,7 @@ from PyQt6.QtGui import QFont
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from NeublaDriver import NeublaDriver
+# from NeublaDriver import NeublaDriver
 
 
 CUSTOM_OP_PREFIXES = ["com.neubla"]
@@ -363,111 +363,111 @@ class ONNXProfiler(QMainWindow):
         npu_num = 0 if label == "NPU1" else 1
         basename = os.path.basename(o_path)
 
-        # yolov3로 시작하는 경우 실제 NPU 실행
-        if os.path.basename(o_path).startswith("yolov3"):
-            load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
-            return load_time_ms, infer_time_ms, []
-        elif os.path.basename(o_path).startswith("resnet50"):
-            load_time_ms, infer_time_ms = self.process_resnet50_npu(npu_num, o_path)
-            return load_time_ms, infer_time_ms, []
-        else:
+        # # yolov3로 시작하는 경우 실제 NPU 실행
+        # if os.path.basename(o_path).startswith("yolov3"):
+        #     load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
+        #     return load_time_ms, infer_time_ms, []
+        # elif os.path.basename(o_path).startswith("resnet50"):
+        #     load_time_ms, infer_time_ms = self.process_resnet50_npu(npu_num, o_path)
+        #     return load_time_ms, infer_time_ms, []
+        # else:
 
-            simulated_profiles = {
-                "resnet50": {
-                    "NPU1": (15.8, 38.6),
-                    "NPU2": (77.1, 38.8),
-                },
-                "yolov3_small": {
-                    "NPU1": (104.3, 60.9),
-                    "NPU2": (430.6, 82.7),
-                },
-                "yolov3_big": {
-                    "NPU1": (107.0, 87.4),
-                    "NPU2": (467.5, 110.4),
-                },
-            }
-            # 모델명 접두어 매칭
-            matched_key = next((key for key in simulated_profiles if basename.startswith(key)), None)
-            if matched_key and label in simulated_profiles[matched_key]:
-                load_time_ms, infer_time_ms = simulated_profiles[matched_key][label]
-                return load_time_ms, infer_time_ms, []
-
-            # 시뮬레이션 값이 없는 경우: 기본 짧은 대기 시뮬레이션
-            start_load = time.time()
-            time.sleep(0.01)
-            end_load = time.time()
-            load_time_ms = (end_load - start_load) * 1000.0
-
-            start_infer = time.time()
-            time.sleep(0.003)
-            end_infer = time.time()
-            infer_time_ms = (end_infer - start_infer) * 1000.0
-
+        simulated_profiles = {
+            "resnet50": {
+                "NPU1": (15.8, 38.6),
+                "NPU2": (77.1, 38.8),
+            },
+            "yolov3_small": {
+                "NPU1": (104.3, 60.9),
+                "NPU2": (430.6, 82.7),
+            },
+            "yolov3_big": {
+                "NPU1": (107.0, 87.4),
+                "NPU2": (467.5, 110.4),
+            },
+        }
+        # 모델명 접두어 매칭
+        matched_key = next((key for key in simulated_profiles if basename.startswith(key)), None)
+        if matched_key and label in simulated_profiles[matched_key]:
+            load_time_ms, infer_time_ms = simulated_profiles[matched_key][label]
             return load_time_ms, infer_time_ms, []
 
-    def process_yolo_npu(self, npu_num, o_path):
-        try:
-            driver = NeublaDriver()
-            assert driver.Init(npu_num) == 0
+        # 시뮬레이션 값이 없는 경우: 기본 짧은 대기 시뮬레이션
+        start_load = time.time()
+        time.sleep(0.01)
+        end_load = time.time()
+        load_time_ms = (end_load - start_load) * 1000.0
 
-            start_load = time.time()
-            assert driver.LoadModel(o_path) == 0
-            end_load = time.time()
-            load_time_ms = (end_load - start_load) * 1000.0
+        start_infer = time.time()
+        time.sleep(0.003)
+        end_infer = time.time()
+        infer_time_ms = (end_infer - start_infer) * 1000.0
 
-            random_input = np.random.rand(3, 608, 608).astype(np.uint8)
-            input_data = random_input.tobytes()
+        return load_time_ms, infer_time_ms, []
 
-            start_infer = time.time()
-            assert driver.SendInput(input_data, 3 * 608 * 608) == 0
-            assert driver.Launch() == 0
-            raw_outputs = driver.ReceiveOutputs()
-            end_infer = time.time()
-            infer_time_ms = (end_infer - start_infer) * 1000.0
-
-            assert driver.Close() == 0
-
-        except Exception as e:
-            try:
-                driver.Close()
-            except:
-                pass
-            print(f"[Error] NPU{npu_num}: {e}")
-            exit()
-
-        return load_time_ms, infer_time_ms
-
-    def process_resnet50_npu(self, npu_num, o_path):
-        try:
-            driver = NeublaDriver()
-            assert driver.Init(npu_num) == 0
-
-            start_load = time.time()
-            assert driver.LoadModel(o_path) == 0
-            end_load = time.time()
-            load_time_ms = (end_load - start_load) * 1000.0
-
-            random_input = np.random.rand(3, 224, 224).astype(np.uint8)
-            input_data = random_input.tobytes()
-
-            start_infer = time.time()
-            assert driver.SendInput(input_data, 3 * 224 * 224) == 0
-            assert driver.Launch() == 0
-            raw_outputs = driver.ReceiveOutputs()
-            end_infer = time.time()
-            infer_time_ms = (end_infer - start_infer) * 1000.0
-
-            assert driver.Close() == 0
-
-        except Exception as e:
-            try:
-                driver.Close()
-            except:
-                pass
-            print(f"[Error] NPU{npu_num}: {e}")
-            exit()
-
-        return load_time_ms, infer_time_ms
+    # def process_yolo_npu(self, npu_num, o_path):
+    #     try:
+    #         driver = NeublaDriver()
+    #         assert driver.Init(npu_num) == 0
+    #
+    #         start_load = time.time()
+    #         assert driver.LoadModel(o_path) == 0
+    #         end_load = time.time()
+    #         load_time_ms = (end_load - start_load) * 1000.0
+    #
+    #         random_input = np.random.rand(3, 608, 608).astype(np.uint8)
+    #         input_data = random_input.tobytes()
+    #
+    #         start_infer = time.time()
+    #         assert driver.SendInput(input_data, 3 * 608 * 608) == 0
+    #         assert driver.Launch() == 0
+    #         raw_outputs = driver.ReceiveOutputs()
+    #         end_infer = time.time()
+    #         infer_time_ms = (end_infer - start_infer) * 1000.0
+    #
+    #         assert driver.Close() == 0
+    #
+    #     except Exception as e:
+    #         try:
+    #             driver.Close()
+    #         except:
+    #             pass
+    #         print(f"[Error] NPU{npu_num}: {e}")
+    #         exit()
+    #
+    #     return load_time_ms, infer_time_ms
+    #
+    # def process_resnet50_npu(self, npu_num, o_path):
+    #     try:
+    #         driver = NeublaDriver()
+    #         assert driver.Init(npu_num) == 0
+    #
+    #         start_load = time.time()
+    #         assert driver.LoadModel(o_path) == 0
+    #         end_load = time.time()
+    #         load_time_ms = (end_load - start_load) * 1000.0
+    #
+    #         random_input = np.random.rand(3, 224, 224).astype(np.uint8)
+    #         input_data = random_input.tobytes()
+    #
+    #         start_infer = time.time()
+    #         assert driver.SendInput(input_data, 3 * 224 * 224) == 0
+    #         assert driver.Launch() == 0
+    #         raw_outputs = driver.ReceiveOutputs()
+    #         end_infer = time.time()
+    #         infer_time_ms = (end_infer - start_infer) * 1000.0
+    #
+    #         assert driver.Close() == 0
+    #
+    #     except Exception as e:
+    #         try:
+    #             driver.Close()
+    #         except:
+    #             pass
+    #         print(f"[Error] NPU{npu_num}: {e}")
+    #         exit()
+    #
+    #     return load_time_ms, infer_time_ms
 
     def contains_custom_op(self, onnx_path):
         try:
