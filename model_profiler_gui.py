@@ -55,8 +55,8 @@ class ONNXProfiler(QMainWindow):
         self.legend_label = QLabel()
         self.legend_label.setText(
             "<span style='background-color:#cce6ff;'>&nbsp;&nbsp;&nbsp;</span> CPU &nbsp;&nbsp;"
-            "<span style='background-color:#ffffcc;'>&nbsp;&nbsp;&nbsp;</span> NPU1 &nbsp;&nbsp;"
-            "<span style='background-color:#ffd699;'>&nbsp;&nbsp;&nbsp;</span> NPU2"
+            "<span style='background-color:#ffffcc;'>&nbsp;&nbsp;&nbsp;</span> use NPU1 &nbsp;&nbsp;"
+            "<span style='background-color:#ffd699;'>&nbsp;&nbsp;&nbsp;</span> use NPU2"
         )
         self.legend_label.setStyleSheet("font-size: 12px; padding: 2px;")
 
