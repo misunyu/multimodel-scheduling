@@ -4,19 +4,19 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 
-from PyQt6 import uic
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import (
+from PyQt5 import uic
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtWidgets import (
     QMainWindow, QLineEdit, QPushButton,
     QFileDialog, QTreeView, QPlainTextEdit,
     QTableWidget, QTableWidgetItem, QApplication,
-    QHeaderView, QVBoxLayout, QCheckBox, QTabWidget, QWidget, QDialog,
-    QSplitter
+    QHeaderView, QVBoxLayout, QHBoxLayout, QCheckBox, QTabWidget, QWidget, QDialog,
+    QSplitter, QTableWidgetItem
 )
-from PyQt6.QtGui import QFileSystemModel
-from PyQt6.QtGui import QColor, QBrush
-from PyQt6.QtWidgets import QLabel
-from PyQt6.QtGui import QFont
+from PyQt5.QtWidgets import QFileSystemModel
+from PyQt5.QtGui import QColor, QBrush
+from PyQt5.QtWidgets import QLabel
+from PyQt5.QtGui import QFont
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -34,6 +34,11 @@ class ONNXProfiler(QMainWindow):
         self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
         self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")
         self.npu2_tab = self.findChild(QWidget, "npu2_tab")
+
+        main_layout = self.findChild(QHBoxLayout, "mainLayout")
+        if main_layout:
+            main_layout.setStretch(0, 3)
+            main_layout.setStretch(1, 7)
 
         # 탭 활성/비활성 함수 정의 및 연결
         def update_npu2_tab_enabled():
@@ -110,6 +115,9 @@ class ONNXProfiler(QMainWindow):
         if self.show_assignment_button:
             self.show_assignment_button.clicked.connect(self.show_partition_assignment_dialog)
 
+        self.load_sample_button = self.findChild(QPushButton, "load_sample_button")
+        if self.load_sample_button:
+            self.load_sample_button.clicked.connect(self.load_sample_data)
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
@@ -275,8 +283,34 @@ class ONNXProfiler(QMainWindow):
                 self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
                 self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
 
+    def load_sample_data(self):
+        sample_data = [
+            ("resnet50_neubla_p1.o", 15.8, 38.6),
+            ("yolov3_big_neubla_p1.o", 107.0, 87.4),
+            ("yolov3_small_neubla_p1.o", 104.3, 60.9),
+        ]
 
-# === Table Management ===
+        def fill_table(table, data):
+            table.clear()
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["Model", "Load (ms)", "Inf. (ms)"])
+            table.setRowCount(len(data))
+            for row, (model, load, inf) in enumerate(data):
+                table.setItem(row, 0, QTableWidgetItem(model))
+                table.setItem(row, 1, QTableWidgetItem(f"{load:.1f}"))
+                table.setItem(row, 2, QTableWidgetItem(f"{inf:.1f}"))
+
+            # 헤더 정렬 재설정
+            header = table.horizontalHeader()
+            header.setStretchLastSection(True)
+            header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+
+        fill_table(self.cpu_table, sample_data)
+        fill_table(self.npu1_table, sample_data)
+        if self.enable_npu2_checkbox.isChecked():
+            fill_table(self.npu2_table, sample_data)
+
+    # === Table Management ===
     def init_table(self, table):
         table.clear()
         table.setColumnCount(3)
@@ -757,7 +791,3 @@ class ONNXProfiler(QMainWindow):
         ax.tick_params(axis='y', labelsize=9)
         fig.tight_layout()
         return canvas
-
-
-
-
