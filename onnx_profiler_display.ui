@@ -3,109 +3,146 @@
  <class>ONNXProfiler</class>
  <widget class="QMainWindow" name="ONNXProfiler">
   <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>900</width>
-    <height>600</height>
-   </rect>
+   <rect><x>0</x><y>0</y><width>1400</width><height>800</height></rect>
   </property>
   <property name="windowTitle">
-   <string>ONNX 모델 성능 측정기</string>
+   <string>MPOpt: Optimized Multi-Model Deployment</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QHBoxLayout" name="mainLayout">
+    <property name="spacing"><number>10</number></property>
+
     <item>
-     <layout class="QVBoxLayout" name="leftLayout">
-      <item>
-       <widget class="QLineEdit" name="folder_input"/>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="button_layout">
-        <item>
-         <widget class="QPushButton" name="browse_button">
-          <property name="text">
-           <string>폴더 선택..</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="profile_button">
-          <property name="text">
-           <string>Profile</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <widget class="QLabel">
-        <property name="text">
-         <string>ONNX 모델 리스트</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QListWidget" name="model_list"/>
-      </item>
-      <item>
-       <widget class="QLabel">
-        <property name="text">
-         <string>실행된 모델 이름</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QTableWidget" name="execution_log"/>
-      </item>
-      <item>
-       <widget class="QPushButton" name="generate_button">
-        <property name="text">
-         <string>모델 배치 코드 생성</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </item>
-    <item>
-     <widget class="QSplitter" name="right_splitter">
-      <property name="orientation">
-       <enum>Qt::Vertical</enum>
-      </property>
-      <widget class="QWidget" name="cpu_widget">
-       <layout class="QVBoxLayout" name="cpu_layout">
-        <item>
-         <widget class="QLabel">
-          <property name="text">
-           <string>CPU 실행 결과</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QTableWidget" name="cpu_result_table"/>
-        </item>
-       </layout>
-      </widget>
-      <widget class="QWidget" name="npu_widget">
-       <layout class="QVBoxLayout" name="npu_layout">
-        <item>
-         <widget class="QLabel">
-          <property name="text">
-           <string>NPU 실행 결과 (임의 값)</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QTableWidget" name="npu_result_table"/>
-        </item>
-       </layout>
-      </widget>
+     <widget class="QWidget" name="left_panel">
+      <layout class="QVBoxLayout" name="leftLayout">
+       <property name="spacing"><number>10</number></property>
+       <property name="leftMargin"><number>10</number></property>
+       <property name="topMargin"><number>10</number></property>
+       <property name="rightMargin"><number>10</number></property>
+       <property name="bottomMargin"><number>10</number></property>
+
+       <item><widget class="QLineEdit" name="folder_input"/></item>
+
+       <item>
+        <layout class="QHBoxLayout" name="button_layout">
+         <item>
+          <widget class="QPushButton" name="browse_button">
+           <property name="text"><string>Select Folder</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="profile_button">
+           <property name="text"><string>Start Profiling</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+
+       <item>
+        <widget class="QTreeView" name="model_tree_view">
+         <property name="minimumSize"><size><width>200</width><height>300</height></size></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QCheckBox" name="npu2_enable_checkbox">
+         <property name="text"><string>Enable NPU2</string></property>
+         <property name="checked"><bool>true</bool></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="generate_button">
+         <property name="text"><string>Generate Initial Deployment Plan</string></property>
+        </widget>
+       </item>
+      </layout>
      </widget>
     </item>
+
+    <item>
+     <widget class="QWidget" name="right_panel">
+      <layout class="QVBoxLayout" name="rightLayout">
+       <property name="spacing"><number>10</number></property>
+       <property name="leftMargin"><number>10</number></property>
+       <property name="topMargin"><number>10</number></property>
+       <property name="rightMargin"><number>10</number></property>
+       <property name="bottomMargin"><number>10</number></property>
+
+       <item>
+        <widget class="QTabWidget" name="result_tab_widget">
+         <property name="minimumSize"><size><width>500</width><height>400</height></size></property>
+
+         <widget class="QWidget" name="cpu_tab">
+          <attribute name="title"><string>CPU</string></attribute>
+          <layout class="QVBoxLayout" name="cpu_layout">
+           <item><widget class="QTableWidget" name="cpu_table"/></item>
+          </layout>
+         </widget>
+
+         <widget class="QWidget" name="npu1_tab">
+          <attribute name="title"><string>NPU1</string></attribute>
+          <layout class="QVBoxLayout" name="npu1_layout">
+           <item><widget class="QTableWidget" name="npu1_table"/></item>
+          </layout>
+         </widget>
+
+         <widget class="QWidget" name="npu2_tab">
+          <attribute name="title"><string>NPU2</string></attribute>
+          <layout class="QVBoxLayout" name="npu2_layout">
+           <item><widget class="QTableWidget" name="npu2_table"/></item>
+          </layout>
+         </widget>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QTableWidget" name="total_table">
+         <property name="minimumSize"><size><width>700</width><height>160</height></size></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="show_assignment_button">
+         <property name="text"><string>Show Partition Assignments</string></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QPlainTextEdit" name="log_output">
+         <property name="minimumSize"><size><width>500</width><height>150</height></size></property>
+         <property name="readOnly"><bool>true</bool></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+
    </layout>
   </widget>
-  <widget class="QMenuBar" name="menubar"/>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1400</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>File</string>
+    </property>
+    <addaction name="actionLoad_Test_Data"/>
+   </widget>
+   <addaction name="menuFile"/>
+  </widget>
   <widget class="QStatusBar" name="statusbar"/>
+  <action name="actionLoad_Test_Data">
+   <property name="text">
+    <string>Load Sample Data</string>
+   </property>
+  </action>
  </widget>
  <resources/>
  <connections/>

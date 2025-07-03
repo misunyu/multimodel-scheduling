@@ -5,10 +5,10 @@ import cv2
 import numpy as np
 import psutil
 import onnxruntime as ort
-from PyQt6.QtWidgets import QMainWindow, QLabel
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QImage, QPixmap
-from PyQt6 import uic
+from PyQt5.QtWidgets import QMainWindow, QLabel
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5 import uic
 
 input_width = input_height = 608
 
@@ -82,7 +82,7 @@ def convert_cv_qt(cv_img):
     rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
     h, w, ch = rgb_image.shape
     bytes_per_line = ch * w
-    qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+    qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
     return QPixmap.fromImage(qt_image)
 
 def get_cpu_metrics(interval=0):

@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QTreeView, QPlainTextEdit,
     QTableWidget, QTableWidgetItem, QApplication,
     QHeaderView, QVBoxLayout, QHBoxLayout, QCheckBox, QTabWidget, QWidget, QDialog,
-    QSplitter, QTableWidgetItem
+    QSplitter, QTableWidgetItem, QAction
 )
 from PyQt5.QtWidgets import QFileSystemModel
 from PyQt5.QtGui import QColor, QBrush
@@ -29,7 +29,7 @@ CUSTOM_OP_PREFIXES = ["com.neubla"]
 class ONNXProfiler(QMainWindow):
     def __init__(self):
         super().__init__()
-        uic.loadUi("onnx_profiler_display_modify.ui", self)
+        uic.loadUi("onnx_profiler_display.ui", self)
 
         self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
         self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")
@@ -83,7 +83,7 @@ class ONNXProfiler(QMainWindow):
         for table in [self.cpu_table, self.npu1_table, self.npu2_table]:
             header = table.horizontalHeader()
             header.setStretchLastSection(True)
-            header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(QHeaderView.ResizeToContents)
 
         self.fs_model = QFileSystemModel()
         self.fs_model.setReadOnly(True)
@@ -114,6 +114,11 @@ class ONNXProfiler(QMainWindow):
         self.show_assignment_button = self.findChild(QPushButton, "show_assignment_button")
         if self.show_assignment_button:
             self.show_assignment_button.clicked.connect(self.show_partition_assignment_dialog)
+
+        # Connect Load Test Data menu action
+        self.actionLoad_Test_Data = self.findChild(QAction, "actionLoad_Test_Data")
+        if self.actionLoad_Test_Data:
+            self.actionLoad_Test_Data.triggered.connect(self.load_sample_data)
 
         self.load_sample_button = self.findChild(QPushButton, "load_sample_button")
         if self.load_sample_button:
@@ -224,7 +229,7 @@ class ONNXProfiler(QMainWindow):
             header = self.total_table.horizontalHeader()
             header.setStretchLastSection(True)
             for i in range(6):
-                header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(i, QHeaderView.Stretch)
 
             def collect_values(table, col_index):
                 values = {}
@@ -283,11 +288,119 @@ class ONNXProfiler(QMainWindow):
                 self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
                 self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
 
+            # Calculate and display total values
+            if self.total_table and self.total_table.rowCount() > 0:
+                # Initialize totals
+                cpu_infer_total = 0.0
+                npu1_load_total = 0.0
+                npu1_infer_total = 0.0
+                npu2_load_total = 0.0
+                npu2_infer_total = 0.0
+
+                # Calculate totals
+                for row in range(self.total_table.rowCount()):
+                    try:
+                        cpu_infer_item = self.total_table.item(row, 1)
+                        npu1_load_item = self.total_table.item(row, 2)
+                        npu1_infer_item = self.total_table.item(row, 3)
+                        npu2_load_item = self.total_table.item(row, 4)
+                        npu2_infer_item = self.total_table.item(row, 5)
+
+                        if cpu_infer_item:
+                            cpu_infer_total += float(cpu_infer_item.text())
+                        if npu1_load_item:
+                            npu1_load_total += float(npu1_load_item.text())
+                        if npu1_infer_item:
+                            npu1_infer_total += float(npu1_infer_item.text())
+                        if npu2_load_item:
+                            npu2_load_total += float(npu2_load_item.text())
+                        if npu2_infer_item:
+                            npu2_infer_total += float(npu2_infer_item.text())
+                    except Exception as e:
+                        if self.log_output:
+                            self.log_output.appendPlainText(f"[Warning] Error calculating totals: {e}")
+
+                # Add total row
+                total_row = self.total_table.rowCount()
+                self.total_table.insertRow(total_row)
+
+                # Set total values with bold font
+                bold_font = QFont()
+                bold_font.setBold(True)
+
+                total_item = QTableWidgetItem("Total")
+                total_item.setFont(bold_font)
+                self.total_table.setItem(total_row, 0, total_item)
+
+                cpu_infer_total_item = QTableWidgetItem(f"{cpu_infer_total:.1f}")
+                cpu_infer_total_item.setFont(bold_font)
+                self.total_table.setItem(total_row, 1, cpu_infer_total_item)
+
+                npu1_load_total_item = QTableWidgetItem(f"{npu1_load_total:.1f}")
+                npu1_load_total_item.setFont(bold_font)
+                self.total_table.setItem(total_row, 2, npu1_load_total_item)
+
+                npu1_infer_total_item = QTableWidgetItem(f"{npu1_infer_total:.1f}")
+                npu1_infer_total_item.setFont(bold_font)
+                self.total_table.setItem(total_row, 3, npu1_infer_total_item)
+
+                npu2_load_total_item = QTableWidgetItem(f"{npu2_load_total:.1f}")
+                npu2_load_total_item.setFont(bold_font)
+                self.total_table.setItem(total_row, 4, npu2_load_total_item)
+
+                npu2_infer_total_item = QTableWidgetItem(f"{npu2_infer_total:.1f}")
+                npu2_infer_total_item.setFont(bold_font)
+                self.total_table.setItem(total_row, 5, npu2_infer_total_item)
+
+                # Set background color for the total row
+                for col in range(self.total_table.columnCount()):
+                    item = self.total_table.item(total_row, col)
+                    if item:
+                        item.setBackground(QBrush(QColor(230, 230, 230)))
+
     def load_sample_data(self):
-        sample_data = [
-            ("resnet50_neubla_p1.o", 15.8, 38.6),
-            ("yolov3_big_neubla_p1.o", 107.0, 87.4),
-            ("yolov3_small_neubla_p1.o", 104.3, 60.9),
+        # 시뮬레이션 데이터 정의
+        simulated_profiles = {
+            "resnet50": {
+                "NPU1": (15.8, 38.6),
+                "NPU2": (77.1, 38.8),
+            },
+            "yolov3_small": {
+                "NPU1": (104.3, 60.9),
+                "NPU2": (430.6, 82.7),
+            },
+            "yolov3_big": {
+                "NPU1": (107.0, 87.4),
+                "NPU2": (467.5, 110.4),
+            },
+        }
+
+        # ✅ CPU 테이블: 스크린샷과 동일한 경로 및 값 사용 (.onnx 경로 포함)
+        cpu_data = [
+            ("yolov3_small/model/yolov3_small_fixed_608.onnx", 462.4, 163.4),
+            ("yolov3_small/partitions/yolov3_small_neubla_p2.onnx", 6.9, 12.9),
+            ("yolov3_small/partitions/yolov3_small_neubla_p1.onnx", 83.5, 58.8),
+            ("yolov3_small/partitions/yolov3_small_neubla_p0.onnx", 0.6, 0.1),
+            ("yolov3_big/model/yolov3_big_fixed_608.onnx", 365.5, 163.3),
+            ("yolov3_big/partitions/yolov3_big_neubla_p0.onnx", 0.6, 0.1),
+            ("yolov3_big/partitions/yolov3_big_neubla_p2.onnx", 7.4, 12.7),
+            ("yolov3_big/partitions/yolov3_big_neubla_p1.onnx", 83.3, 58.5),
+            ("resnet50/model/resnet50.onnx", 88.3, 10.8),
+            ("resnet50/partitions/resnet50_neubla_p0.onnx", 0.5, 0.1),
+        ]
+
+        # NPU1 데이터 (기존 유지)
+        npu1_data = [
+            ("resnet50_neubla_p1.o", *simulated_profiles["resnet50"]["NPU1"]),
+            ("yolov3_big_neubla_p1.o", *simulated_profiles["yolov3_big"]["NPU1"]),
+            ("yolov3_small_neubla_p1.o", *simulated_profiles["yolov3_small"]["NPU1"]),
+        ]
+
+        # NPU2 데이터 (기존 유지)
+        npu2_data = [
+            ("resnet50_neubla_p1.o", *simulated_profiles["resnet50"]["NPU2"]),
+            ("yolov3_big_neubla_p1.o", *simulated_profiles["yolov3_big"]["NPU2"]),
+            ("yolov3_small_neubla_p1.o", *simulated_profiles["yolov3_small"]["NPU2"]),
         ]
 
         def fill_table(table, data):
@@ -300,15 +413,175 @@ class ONNXProfiler(QMainWindow):
                 table.setItem(row, 1, QTableWidgetItem(f"{load:.1f}"))
                 table.setItem(row, 2, QTableWidgetItem(f"{inf:.1f}"))
 
-            # 헤더 정렬 재설정
             header = table.horizontalHeader()
             header.setStretchLastSection(True)
-            header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(QHeaderView.ResizeToContents)
 
-        fill_table(self.cpu_table, sample_data)
-        fill_table(self.npu1_table, sample_data)
+        fill_table(self.cpu_table, cpu_data)
+        fill_table(self.npu1_table, npu1_data)
         if self.enable_npu2_checkbox.isChecked():
-            fill_table(self.npu2_table, sample_data)
+            fill_table(self.npu2_table, npu2_data)
+
+        # Initialize total_table
+        if self.total_table:
+            self.total_table.clear()
+            self.total_table.setColumnCount(6)
+            self.total_table.setHorizontalHeaderLabels([
+                "Model",
+                "CPU Inf. (ms)",
+                "NPU1 Load (ms)",
+                "NPU1 + CPU Inf. (ms)",
+                "NPU2 Load (ms)",
+                "NPU2 + CPU Inf. (ms)"
+            ])
+            self.total_table.setRowCount(0)
+
+            header = self.total_table.horizontalHeader()
+            header.setStretchLastSection(True)
+            for i in range(6):
+                header.setSectionResizeMode(i, QHeaderView.Stretch)
+
+            # Populate total_table with data from CPU and NPU tables
+            valid_model_onnx = {}
+            cpu_infer_per_partition = {}
+
+            # Process CPU data
+            for model_path, _, infer_time in cpu_data:
+                parts = model_path.split(os.sep)
+                if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
+                    model_key = parts[0]
+                    if model_key not in valid_model_onnx:
+                        valid_model_onnx[model_key] = [0.0, 0.0]
+                    valid_model_onnx[model_key][1] = infer_time  # CPU inference time
+
+                model_key = model_path.split(os.sep)[0]
+                part_name = os.path.basename(model_path)
+                if "_p0" in part_name or "_p2" in part_name:
+                    cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
+
+            # Process NPU data
+            npu1_load = {}
+            npu1_infer = {}
+            npu2_load = {}
+            npu2_infer = {}
+
+            # Map NPU file names to model folder names
+            npu_file_to_model = {}
+            for model_name in simulated_profiles.keys():
+                npu_file_to_model[f"{model_name}_neubla_p1.o"] = model_name
+
+            for model_path, load_time, infer_time in npu1_data:
+                model_key = npu_file_to_model.get(model_path, model_path.split("_")[0])
+                npu1_load[model_key] = load_time
+                npu1_infer[model_key] = infer_time
+
+            for model_path, load_time, infer_time in npu2_data:
+                model_key = npu_file_to_model.get(model_path, model_path.split("_")[0])
+                npu2_load[model_key] = load_time
+                npu2_infer[model_key] = infer_time
+
+            # Combine all models
+            all_models = set(valid_model_onnx.keys()).union(
+                npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
+            )
+
+            # Add rows to total_table
+            for model in sorted(all_models):
+                cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
+
+                load1 = npu1_load.get(model, 0.0)
+                infer1_base = npu1_infer.get(model, 0.0)
+                extra_cpu_infer = sum(cpu_infer_per_partition.get(model, []))
+                infer1 = infer1_base + extra_cpu_infer
+
+                load2 = npu2_load.get(model, 0.0)
+                infer2_base = npu2_infer.get(model, 0.0)
+                infer2 = infer2_base + extra_cpu_infer
+
+                row = self.total_table.rowCount()
+                self.total_table.insertRow(row)
+                self.total_table.setItem(row, 0, QTableWidgetItem(model))
+                self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
+                self.total_table.setItem(row, 2, QTableWidgetItem(f"{load1:.1f}"))
+                self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))
+                self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
+                self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
+
+        # Apply highlighting
+        self.highlight_deploy_results()
+
+        # Calculate and display total values
+        if self.total_table and self.total_table.rowCount() > 0:
+            # Initialize totals
+            cpu_infer_total = 0.0
+            npu1_load_total = 0.0
+            npu1_infer_total = 0.0
+            npu2_load_total = 0.0
+            npu2_infer_total = 0.0
+
+            # Calculate totals
+            for row in range(self.total_table.rowCount()):
+                try:
+                    cpu_infer_item = self.total_table.item(row, 1)
+                    npu1_load_item = self.total_table.item(row, 2)
+                    npu1_infer_item = self.total_table.item(row, 3)
+                    npu2_load_item = self.total_table.item(row, 4)
+                    npu2_infer_item = self.total_table.item(row, 5)
+
+                    if cpu_infer_item:
+                        cpu_infer_total += float(cpu_infer_item.text())
+                    if npu1_load_item:
+                        npu1_load_total += float(npu1_load_item.text())
+                    if npu1_infer_item:
+                        npu1_infer_total += float(npu1_infer_item.text())
+                    if npu2_load_item:
+                        npu2_load_total += float(npu2_load_item.text())
+                    if npu2_infer_item:
+                        npu2_infer_total += float(npu2_infer_item.text())
+                except Exception as e:
+                    if self.log_output:
+                        self.log_output.appendPlainText(f"[Warning] Error calculating totals: {e}")
+
+            # Add total row
+            total_row = self.total_table.rowCount()
+            self.total_table.insertRow(total_row)
+
+            # Set total values with bold font
+            bold_font = QFont()
+            bold_font.setBold(True)
+
+            total_item = QTableWidgetItem("Total")
+            total_item.setFont(bold_font)
+            self.total_table.setItem(total_row, 0, total_item)
+
+            cpu_infer_total_item = QTableWidgetItem(f"{cpu_infer_total:.1f}")
+            cpu_infer_total_item.setFont(bold_font)
+            self.total_table.setItem(total_row, 1, cpu_infer_total_item)
+
+            npu1_load_total_item = QTableWidgetItem(f"{npu1_load_total:.1f}")
+            npu1_load_total_item.setFont(bold_font)
+            self.total_table.setItem(total_row, 2, npu1_load_total_item)
+
+            npu1_infer_total_item = QTableWidgetItem(f"{npu1_infer_total:.1f}")
+            npu1_infer_total_item.setFont(bold_font)
+            self.total_table.setItem(total_row, 3, npu1_infer_total_item)
+
+            npu2_load_total_item = QTableWidgetItem(f"{npu2_load_total:.1f}")
+            npu2_load_total_item.setFont(bold_font)
+            self.total_table.setItem(total_row, 4, npu2_load_total_item)
+
+            npu2_infer_total_item = QTableWidgetItem(f"{npu2_infer_total:.1f}")
+            npu2_infer_total_item.setFont(bold_font)
+            self.total_table.setItem(total_row, 5, npu2_infer_total_item)
+
+            # Set background color for the total row
+            for col in range(self.total_table.columnCount()):
+                item = self.total_table.item(total_row, col)
+                if item:
+                    item.setBackground(QBrush(QColor(230, 230, 230)))
+
+        if self.log_output:
+            self.log_output.appendPlainText("[Info] 테스트 데이터가 로드되었습니다.")
 
     # === Table Management ===
     def init_table(self, table):
@@ -522,7 +795,19 @@ class ONNXProfiler(QMainWindow):
         models = []
         times = []  # [(cpu, npu1, npu2)]
 
+        # Skip the last row if it's a "Total" row
+        total_row_index = -1
+        if self.total_table.rowCount() > 0:
+            last_row = self.total_table.rowCount() - 1
+            last_row_item = self.total_table.item(last_row, 0)
+            if last_row_item and last_row_item.text() == "Total":
+                total_row_index = last_row
+
         for row in range(self.total_table.rowCount()):
+            # Skip the total row
+            if row == total_row_index:
+                continue
+
             try:
                 model_item = self.total_table.item(row, 0)
                 cpu_infer_item = self.total_table.item(row, 1)
@@ -578,6 +863,13 @@ class ONNXProfiler(QMainWindow):
                     if item:
                         item.setBackground(brush)
 
+        # Ensure the total row maintains its background color
+        if total_row_index >= 0:
+            for col in range(self.total_table.columnCount()):
+                item = self.total_table.item(total_row_index, col)
+                if item:
+                    item.setBackground(QBrush(QColor(230, 230, 230)))
+
         # 모델별 배치 결과 저장
         self.assignment_results = [
             (model_name, device)
@@ -622,16 +914,16 @@ class ONNXProfiler(QMainWindow):
 
         return npu_files, cpu_partition_files
 
-    from PyQt6.QtGui import QColor, QBrush
-
-    from PyQt6.QtWidgets import QSplitter
+    # These imports are already included at the top of the file
+    # from PyQt5.QtGui import QColor, QBrush
+    # from PyQt5.QtWidgets import QSplitter
 
     def show_partition_assignment_dialog(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Partition Assignment Overview")
 
         # QSplitter로 상하 분할
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter = QSplitter(Qt.Vertical)
 
         # 테이블 설정
         table = QTableWidget()
@@ -704,9 +996,9 @@ class ONNXProfiler(QMainWindow):
             table.setItem(i, 2, part_item)
 
         header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
 
         # 테이블과 차트를 QSplitter로 연결
         splitter.addWidget(table)

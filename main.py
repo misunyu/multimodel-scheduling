@@ -5,9 +5,9 @@ import cv2
 import numpy as np
 import psutil
 import onnxruntime as ort
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget, QHBoxLayout, QVBoxLayout
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QHBoxLayout, QVBoxLayout
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QImage, QPixmap
 
 # 모델 및 데이터 경로 설정
 target_model = "./yolov3_neubla.onnx"
@@ -89,7 +89,7 @@ def convert_cv_qt(cv_img):
     rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
     h, w, ch = rgb_image.shape
     bytes_per_line = ch * w
-    qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+    qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
     return QPixmap.fromImage(qt_image)
 
 def get_cpu_metrics(interval=0):
@@ -125,17 +125,17 @@ class UnifiedViewer(QWidget):
 
         # -------------------- 상단 추론 정보 라벨 (YOLO + ResNet) --------------------
         self.yolo_info_label = QLabel()
-        self.yolo_info_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.yolo_info_label.setAlignment(Qt.AlignLeft)
         self.yolo_info_label.setStyleSheet("font-size: 14px; padding: 4px;")
-        self.yolo_info_label.setTextFormat(Qt.TextFormat.RichText)
+        self.yolo_info_label.setTextFormat(Qt.RichText)
 
         # -------------------- CPU / NPU 정보 라벨 --------------------
         self.cpu_info_label = QLabel()
         self.npu_info_label = QLabel()
         for label in [self.cpu_info_label, self.npu_info_label]:
-            label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            label.setAlignment(Qt.AlignLeft)
             label.setStyleSheet("font-size: 13px; padding: 4px;")
-            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setTextFormat(Qt.RichText)
             # 필요 시 고정 높이 제거 또는 줄이기
             label.setFixedHeight(100)
 
@@ -298,6 +298,4 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     viewer = UnifiedViewer()
     viewer.show()
-    sys.exit(app.exec())
-
-
+    sys.exit(app.exec_())
