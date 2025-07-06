@@ -918,100 +918,6 @@ class ONNXProfiler(QMainWindow):
     # from PyQt5.QtGui import QColor, QBrush
     # from PyQt5.QtWidgets import QSplitter
 
-    def show_partition_assignment_dialog(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Partition Assignment Overview")
-
-        # QSplitter로 상하 분할
-        splitter = QSplitter(Qt.Vertical)
-
-        # 테이블 설정
-        table = QTableWidget()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Model", "Device", "Partition"])
-
-        all_rows = []
-        root_folder = self.folder_input.text().strip()
-
-        # 색상 팔레트
-        row_colors = [
-            QColor(240, 248, 255),  # AliceBlue
-            QColor(255, 250, 205),  # LemonChiffon
-            QColor(224, 255, 255),  # LightCyan
-            QColor(255, 228, 225),  # MistyRose
-            QColor(245, 245, 220),  # Beige
-            QColor(230, 230, 250),  # Lavender
-        ]
-        color_map = {}
-        color_index = 0
-
-        for model_prefix, device in self.assignment_results:
-            if model_prefix not in color_map:
-                color_map[model_prefix] = row_colors[color_index % len(row_colors)]
-                color_index += 1
-
-            model_color = QBrush(color_map[model_prefix])
-            npu_files, cpu_files = self.find_partition_files(root_folder, model_prefix, device)
-
-            model_written = False
-
-            # 디바이스에 맞는 파일 추가
-            if device == "CPU":
-                target_files = cpu_files
-            else:
-                target_files = npu_files
-
-            if not target_files:
-                all_rows.append((model_prefix, device, "(None)", model_color))
-            else:
-                for i, f in enumerate(sorted(target_files)):
-                    model_col = model_prefix if not model_written else ""
-                    all_rows.append((model_col, device if i == 0 else "", f, model_color))
-                    model_written = True
-
-            # CPU 파티션도 별도로 추가
-            if cpu_files and device != "CPU":
-                for i, f in enumerate(sorted(cpu_files)):
-                    model_col = model_prefix if not model_written else ""
-                    all_rows.append((model_col, "CPU" if i == 0 else "", f, model_color))
-                    model_written = True
-
-        # 테이블 채우기
-        table.setRowCount(len(all_rows))
-        for i, (model, dev, part, brush) in enumerate(all_rows):
-            model_item = QTableWidgetItem(model)
-            model_item.setBackground(brush)
-            if model:
-                font = QFont()
-                font.setBold(True)
-                model_item.setFont(font)
-            table.setItem(i, 0, model_item)
-
-            dev_item = QTableWidgetItem(dev)
-            dev_item.setBackground(brush)
-            table.setItem(i, 1, dev_item)
-
-            part_item = QTableWidgetItem(part)
-            part_item.setBackground(brush)
-            table.setItem(i, 2, part_item)
-
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-
-        # 테이블과 차트를 QSplitter로 연결
-        splitter.addWidget(table)
-        splitter.addWidget(self.create_inference_bar_chart())
-        splitter.setStretchFactor(0, 4)  # 테이블이 넓게
-        splitter.setStretchFactor(1, 1)  # 차트가 좁게
-
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(splitter)
-        dialog.setLayout(layout)
-        dialog.resize(720, 600)
-        dialog.show()  # 비모달
-
     def create_inference_bar_chart(self):
         root_folder = self.folder_input.text().strip()
 
@@ -1020,8 +926,11 @@ class ONNXProfiler(QMainWindow):
         for model_prefix, device in self.assignment_results:
             npu_files, cpu_files = self.find_partition_files(root_folder, model_prefix, device)
             total_partitions += len(npu_files) + len(cpu_files)
+            # 전체 모델만 있는 경우 1개 추가
+            if device == "CPU" and not npu_files and not cpu_files:
+                total_partitions += 1
 
-        fig_height = max(3.5, 0.5 * total_partitions)  # 높이 조정
+        fig_height = max(3.5, 0.5 * total_partitions)
         fig = Figure(figsize=(6, fig_height))
         canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
@@ -1060,10 +969,19 @@ class ONNXProfiler(QMainWindow):
             npu_files, cpu_files = self.find_partition_files(root_folder, model_prefix, device)
 
             if device == "CPU":
-                for f in cpu_files:
-                    dur = get_inference_time(f, "CPU")
+                if cpu_files:
+                    for f in cpu_files:
+                        dur = get_inference_time(f, "CPU")
+                        if dur is not None:
+                            labels.append(f"{f} (CPU)")
+                            durations.append(dur)
+                else:
+                    # 전체 모델이 CPU에만 할당되어 있는 경우 처리
+                    model_file_name = f"{model_prefix}.onnx"
+                    model_file_path = os.path.join(model_prefix, "model", model_file_name)
+                    dur = get_inference_time(model_file_name, "CPU")
                     if dur is not None:
-                        labels.append(f"{f} (CPU)")
+                        labels.append(f"{model_file_name} (CPU)")
                         durations.append(dur)
             else:
                 for f in npu_files:
@@ -1077,9 +995,96 @@ class ONNXProfiler(QMainWindow):
                         labels.append(f"{f} (CPU)")
                         durations.append(dur)
 
+        # 그래프 출력
         ax.barh(labels, durations, color="skyblue")
         ax.set_xlabel("Inference Time (ms)")
         ax.invert_yaxis()
         ax.tick_params(axis='y', labelsize=9)
         fig.tight_layout()
         return canvas
+
+    def show_partition_assignment_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Partition Assignment Overview")
+
+        splitter = QSplitter(Qt.Vertical)
+
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Model", "Device", "Partition"])
+
+        all_rows = []
+        root_folder = self.folder_input.text().strip()
+
+        row_colors = [
+            QColor(240, 248, 255),
+            QColor(255, 250, 205),
+            QColor(224, 255, 255),
+            QColor(255, 228, 225),
+            QColor(245, 245, 220),
+            QColor(230, 230, 250),
+        ]
+        color_map = {}
+        color_index = 0
+
+        for model_prefix, device in self.assignment_results:
+            if model_prefix not in color_map:
+                color_map[model_prefix] = row_colors[color_index % len(row_colors)]
+                color_index += 1
+
+            model_color = QBrush(color_map[model_prefix])
+            npu_files, cpu_files = self.find_partition_files(root_folder, model_prefix, device)
+
+            model_written = False
+            if device == "CPU":
+                target_files = cpu_files
+            else:
+                target_files = npu_files
+
+            if not target_files:
+                all_rows.append((model_prefix, device, "(None)", model_color))
+            else:
+                for i, f in enumerate(sorted(target_files)):
+                    model_col = model_prefix if not model_written else ""
+                    all_rows.append((model_col, device if i == 0 else "", f, model_color))
+                    model_written = True
+
+            if cpu_files and device != "CPU":
+                for i, f in enumerate(sorted(cpu_files)):
+                    model_col = model_prefix if not model_written else ""
+                    all_rows.append((model_col, "CPU" if i == 0 else "", f, model_color))
+                    model_written = True
+
+        table.setRowCount(len(all_rows))
+        for i, (model, dev, part, brush) in enumerate(all_rows):
+            model_item = QTableWidgetItem(model)
+            model_item.setBackground(brush)
+            if model:
+                font = QFont()
+                font.setBold(True)
+                model_item.setFont(font)
+            table.setItem(i, 0, model_item)
+
+            dev_item = QTableWidgetItem(dev)
+            dev_item.setBackground(brush)
+            table.setItem(i, 1, dev_item)
+
+            part_item = QTableWidgetItem(part)
+            part_item.setBackground(brush)
+            table.setItem(i, 2, part_item)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+
+        splitter.addWidget(table)
+        splitter.addWidget(self.create_inference_bar_chart())
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(splitter)
+        dialog.setLayout(layout)
+        dialog.resize(720, 600)
+        dialog.show()
