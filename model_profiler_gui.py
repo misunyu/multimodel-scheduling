@@ -876,6 +876,7 @@ class ONNXProfiler(QMainWindow):
             for (_, model_name), device in zip(models, assignments)
         ]
 
+        # self.populate_model_frequencies([model for (_, model) in self.assignment_results])
         print("assignment_results:", self.assignment_results)
 
     def find_partition_files(self, root_folder, model_prefix, device):
@@ -1088,3 +1089,22 @@ class ONNXProfiler(QMainWindow):
         dialog.setLayout(layout)
         dialog.resize(720, 600)
         dialog.show()
+
+    def populate_model_frequencies(self, model_names: list[str]):
+        if not hasattr(self, "model_freq_table"):
+            return
+
+        self.model_freq_table.setRowCount(len(model_names))
+        self.model_freq_table.setColumnCount(2)
+        self.model_freq_table.setHorizontalHeaderLabels(["Model", "Freq"])
+
+        for row, model_name in enumerate(model_names):
+            model_item = QTableWidgetItem(model_name)
+            model_item.setFlags(Qt.ItemIsEnabled)  # 모델명은 수정 불가
+            self.model_freq_table.setItem(row, 0, model_item)
+
+            freq_item = QTableWidgetItem("1")
+            freq_item.setTextAlignment(Qt.AlignCenter)
+            self.model_freq_table.setItem(row, 1, freq_item)
+
+        self.model_freq_table.resizeColumnsToContents()
