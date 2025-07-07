@@ -31,6 +31,10 @@ class ONNXProfiler(QMainWindow):
         super().__init__()
         uic.loadUi("onnx_profiler_display.ui", self)
 
+        # Initialize profiled_times and profiled_models attributes
+        self.profiled_times = []
+        self.profiled_models = []
+
         self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
         self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")
         self.npu2_tab = self.findChild(QWidget, "npu2_tab")
@@ -104,7 +108,10 @@ class ONNXProfiler(QMainWindow):
         self.folder_input.setText(default_folder)
         self.browse_button.clicked.connect(self.browse_folder)
         self.profile_button.clicked.connect(self.run_profiling)
-        self.generate_button.clicked.connect(self.highlight_deploy_results)
+
+        # self.generate_button.clicked.connect(self.highlight_deploy_results)
+        self.generate_button.clicked.connect(
+            lambda: self.highlight_deploy_results(self.profiled_times, self.profiled_models))
 
         self.set_tree_root(default_folder)
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
@@ -123,6 +130,41 @@ class ONNXProfiler(QMainWindow):
         self.load_sample_button = self.findChild(QPushButton, "load_sample_button")
         if self.load_sample_button:
             self.load_sample_button.clicked.connect(self.load_sample_data)
+
+        self.model_freq_table.horizontalHeader().setStretchLastSection(True)
+        self.populate_model_frequencies(["resnet50", "yolov3_small", "yolov3_big"])
+
+    def populate_model_frequencies(self, model_names: list[str]):
+        if not hasattr(self, "model_freq_table"):
+            return
+
+        self.model_freq_table.setRowCount(len(model_names))
+        self.model_freq_table.setColumnCount(2)
+        self.model_freq_table.setHorizontalHeaderLabels(["Model", "Freq"])
+
+        # 모델별 기본 frequency 설정
+        default_freqs = {
+            "resnet50": "1",
+            "yolov3_small": "60",
+            "yolov3_big": "40"
+        }
+
+        for row, model_name in enumerate(model_names):
+            # 모델명만 추출 (디렉토리나 확장자 제거)
+            base_name = model_name.split(os.sep)[0]  # 'resnet50', 'yolov3_small' 등
+
+            # 모델명 셀
+            model_item = QTableWidgetItem(model_name)
+            model_item.setFlags(Qt.ItemIsEnabled)
+            self.model_freq_table.setItem(row, 0, model_item)
+
+            # frequency 셀
+            freq_value = default_freqs.get(base_name, "1")
+            freq_item = QTableWidgetItem(freq_value)
+            freq_item.setTextAlignment(Qt.AlignCenter)
+            self.model_freq_table.setItem(row, 1, freq_item)
+
+        self.model_freq_table.resizeColumnsToContents()
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
@@ -267,6 +309,10 @@ class ONNXProfiler(QMainWindow):
                 npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
             )
 
+            # Prepare profiled_times and profiled_models for highlight_deploy_results
+            self.profiled_times = []
+            self.profiled_models = []
+
             for model in sorted(all_models):
                 cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
 
@@ -287,6 +333,10 @@ class ONNXProfiler(QMainWindow):
                 self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))  # ✅ 수정
                 self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
                 self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
+
+                # Store profiling data for highlight_deploy_results
+                self.profiled_times.append((cpu_infer, infer1, infer2))
+                self.profiled_models.append((row, model))
 
             # Calculate and display total values
             if self.total_table and self.total_table.rowCount() > 0:
@@ -377,11 +427,11 @@ class ONNXProfiler(QMainWindow):
 
         # ✅ CPU 테이블: 스크린샷과 동일한 경로 및 값 사용 (.onnx 경로 포함)
         cpu_data = [
-            ("yolov3_small/model/yolov3_small_fixed_608.onnx", 462.4, 163.4),
+            ("yolov3_small/model/yolov3_small.onnx", 462.4, 163.4),
             ("yolov3_small/partitions/yolov3_small_neubla_p2.onnx", 6.9, 12.9),
             ("yolov3_small/partitions/yolov3_small_neubla_p1.onnx", 83.5, 58.8),
             ("yolov3_small/partitions/yolov3_small_neubla_p0.onnx", 0.6, 0.1),
-            ("yolov3_big/model/yolov3_big_fixed_608.onnx", 365.5, 163.3),
+            ("yolov3_big/model/yolov3_big.onnx", 365.5, 163.3),
             ("yolov3_big/partitions/yolov3_big_neubla_p0.onnx", 0.6, 0.1),
             ("yolov3_big/partitions/yolov3_big_neubla_p2.onnx", 7.4, 12.7),
             ("yolov3_big/partitions/yolov3_big_neubla_p1.onnx", 83.3, 58.5),
@@ -485,6 +535,10 @@ class ONNXProfiler(QMainWindow):
                 npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
             )
 
+            # Prepare profiled_times and profiled_models for highlight_deploy_results
+            self.profiled_times = []
+            self.profiled_models = []
+
             # Add rows to total_table
             for model in sorted(all_models):
                 cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
@@ -507,8 +561,12 @@ class ONNXProfiler(QMainWindow):
                 self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
                 self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
 
+                # Store profiling data for highlight_deploy_results
+                self.profiled_times.append((cpu_infer, infer1, infer2))
+                self.profiled_models.append((row, model))
+
         # Apply highlighting
-        self.highlight_deploy_results()
+        self.highlight_deploy_results(self.profiled_times, self.profiled_models)
 
         # Calculate and display total values
         if self.total_table and self.total_table.rowCount() > 0:
@@ -788,96 +846,74 @@ class ONNXProfiler(QMainWindow):
             return True
 
     # === Analysis and UI Update ===
-    def highlight_deploy_results(self):
-        if not self.total_table:
+    def highlight_deploy_results(self, times, models):
+        self.assignment_results = []
+
+        # Check if times or models is empty
+        if not times or not models:
+            if self.log_output:
+                self.log_output.appendPlainText("[Warning] No profiling data available for deployment.")
             return
 
-        models = []
-        times = []  # [(cpu, npu1, npu2)]
-
-        # Skip the last row if it's a "Total" row
-        total_row_index = -1
-        if self.total_table.rowCount() > 0:
-            last_row = self.total_table.rowCount() - 1
-            last_row_item = self.total_table.item(last_row, 0)
-            if last_row_item and last_row_item.text() == "Total":
-                total_row_index = last_row
-
-        for row in range(self.total_table.rowCount()):
-            # Skip the total row
-            if row == total_row_index:
-                continue
-
-            try:
-                model_item = self.total_table.item(row, 0)
-                cpu_infer_item = self.total_table.item(row, 1)
-                npu1_infer_item = self.total_table.item(row, 3)
-                npu2_infer_item = self.total_table.item(row, 5)
-
-                if not model_item or not cpu_infer_item or not npu1_infer_item:
-                    continue
-
-                model = model_item.text()
-                cpu_infer = float(cpu_infer_item.text())
-                npu1_infer = float(npu1_infer_item.text())
-
-                # NPU2 체크 여부 확인
-                if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked() and npu2_infer_item:
-                    npu2_infer = float(npu2_infer_item.text())
-                else:
-                    npu2_infer = float('inf')  # 배치에서 제외
-
-                models.append((row, model))
-                times.append((cpu_infer, npu1_infer, npu2_infer))
-
-            except Exception as e:
-                if self.log_output:
-                    self.log_output.appendPlainText(f"[Warning] Skipping row {row}: {e}")
-
-        load = {"CPU": 0.0, "NPU1": 0.0, "NPU2": 0.0}
+        load = {"CPU": 0, "NPU1": 0, "NPU2": 0}
         assignments = []
 
         for idx, (cpu_t, npu1_t, npu2_t) in enumerate(times):
+            model_name = models[idx][1]  # (row_index, model_name)
+
+            # 1. Get frequency value for the model
+            freq = 1
+            if hasattr(self, "model_freq_table"):
+                for row in range(self.model_freq_table.rowCount()):
+                    name_item = self.model_freq_table.item(row, 0)
+                    freq_item = self.model_freq_table.item(row, 1)
+                    if name_item and name_item.text() == model_name and freq_item:
+                        try:
+                            freq = int(freq_item.text())
+                        except ValueError:
+                            freq = 1
+                        break
+
+            # 2. Determine which devices are available
             device_candidates = ["CPU", "NPU1"]
             if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
                 device_candidates.append("NPU2")
 
+            # 3. Choose the device that results in the lowest total load (considering frequency)
             best_device = min(
                 device_candidates,
-                key=lambda d: load[d] + (cpu_t if d == "CPU" else npu1_t if d == "NPU1" else npu2_t)
+                key=lambda d: load[d] + freq * (
+                    cpu_t if d == "CPU" else npu1_t if d == "NPU1" else npu2_t
+                )
             )
-            assignments.append(best_device)
-            load[best_device] += cpu_t if best_device == "CPU" else npu1_t if best_device == "NPU1" else npu2_t
 
-        brush_map = {
-            "CPU": QBrush(QColor(200, 230, 255)),
-            "NPU1": QBrush(QColor(255, 255, 204)),
-            "NPU2": QBrush(QColor(255, 214, 153)),
-        }
+            assignments.append((model_name, best_device))
+            load[best_device] += freq * (
+                cpu_t if best_device == "CPU" else npu1_t if best_device == "NPU1" else npu2_t
+            )
 
-        for i, (row_idx, _) in enumerate(models):
-            brush = brush_map.get(assignments[i])
-            if brush:
+        self.assignment_results = assignments
+
+        # Update the display with the assignment results
+        if hasattr(self, 'total_table') and self.total_table:
+            for row in range(self.total_table.rowCount()):
+                if row >= len(assignments):
+                    break
+
+                _, device = assignments[row]
                 for col in range(self.total_table.columnCount()):
-                    item = self.total_table.item(row_idx, col)
+                    item = self.total_table.item(row, col)
                     if item:
-                        item.setBackground(brush)
+                        # Clear any existing background
+                        item.setBackground(QBrush())
 
-        # Ensure the total row maintains its background color
-        if total_row_index >= 0:
-            for col in range(self.total_table.columnCount()):
-                item = self.total_table.item(total_row_index, col)
-                if item:
-                    item.setBackground(QBrush(QColor(230, 230, 230)))
-
-        # 모델별 배치 결과 저장
-        self.assignment_results = [
-            (model_name, device)
-            for (_, model_name), device in zip(models, assignments)
-        ]
-
-        # self.populate_model_frequencies([model for (_, model) in self.assignment_results])
-        print("assignment_results:", self.assignment_results)
+                        # Set background based on device
+                        if device == "CPU":
+                            item.setBackground(QBrush(QColor(204, 230, 255)))  # Light blue for CPU
+                        elif device == "NPU1":
+                            item.setBackground(QBrush(QColor(255, 255, 204)))  # Light yellow for NPU1
+                        elif device == "NPU2":
+                            item.setBackground(QBrush(QColor(255, 214, 153)))  # Light orange for NPU2
 
     def find_partition_files(self, root_folder, model_prefix, device):
         npu_files = []
@@ -1089,22 +1125,3 @@ class ONNXProfiler(QMainWindow):
         dialog.setLayout(layout)
         dialog.resize(720, 600)
         dialog.show()
-
-    def populate_model_frequencies(self, model_names: list[str]):
-        if not hasattr(self, "model_freq_table"):
-            return
-
-        self.model_freq_table.setRowCount(len(model_names))
-        self.model_freq_table.setColumnCount(2)
-        self.model_freq_table.setHorizontalHeaderLabels(["Model", "Freq"])
-
-        for row, model_name in enumerate(model_names):
-            model_item = QTableWidgetItem(model_name)
-            model_item.setFlags(Qt.ItemIsEnabled)  # 모델명은 수정 불가
-            self.model_freq_table.setItem(row, 0, model_item)
-
-            freq_item = QTableWidgetItem("1")
-            freq_item.setTextAlignment(Qt.AlignCenter)
-            self.model_freq_table.setItem(row, 1, freq_item)
-
-        self.model_freq_table.resizeColumnsToContents()
