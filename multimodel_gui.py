@@ -18,7 +18,7 @@ from datetime import datetime
 
 LOG_DIR = "./logs"
 MAX_LOG_ENTRIES = 500
-log = 1  # 로그 기록 여부 제어
+log = 0  # 로그 기록 여부 제어
 
 input_width = input_height = 608
 
