@@ -225,7 +225,7 @@ class UnifiedViewer(QMainWindow):
         self.yolo_avg_infer_time = self.yolo_total_infer_time / self.yolo_infer_count
         self.yolo_avg_fps = 1000.0 / self.yolo_avg_infer_time if self.yolo_avg_infer_time > 0 else 0.0
 
-        async_log("yolov3", current_infer_time, self.yolo_avg_fps)
+        async_log("yolov3_big", current_infer_time, self.yolo_avg_fps)
 
         # 이전 프레임 처리가 끝났으므로 다음 프레임 즉시 처리
         QTimer.singleShot(0, self.update_yolo)
