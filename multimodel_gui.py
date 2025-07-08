@@ -109,7 +109,7 @@ class UnifiedViewer(QMainWindow):
         self.cpu_info_label = self.findChild(QLabel, "cpu_info_label")
         self.npu_info_label = self.findChild(QLabel, "npu_info_label")
 
-        self.yolo_session = ort.InferenceSession("models/yolov3_big/model/yolov3_neubla.onnx")
+        self.yolo_session = ort.InferenceSession("models/yolov3_big/model/yolov3_big.onnx")
         self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
         self.cap = cv2.VideoCapture("./stockholm_1280x720.mp4")
         self.resnet_images = [os.path.join("./imagenet-sample-images", f)
