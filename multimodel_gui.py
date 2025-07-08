@@ -53,30 +53,39 @@ def draw_detections(img, box, score, class_id):
     cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
     cv2.putText(img, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-def postprocessing(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
-    output_box = np.squeeze(output[0])
-    output_label = np.squeeze(output[1])
-    rows = output_box.shape[0]
+def postprocessing_cpu(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
+    output_data = np.squeeze(output[0])  # shape: (22743, 85)
+
     boxes, scores, class_ids = [], [], []
     x_factor = img_width / input_width
     y_factor = img_height / input_height
-    for i in range(rows):
-        conf = output_box[i][4]
-        if conf >= confidence_thres:
-            left, top, right, bottom = output_box[i][:4]
-            width = int((right - left) * x_factor)
-            height = int((bottom - top) * y_factor)
-            left = int(left * x_factor)
-            top = int(top * y_factor)
-            boxes.append([left, top, width, height])
-            scores.append(conf)
-            class_ids.append(int(output_label[i]))
+
+    for row in output_data:
+        object_conf = row[4]
+        class_probs = row[5:]
+        class_id = int(np.argmax(class_probs))
+        class_conf = class_probs[class_id]
+        score = object_conf * class_conf
+
+        if score >= confidence_thres:
+            cx, cy, w, h = row[0:4]
+            x1 = int((cx - w / 2) * x_factor)
+            y1 = int((cy - h / 2) * y_factor)
+            w = int(w * x_factor)
+            h = int(h * y_factor)
+
+            boxes.append([x1, y1, w, h])
+            scores.append(float(score))
+            class_ids.append(class_id)
+
     indices = cv2.dnn.NMSBoxes(boxes, scores, confidence_thres, iou_thres)
-    if indices is not None:
+    if indices is not None and len(indices) > 0:
         for idx in indices:
             i = int(idx) if isinstance(idx, (int, np.integer)) else int(idx[0])
             draw_detections(original_img, boxes[i], scores[i], class_ids[i])
+
     return original_img
+
 
 def convert_cv_qt(cv_img):
     rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
@@ -149,14 +158,21 @@ class UnifiedViewer(QMainWindow):
 
         input_tensor, (w, h) = preprocess_yolo(frame)
         infer_start = time.time()
+
+        # print("YOLO outputs:", [o.name for o in self.yolo_session.get_outputs()])
+
         try:
-            output = self.yolo_session.run(None, {"input": input_tensor})
+            output = self.yolo_session.run(None, {"images": input_tensor})
+
+            # print("YOLO output shape:", output[0].shape)
+            # print("Sample row:", output[0][0])
+
         except Exception as e:
             print(f"[YOLO ERROR] {e}")
             return
         infer_end = time.time()
 
-        result = postprocessing(output, frame, w, h)
+        result = postprocessing_cpu(output, frame, w, h)
         self.yolo_label.setPixmap(convert_cv_qt(result))
 
         current_infer_time = (infer_end - infer_start) * 1000.0
