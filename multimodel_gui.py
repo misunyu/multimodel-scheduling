@@ -6,15 +6,17 @@ import numpy as np
 import psutil
 import onnxruntime as ort
 from PyQt5.QtWidgets import QMainWindow, QLabel
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5 import uic
 import queue
 import threading
-
 import json
-import threading
 from datetime import datetime
+
+# UI 업데이트를 위한 시그널 클래스
+class YoloSignals(QObject):
+    update_yolo_display = pyqtSignal(QPixmap)
 
 LOG_DIR = "./logs"
 MAX_LOG_ENTRIES = 500
@@ -54,9 +56,20 @@ def async_log(model_name, infer_time_ms, avg_fps):
         }
         log_file = os.path.join(LOG_DIR, f"{model_name}_log.json")
 
-        # 기존 로그 읽기 (line-by-line 방식)
-        logs = []
+        # Check if we need to trim the log file
+        need_trim = False
+        line_count = 0
+
         if os.path.exists(log_file):
+            with open(log_file, "r") as f:
+                for _ in f:
+                    line_count += 1
+
+            need_trim = line_count >= MAX_LOG_ENTRIES
+
+        if need_trim:
+            # If we need to trim, read all entries, add new one, and rewrite
+            logs = []
             with open(log_file, "r") as f:
                 for line in f:
                     try:
@@ -64,17 +77,17 @@ def async_log(model_name, infer_time_ms, avg_fps):
                     except json.JSONDecodeError:
                         continue
 
-        # 새로운 항목 추가
-        logs.append(log_data)
+            logs.append(log_data)
+            logs = logs[-MAX_LOG_ENTRIES:]  # Keep only the latest entries
 
-        # 최대 항목 수 제한
-        if len(logs) > MAX_LOG_ENTRIES:
-            logs = logs[-MAX_LOG_ENTRIES:]
-
-        # 다시 기록
-        with open(log_file, "w") as f:
-            for entry in logs:
-                json.dump(entry, f)
+            with open(log_file, "w") as f:
+                for entry in logs:
+                    json.dump(entry, f)
+                    f.write("\n")
+        else:
+            # Otherwise, just append the new entry
+            with open(log_file, "a+") as f:
+                json.dump(log_data, f)
                 f.write("\n")
 
     threading.Thread(target=write_log).start()
@@ -168,6 +181,10 @@ class UnifiedViewer(QMainWindow):
         self.cpu_info_label = self.findChild(QLabel, "cpu_info_label")
         self.npu_info_label = self.findChild(QLabel, "npu_info_label")
 
+        # UI 업데이트를 위한 시그널 설정
+        self.yolo_signals = YoloSignals()
+        self.yolo_signals.update_yolo_display.connect(self.update_yolo_display)
+
         # ONNX 세션 초기화
         self.yolo_session = ort.InferenceSession("models/yolov3_big/model/yolov3_big.onnx")
         self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
@@ -195,10 +212,12 @@ class UnifiedViewer(QMainWindow):
 
         # YOLO 처리용 큐 및 스레드 초기화
         self.yolo_frame_queue = queue.Queue(maxsize=5)
+        self.yolo_result_queue = queue.Queue(maxsize=5)  # 처리된 결과를 저장할 큐
         self.yolo_stop_flag = threading.Event()
 
         threading.Thread(target=self.capture_yolo_frames, daemon=True).start()
         threading.Thread(target=self.process_yolo_frames, daemon=True).start()
+        threading.Thread(target=self.display_yolo_frames, daemon=True).start()
 
         # ResNet 순차 실행 시작
         QTimer.singleShot(0, self.update_resnet)
@@ -207,6 +226,22 @@ class UnifiedViewer(QMainWindow):
         self.cpu_timer = QTimer()
         self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
         self.cpu_timer.start(1000)
+
+    def update_stats(self, model_name, current_infer_time):
+        """Helper method to update inference statistics and log them"""
+        if model_name == "yolov3_big":
+            self.yolo_total_infer_time += current_infer_time
+            self.yolo_infer_count += 1
+            self.yolo_avg_infer_time = self.yolo_total_infer_time / self.yolo_infer_count
+            self.yolo_avg_fps = 1000.0 / self.yolo_avg_infer_time if self.yolo_avg_infer_time > 0 else 0.0
+        elif model_name == "resnet50":
+            self.resnet_total_infer_time += current_infer_time
+            self.resnet_infer_count += 1
+            self.resnet_avg_infer_time = self.resnet_total_infer_time / self.resnet_infer_count
+            self.resnet_avg_fps = 1000.0 / self.resnet_avg_infer_time if self.resnet_avg_infer_time > 0 else 0.0
+
+        async_log(model_name, current_infer_time, 
+                  self.yolo_avg_fps if model_name == "yolov3_big" else self.resnet_avg_fps)
 
 
     def capture_yolo_frames(self):
@@ -235,49 +270,31 @@ class UnifiedViewer(QMainWindow):
 
             infer_end = time.time()
             result = postprocessing_cpu(output, frame, w, h)
-            pixmap = convert_cv_qt(result)
 
-            # UI 스레드에서 안전하게 갱신
-            self.yolo_label.setPixmap(pixmap)
-
+            # 처리된 결과와 시간 정보를 큐에 저장
             current_infer_time = (infer_end - infer_start) * 1000.0
-            self.yolo_total_infer_time += current_infer_time
-            self.yolo_infer_count += 1
-            self.yolo_avg_infer_time = self.yolo_total_infer_time / self.yolo_infer_count
-            self.yolo_avg_fps = 1000.0 / self.yolo_avg_infer_time if self.yolo_avg_infer_time > 0 else 0.0
+            if not self.yolo_result_queue.full():
+                self.yolo_result_queue.put((result, current_infer_time))
 
-            async_log("yolov3_big", current_infer_time, self.yolo_avg_fps)
+            # 통계 업데이트
+            self.update_stats("yolov3_big", current_infer_time)
+
+    def display_yolo_frames(self):
+        while not self.yolo_stop_flag.is_set():
+            try:
+                result, _ = self.yolo_result_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+
+            # 결과를 QPixmap으로 변환하여 시그널 발생
+            pixmap = convert_cv_qt(result)
+            self.yolo_signals.update_yolo_display.emit(pixmap)
+
+    def update_yolo_display(self, pixmap):
+        """UI 스레드에서 안전하게 YOLO 결과를 화면에 표시"""
+        self.yolo_label.setPixmap(pixmap)
 
 
-    def update_yolo(self):
-        success, frame = self.cap.read()
-        if not success:
-            self.yolo_label.setText("YOLO: No video")
-            return
-
-        input_tensor, (w, h) = preprocess_yolo(frame)
-        infer_start = time.time()
-
-        try:
-            output = self.yolo_session.run(None, {"images": input_tensor})
-        except Exception as e:
-            print(f"[YOLO ERROR] {e}")
-            return
-
-        infer_end = time.time()
-        result = postprocessing_cpu(output, frame, w, h)
-        self.yolo_label.setPixmap(convert_cv_qt(result))
-
-        current_infer_time = (infer_end - infer_start) * 1000.0
-        self.yolo_total_infer_time += current_infer_time
-        self.yolo_infer_count += 1
-        self.yolo_avg_infer_time = self.yolo_total_infer_time / self.yolo_infer_count
-        self.yolo_avg_fps = 1000.0 / self.yolo_avg_infer_time if self.yolo_avg_infer_time > 0 else 0.0
-
-        async_log("yolov3_big", current_infer_time, self.yolo_avg_fps)
-
-        # 이전 프레임 처리가 끝났으므로 다음 프레임 즉시 처리
-        QTimer.singleShot(0, self.update_yolo)
 
     def update_resnet(self):
         if not self.resnet_images:
@@ -310,12 +327,7 @@ class UnifiedViewer(QMainWindow):
         self.resnet_label.setPixmap(convert_cv_qt(img))
 
         current_infer_time = (infer_end - infer_start) * 1000.0
-        self.resnet_total_infer_time += current_infer_time
-        self.resnet_infer_count += 1
-        self.resnet_avg_infer_time = self.resnet_total_infer_time / self.resnet_infer_count
-        self.resnet_avg_fps = 1000.0 / self.resnet_avg_infer_time if self.resnet_avg_infer_time > 0 else 0.0
-
-        async_log("resnet50", current_infer_time, self.resnet_avg_fps)
+        self.update_stats("resnet50", current_infer_time)
 
         # 다음 이미지 바로 처리
         QTimer.singleShot(0, self.update_resnet)
