@@ -5,6 +5,7 @@ import onnx
 import onnxruntime as ort
 import json
 from collections import defaultdict
+from typing import List
 
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, QTimer
@@ -140,7 +141,7 @@ class ONNXProfiler(QMainWindow):
         self.model_freq_table.horizontalHeader().setStretchLastSection(True)
         self.populate_model_frequencies(["resnet50", "yolov3_small", "yolov3_big"])
 
-    def populate_model_frequencies(self, model_names: list[str]):
+    def populate_model_frequencies(self, model_names: List[str]):
         if not hasattr(self, "model_freq_table"):
             return
 
