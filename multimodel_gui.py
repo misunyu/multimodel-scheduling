@@ -13,7 +13,7 @@ import queue
 import threading
 import json
 from datetime import datetime
-from NeublaDriver import NeublaDriver
+# from NeublaDriver import NeublaDriver
 
 
 class ModelSignals(QObject):
@@ -190,6 +190,11 @@ class UnifiedViewer(QMainWindow):
         self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
         self.view2_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")  # view2 용
 
+
+        self.driver1 = None
+        self.driver2 = None
+
+
         self.cap = cv2.VideoCapture("./stockholm_1280x720.mp4")
         self.resnet_images = [os.path.join("./imagenet-sample-images", f)
                               for f in os.listdir("./imagenet-sample-images")
@@ -290,7 +295,7 @@ class UnifiedViewer(QMainWindow):
             except queue.Empty:
                 continue
             input_tensor, (w, h) = preprocess_yolo(frame)
-            
+
             # infer_start = time.time()
             # try:
             #     output = self.yolo_session.run(None, {"images": input_tensor})
@@ -440,20 +445,20 @@ class UnifiedViewer(QMainWindow):
 
         self.prev_cpu_stats = current
 
-        def load_yolo_npu(self, npu_num, o_path):
+        def init_neubla_driver(self):
+            self.driver1 = NeublaDriver()
+            self.driver2 = NeublaDriver()
+            assert self.driver1.Init(0) == 0
+            assert self.driver2.Init(1) == 0
 
+        def load_yolo_npu(driver, o_path):
             try:
-                driver = NeublaDriver()
-                assert driver.Init(npu_num) == 0
                 assert driver.LoadModel(o_path) == 0
-
             except Exception as e:
                 try:
-                    driver.Close()
+                    self.driver1.Close()
                 except:
                     pass
-                print(f"[Error] NPU{npu_num}: {e}")
-                exit()
 
 
         def process_yolo_npu(self, driver, input_data):
@@ -489,35 +494,35 @@ class UnifiedViewer(QMainWindow):
                 driver.Close()
             except:
                 pass
-
-        def process_resnet50_npu(self, npu_num, o_path):
-            try:
-                driver = NeublaDriver()
-                assert driver.Init(npu_num) == 0
-
-                start_load = time.time()
-                assert driver.LoadModel(o_path) == 0
-                end_load = time.time()
-                load_time_ms = (end_load - start_load) * 1000.0
-
-                random_input = np.random.rand(3, 224, 224).astype(np.uint8)
-                input_data = random_input.tobytes()
-
-                start_infer = time.time()
-                assert driver.SendInput(input_data, 3 * 224 * 224) == 0
-                assert driver.Launch() == 0
-                raw_outputs = driver.ReceiveOutputs()
-                end_infer = time.time()
-                infer_time_ms = (end_infer - start_infer) * 1000.0
-
-                assert driver.Close() == 0
-
-            except Exception as e:
-                try:
-                    driver.Close()
-                except:
-                    pass
-                print(f"[Error] NPU{npu_num}: {e}")
-                exit()
-
-            return load_time_ms, infer_time_ms
+        #
+        # def process_resnet50_npu(self, npu_num, o_path):
+        #     try:
+        #         driver = NeublaDriver()
+        #         assert driver.Init(npu_num) == 0
+        #
+        #         start_load = time.time()
+        #         assert driver.LoadModel(o_path) == 0
+        #         end_load = time.time()
+        #         load_time_ms = (end_load - start_load) * 1000.0
+        #
+        #         random_input = np.random.rand(3, 224, 224).astype(np.uint8)
+        #         input_data = random_input.tobytes()
+        #
+        #         start_infer = time.time()
+        #         assert driver.SendInput(input_data, 3 * 224 * 224) == 0
+        #         assert driver.Launch() == 0
+        #         raw_outputs = driver.ReceiveOutputs()
+        #         end_infer = time.time()
+        #         infer_time_ms = (end_infer - start_infer) * 1000.0
+        #
+        #         assert driver.Close() == 0
+        #
+        #     except Exception as e:
+        #         try:
+        #             driver.Close()
+        #         except:
+        #             pass
+        #         print(f"[Error] NPU{npu_num}: {e}")
+        #         exit()
+        #
+        #     return load_time_ms, infer_time_ms
