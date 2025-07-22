@@ -6,6 +6,7 @@ import onnxruntime as ort
 import json
 from collections import defaultdict
 from typing import List
+import yaml
 
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, QTimer
@@ -927,6 +928,38 @@ class ONNXProfiler(QMainWindow):
                         elif device == "NPU2":
                             item.setBackground(QBrush(QColor(255, 214, 153)))  # Light orange for NPU2
 
+        self.save_schedule_to_yaml("mpopt_sched.yaml")
+
+    def save_schedule_to_yaml(self, filename="mpopt_sched.yaml"):
+        """Save scheduling result with partition lists to a YAML file."""
+        if not self.assignment_results:
+            if self.log_output:
+                self.log_output.appendPlainText("[Warning] No assignment results to save.\n")
+            return
+
+        root_folder = self.folder_input.text().strip()
+        yaml_data = {}
+
+        try:
+            for model_prefix, device in self.assignment_results:
+                npu_files, cpu_files = self.find_partition_files(root_folder, model_prefix, device)
+
+                yaml_data[model_prefix] = {
+                    "device": device,
+                    "npu_partitions": sorted(npu_files),
+                    "cpu_partitions": sorted(cpu_files)
+                }
+
+            with open(filename, "w") as f:
+                yaml.dump(yaml_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+            if self.log_output:
+                self.log_output.appendPlainText(f"[Info] Scheduling result saved to {filename}\n")
+
+        except Exception as e:
+            if self.log_output:
+                self.log_output.appendPlainText(f"[Error] Failed to save {filename}: {e}\n")
+
     def find_partition_files(self, root_folder, model_prefix, device):
         npu_files = []
         cpu_partition_files = []
@@ -1178,5 +1211,3 @@ class ONNXProfiler(QMainWindow):
                 updated_count += 1
 
         print(f"[Info] Frequency 업데이트 완료: {updated_count}개 모델")
-
-
