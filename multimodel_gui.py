@@ -14,9 +14,11 @@ import threading
 import json
 from datetime import datetime
 
-# UI 업데이트를 위한 시그널 클래스
-class YoloSignals(QObject):
+class ModelSignals(QObject):
     update_yolo_display = pyqtSignal(QPixmap)
+    update_view1_display = pyqtSignal(QPixmap)
+    update_view2_display = pyqtSignal(QPixmap)  # ✅ view2용 시그널 명확히 추가
+
 
 LOG_DIR = "./logs"
 MAX_LOG_ENTRIES = 500
@@ -56,7 +58,6 @@ def async_log(model_name, infer_time_ms, avg_fps):
         }
         log_file = os.path.join(LOG_DIR, f"{model_name}_log.json")
 
-        # Check if we need to trim the log file
         need_trim = False
         line_count = 0
 
@@ -64,11 +65,9 @@ def async_log(model_name, infer_time_ms, avg_fps):
             with open(log_file, "r") as f:
                 for _ in f:
                     line_count += 1
-
             need_trim = line_count >= MAX_LOG_ENTRIES
 
         if need_trim:
-            # If we need to trim, read all entries, add new one, and rewrite
             logs = []
             with open(log_file, "r") as f:
                 for line in f:
@@ -76,22 +75,18 @@ def async_log(model_name, infer_time_ms, avg_fps):
                         logs.append(json.loads(line))
                     except json.JSONDecodeError:
                         continue
-
             logs.append(log_data)
-            logs = logs[-MAX_LOG_ENTRIES:]  # Keep only the latest entries
-
+            logs = logs[-MAX_LOG_ENTRIES:]
             with open(log_file, "w") as f:
                 for entry in logs:
                     json.dump(entry, f)
                     f.write("\n")
         else:
-            # Otherwise, just append the new entry
             with open(log_file, "a+") as f:
                 json.dump(log_data, f)
                 f.write("\n")
 
     threading.Thread(target=write_log).start()
-
 
 def preprocess_yolo(raw_input_img):
     img = cv2.cvtColor(raw_input_img, cv2.COLOR_BGR2RGB)
@@ -117,45 +112,44 @@ def draw_detections(img, box, score, class_id):
     cv2.putText(img, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
 def postprocessing_cpu(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
-    output_data = np.squeeze(output[0])  # shape: (22743, 85)
-
+    output_data = np.squeeze(output[0])
     boxes, scores, class_ids = [], [], []
     x_factor = img_width / input_width
     y_factor = img_height / input_height
-
     for row in output_data:
         object_conf = row[4]
         class_probs = row[5:]
         class_id = int(np.argmax(class_probs))
         class_conf = class_probs[class_id]
         score = object_conf * class_conf
-
         if score >= confidence_thres:
             cx, cy, w, h = row[0:4]
             x1 = int((cx - w / 2) * x_factor)
             y1 = int((cy - h / 2) * y_factor)
             w = int(w * x_factor)
             h = int(h * y_factor)
-
             boxes.append([x1, y1, w, h])
             scores.append(float(score))
             class_ids.append(class_id)
-
     indices = cv2.dnn.NMSBoxes(boxes, scores, confidence_thres, iou_thres)
     if indices is not None and len(indices) > 0:
         for idx in indices:
             i = int(idx) if isinstance(idx, (int, np.integer)) else int(idx[0])
             draw_detections(original_img, boxes[i], scores[i], class_ids[i])
-
     return original_img
 
-
 def convert_cv_qt(cv_img):
-    rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-    h, w, ch = rgb_image.shape
-    bytes_per_line = ch * w
-    qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-    return QPixmap.fromImage(qt_image)
+    if cv_img is None or cv_img.size == 0:
+        return QPixmap()
+    try:
+        rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_image.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        return QPixmap.fromImage(qt_image)
+    except Exception as e:
+        print(f"[convert_cv_qt ERROR] {e}")
+        return QPixmap()
 
 def get_cpu_metrics(interval=0):
     cpu_percent = psutil.cpu_percent(interval=interval)
@@ -177,26 +171,30 @@ class UnifiedViewer(QMainWindow):
 
         self.yolo_label = self.findChild(QLabel, "yolo_label")
         self.resnet_label = self.findChild(QLabel, "resnet_label")
+        self.view1 = self.findChild(QLabel, "view1")
+        self.view2 = self.findChild(QLabel, "view2")
         self.yolo_info_label = self.findChild(QLabel, "yolo_info_label")
         self.cpu_info_label = self.findChild(QLabel, "cpu_info_label")
         self.npu_info_label = self.findChild(QLabel, "npu_info_label")
 
-        # UI 업데이트를 위한 시그널 설정
-        self.yolo_signals = YoloSignals()
-        self.yolo_signals.update_yolo_display.connect(self.update_yolo_display)
+        self.model_signals = ModelSignals()
+        self.model_signals.update_yolo_display.connect(self.update_yolo_display)
+        self.model_signals.update_view1_display.connect(self.update_view1_display)
+        # self.model_signals.update_view2_display = pyqtSignal(QPixmap)  # 시그널 동적 생성
+        self.model_signals.update_view2_display.connect(self.update_view2_display)
 
-        # ONNX 세션 초기화
         self.yolo_session = ort.InferenceSession("models/yolov3_big/model/yolov3_big.onnx")
+        self.view1_session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
         self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+        self.view2_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")  # view2 용
 
-        # 비디오 및 이미지 입력
         self.cap = cv2.VideoCapture("./stockholm_1280x720.mp4")
         self.resnet_images = [os.path.join("./imagenet-sample-images", f)
                               for f in os.listdir("./imagenet-sample-images")
                               if f.lower().endswith(('jpg', 'jpeg', 'png'))]
         self.resnet_index = 0
+        self.view2_index = 0
 
-        # FPS/지연시간 통계 변수 초기화
         self.yolo_total_infer_time = 0.0
         self.yolo_infer_count = 0
         self.yolo_avg_infer_time = 0.0
@@ -207,28 +205,47 @@ class UnifiedViewer(QMainWindow):
         self.resnet_avg_infer_time = 0.0
         self.resnet_avg_fps = 0.0
 
-        # CPU 정보
         self.prev_cpu_stats = get_cpu_metrics(interval=0)
 
-        # YOLO 처리용 큐 및 스레드 초기화
         self.yolo_frame_queue = queue.Queue(maxsize=5)
-        self.yolo_result_queue = queue.Queue(maxsize=5)  # 처리된 결과를 저장할 큐
+        self.yolo_result_queue = queue.Queue(maxsize=5)
+        self.view1_frame_queue = queue.Queue(maxsize=5)
+        self.view1_result_queue = queue.Queue(maxsize=5)
+        self.view2_result_queue = queue.Queue(maxsize=5)
         self.yolo_stop_flag = threading.Event()
 
-        threading.Thread(target=self.capture_yolo_frames, daemon=True).start()
+        threading.Thread(target=self.capture_frames, daemon=True).start()
         threading.Thread(target=self.process_yolo_frames, daemon=True).start()
+        threading.Thread(target=self.process_view1_frames, daemon=True).start()
+        threading.Thread(target=self.process_view2_frames, daemon=True).start()
         threading.Thread(target=self.display_yolo_frames, daemon=True).start()
+        threading.Thread(target=self.display_view1_frames, daemon=True).start()
+        threading.Thread(target=self.display_view2_frames, daemon=True).start()
 
-        # ResNet 순차 실행 시작
         QTimer.singleShot(0, self.update_resnet)
 
-        # CPU/NPU 사용률 주기적 업데이트
         self.cpu_timer = QTimer()
         self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
         self.cpu_timer.start(1000)
 
+    def closeEvent(self, event):
+        self.yolo_stop_flag.set()
+        time.sleep(0.2)  # 모든 쓰레드 종료 대기
+        event.accept()
+
+
+    def capture_frames(self):
+        while not self.yolo_stop_flag.is_set():
+            success, frame = self.cap.read()
+            if not success:
+                continue
+            if not self.yolo_frame_queue.full():
+                self.yolo_frame_queue.put(frame.copy())
+            if not self.view1_frame_queue.full():
+                self.view1_frame_queue.put(frame)
+
     def update_stats(self, model_name, current_infer_time):
-        """Helper method to update inference statistics and log them"""
+        """모델별 평균 FPS 및 추론 시간 갱신 및 로그 기록"""
         if model_name == "yolov3_big":
             self.yolo_total_infer_time += current_infer_time
             self.yolo_infer_count += 1
@@ -240,17 +257,8 @@ class UnifiedViewer(QMainWindow):
             self.resnet_avg_infer_time = self.resnet_total_infer_time / self.resnet_infer_count
             self.resnet_avg_fps = 1000.0 / self.resnet_avg_infer_time if self.resnet_avg_infer_time > 0 else 0.0
 
-        async_log(model_name, current_infer_time, 
+        async_log(model_name, current_infer_time,
                   self.yolo_avg_fps if model_name == "yolov3_big" else self.resnet_avg_fps)
-
-
-    def capture_yolo_frames(self):
-        while not self.yolo_stop_flag.is_set():
-            success, frame = self.cap.read()
-            if not success:
-                continue
-            if not self.yolo_frame_queue.full():
-                self.yolo_frame_queue.put(frame)
 
     def process_yolo_frames(self):
         while not self.yolo_stop_flag.is_set():
@@ -258,26 +266,35 @@ class UnifiedViewer(QMainWindow):
                 frame = self.yolo_frame_queue.get(timeout=1)
             except queue.Empty:
                 continue
-
             input_tensor, (w, h) = preprocess_yolo(frame)
             infer_start = time.time()
-
             try:
                 output = self.yolo_session.run(None, {"images": input_tensor})
             except Exception as e:
                 print(f"[YOLO ERROR] {e}")
                 continue
-
             infer_end = time.time()
             result = postprocessing_cpu(output, frame, w, h)
-
-            # 처리된 결과와 시간 정보를 큐에 저장
             current_infer_time = (infer_end - infer_start) * 1000.0
             if not self.yolo_result_queue.full():
                 self.yolo_result_queue.put((result, current_infer_time))
-
-            # 통계 업데이트
             self.update_stats("yolov3_big", current_infer_time)
+
+    def process_view1_frames(self):
+        while not self.yolo_stop_flag.is_set():
+            try:
+                frame = self.view1_frame_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            input_tensor, (w, h) = preprocess_yolo(frame)
+            try:
+                output = self.view1_session.run(None, {"images": input_tensor})
+            except Exception as e:
+                print(f"[VIEW1 ERROR] {e}")
+                continue
+            result = postprocessing_cpu(output, frame, w, h)
+            if not self.view1_result_queue.full():
+                self.view1_result_queue.put(result)
 
     def display_yolo_frames(self):
         while not self.yolo_stop_flag.is_set():
@@ -285,34 +302,73 @@ class UnifiedViewer(QMainWindow):
                 result, _ = self.yolo_result_queue.get(timeout=1)
             except queue.Empty:
                 continue
-
-            # 결과를 QPixmap으로 변환하여 시그널 발생
             pixmap = convert_cv_qt(result)
-            self.yolo_signals.update_yolo_display.emit(pixmap)
+            self.model_signals.update_yolo_display.emit(pixmap)
 
     def update_yolo_display(self, pixmap):
-        """UI 스레드에서 안전하게 YOLO 결과를 화면에 표시"""
         self.yolo_label.setPixmap(pixmap)
 
+    def display_view1_frames(self):
+        while not self.yolo_stop_flag.is_set():
+            try:
+                result = self.view1_result_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            pixmap = convert_cv_qt(result)
+            self.model_signals.update_view1_display.emit(pixmap)
 
+    def update_view1_display(self, pixmap):
+        self.view1.setPixmap(pixmap)
+
+    def process_view2_frames(self):
+        if not self.resnet_images:
+            return
+        while not self.yolo_stop_flag.is_set():
+            if self.view2_index >= len(self.resnet_images):
+                self.view2_index = 0
+            img_path = self.resnet_images[self.view2_index]
+            img = cv2.imread(img_path)
+            self.view2_index += 1
+            if img is None:
+                continue
+            input_tensor = preprocess_resnet(img)
+            try:
+                output = self.view2_session.run(None, {"data": input_tensor})
+            except Exception as e:
+                print(f"[View2 ERROR] {e}")
+                continue
+            class_id = int(np.argmax(output[0]))
+            class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
+            cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+            if not self.view2_result_queue.full():
+                self.view2_result_queue.put(img)
+            time.sleep(0.1)  # 너무 빠르게 순환되지 않도록 조정
+
+    def display_view2_frames(self):
+        while not self.yolo_stop_flag.is_set():
+            try:
+                result = self.view2_result_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            pixmap = convert_cv_qt(result)
+            self.model_signals.update_view2_display.emit(pixmap)
+
+    def update_view2_display(self, pixmap):
+        self.view2.setPixmap(pixmap)
 
     def update_resnet(self):
         if not self.resnet_images:
             self.resnet_label.setText("No images found.")
             return
-
         if self.resnet_index >= len(self.resnet_images):
             self.resnet_index = 0
-
         img_path = self.resnet_images[self.resnet_index]
         img = cv2.imread(img_path)
         if img is None:
             self.resnet_label.setText(f"Failed to load {img_path}")
             return
-
         self.resnet_index += 1
         input_tensor = preprocess_resnet(img)
-
         infer_start = time.time()
         try:
             output = self.resnet_session.run(None, {"data": input_tensor})
@@ -320,17 +376,14 @@ class UnifiedViewer(QMainWindow):
             print(f"[ResNet ERROR] {e}")
             return
         infer_end = time.time()
-
         class_id = int(np.argmax(output[0]))
         class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
         cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
         self.resnet_label.setPixmap(convert_cv_qt(img))
-
         current_infer_time = (infer_end - infer_start) * 1000.0
         self.update_stats("resnet50", current_infer_time)
-
-        # 다음 이미지 바로 처리
         QTimer.singleShot(0, self.update_resnet)
+
 
     def update_cpu_npu_usage(self):
         current = get_cpu_metrics(interval=0)
