@@ -289,6 +289,7 @@ def run_driver_yolo(npu_num):
 
 def run_driver_resnet50(npu_num):
     resnet50_process_frame_driver(npu_num)
+    print(f"Multi-Antara Driver #{npu_num} ended")
 
 def main():
 
