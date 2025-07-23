@@ -185,14 +185,44 @@ class UnifiedViewer(QMainWindow):
         # self.model_signals.update_view2_display = pyqtSignal(QPixmap)  # 시그널 동적 생성
         self.model_signals.update_view2_display.connect(self.update_view2_display)
 
-        self.yolo_session = ort.InferenceSession("models/yolov3_big/model/yolov3_big.onnx")
-        self.view1_session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
-        self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
-        self.view2_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")  # view2 용
+        # Initialize ONNX sessions with error handling
+        try:
+            self.yolo_session = ort.InferenceSession("models/yolov3_big/model/yolov3_big.onnx")
+        except Exception as e:
+            print(f"[YOLO Session ERROR] {e}")
+            self.yolo_session = None
+            
+        try:
+            self.view1_session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
+        except Exception as e:
+            print(f"[VIEW1 Session ERROR] {e}")
+            self.view1_session = None
+            
+        try:
+            # Check if file exists and is readable
+            import os
+            if not os.path.exists("models/resnet50/model/resnet50.onnx"):
+                print("[ResNet Session ERROR] Model file does not exist")
+                self.resnet_session = None
+            else:
+                # Try to load the model
+                self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+        except Exception as e:
+            import traceback
+            print(f"[ResNet Session ERROR] {e}")
+            print("[ResNet Session ERROR] Detailed traceback:")
+            traceback.print_exc()
+            self.resnet_session = None
+            
+        try:
+            self.view2_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")  # view2 용
+        except Exception as e:
+            print(f"[VIEW2 Session ERROR] {e}")
+            self.view2_session = None
 
 
-        self.driver1 = None
-        self.driver2 = None
+        # self.driver1 = None
+        # self.driver2 = None
 
 
         self.cap = cv2.VideoCapture("./stockholm_1280x720.mp4")
@@ -236,8 +266,64 @@ class UnifiedViewer(QMainWindow):
         self.cpu_timer.start(1000)
 
     def closeEvent(self, event):
+        # Set flag to stop all threads
         self.yolo_stop_flag.set()
-        time.sleep(0.2)  # 모든 쓰레드 종료 대기
+        time.sleep(0.2)  # Wait for threads to terminate
+        
+        # Properly clean up ONNX runtime sessions to prevent errors during termination
+        try:
+            # Clear all queues to prevent any pending operations
+            while not self.yolo_frame_queue.empty():
+                try:
+                    self.yolo_frame_queue.get_nowait()
+                except:
+                    pass
+            
+            while not self.yolo_result_queue.empty():
+                try:
+                    self.yolo_result_queue.get_nowait()
+                except:
+                    pass
+                    
+            while not self.view1_frame_queue.empty():
+                try:
+                    self.view1_frame_queue.get_nowait()
+                except:
+                    pass
+                    
+            while not self.view1_result_queue.empty():
+                try:
+                    self.view1_result_queue.get_nowait()
+                except:
+                    pass
+                    
+            while not self.view2_result_queue.empty():
+                try:
+                    self.view2_result_queue.get_nowait()
+                except:
+                    pass
+            
+            # Release video capture resources
+            if hasattr(self, 'cap') and self.cap is not None:
+                self.cap.release()
+                
+            # Explicitly release ONNX runtime sessions
+            if hasattr(self, 'yolo_session'):
+                del self.yolo_session
+            if hasattr(self, 'view1_session'):
+                del self.view1_session
+            if hasattr(self, 'resnet_session'):
+                del self.resnet_session
+            if hasattr(self, 'view2_session'):
+                del self.view2_session
+                
+            # Force garbage collection to ensure resources are released
+            import gc
+            gc.collect()
+            
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+            
         event.accept()
 
 
@@ -275,6 +361,11 @@ class UnifiedViewer(QMainWindow):
                 continue
             input_tensor, (w, h) = preprocess_yolo(frame)
             infer_start = time.time()
+            
+            # Check if yolo_session exists and is not None
+            if not hasattr(self, 'yolo_session') or self.yolo_session is None:
+                continue
+                
             try:
                 output = self.yolo_session.run(None, {"images": input_tensor})
             except Exception as e:
@@ -316,6 +407,11 @@ class UnifiedViewer(QMainWindow):
             except queue.Empty:
                 continue
             input_tensor, (w, h) = preprocess_yolo(frame)
+            
+            # Check if view1_session exists and is not None
+            if not hasattr(self, 'view1_session') or self.view1_session is None:
+                continue
+                
             try:
                 output = self.view1_session.run(None, {"images": input_tensor})
             except Exception as e:
@@ -361,6 +457,11 @@ class UnifiedViewer(QMainWindow):
             if img is None:
                 continue
             input_tensor = preprocess_resnet(img)
+            
+            # Check if view2_session exists and is not None
+            if not hasattr(self, 'view2_session') or self.view2_session is None:
+                continue
+                
             try:
                 output = self.view2_session.run(None, {"data": input_tensor})
             except Exception as e:
@@ -386,19 +487,42 @@ class UnifiedViewer(QMainWindow):
         self.view2.setPixmap(pixmap)
 
     def update_resnet(self):
+        # Check if the attribute exists and recreate if necessary
+        if not hasattr(self, 'resnet_session'):
+            # Attempt to recreate the session if it's missing
+            try:
+                self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+            except Exception as e:
+                print(f"[ResNet] Failed to recreate session: {e}")
+                self.resnet_session = None
+            
         if not self.resnet_images:
             self.resnet_label.setText("No images found.")
             return
+            
         if self.resnet_index >= len(self.resnet_images):
             self.resnet_index = 0
+            
         img_path = self.resnet_images[self.resnet_index]
         img = cv2.imread(img_path)
         if img is None:
             self.resnet_label.setText(f"Failed to load {img_path}")
             return
+            
         self.resnet_index += 1
         input_tensor = preprocess_resnet(img)
         infer_start = time.time()
+        
+        # Check if resnet_session is None
+        if self.resnet_session is None:
+            self.resnet_label.setText("ResNet model not loaded")
+            # Attempt to recreate the session if it's None
+            try:
+                self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+            except Exception as e:
+                print(f"[ResNet ERROR] Failed to recreate session: {e}")
+                return
+            
         try:
             output = self.resnet_session.run(None, {"data": input_tensor})
         except Exception as e:
@@ -445,84 +569,84 @@ class UnifiedViewer(QMainWindow):
 
         self.prev_cpu_stats = current
 
-        def init_neubla_driver(self):
-            self.driver1 = NeublaDriver()
-            self.driver2 = NeublaDriver()
-            assert self.driver1.Init(0) == 0
-            assert self.driver2.Init(1) == 0
-
-        def load_yolo_npu(driver, o_path):
-            try:
-                assert driver.LoadModel(o_path) == 0
-            except Exception as e:
-                try:
-                    self.driver1.Close()
-                except:
-                    pass
-
-
-        def process_yolo_npu(self, driver, input_data):
-            try:
-                # driver = NeublaDriver()
-                # assert driver.Init(npu_num) == 0
-                #
-                # start_load = time.time()
-                # assert driver.LoadModel(o_path) == 0
-                # end_load = time.time()
-                # load_time_ms = (end_load - start_load) * 1000.0
-                #
-                # random_input = np.random.rand(3, 608, 608).astype(np.uint8)
-                # input_data = random_input.tobytes()
-                #
-                # start_infer = time.time()
-                assert driver.SendInput(input_data, 3 * 608 * 608) == 0
-                assert driver.Launch() == 0
-                raw_outputs = driver.ReceiveOutputs()
-                # end_infer = time.time()
-                # infer_time_ms = (end_infer - start_infer) * 1000.0
-
-                # assert driver.Close() == 0
-
-            except Exception as e:
-                try:
-                    driver.Close()
-                except:
-                    pass
-
-        def close_npu(self, driver):
-            try:
-                driver.Close()
-            except:
-                pass
+        # def init_neubla_driver(self):
+        #     self.driver1 = NeublaDriver()
+        #     self.driver2 = NeublaDriver()
+        #     assert self.driver1.Init(0) == 0
+        #     assert self.driver2.Init(1) == 0
         #
-        # def process_resnet50_npu(self, npu_num, o_path):
+        # def load_yolo_npu(driver, o_path):
         #     try:
-        #         driver = NeublaDriver()
-        #         assert driver.Init(npu_num) == 0
-        #
-        #         start_load = time.time()
         #         assert driver.LoadModel(o_path) == 0
-        #         end_load = time.time()
-        #         load_time_ms = (end_load - start_load) * 1000.0
+        #     except Exception as e:
+        #         try:
+        #             self.driver1.Close()
+        #         except:
+        #             pass
         #
-        #         random_input = np.random.rand(3, 224, 224).astype(np.uint8)
+        #
+        # def process_yolo_npu(self, driver, input_data):
+        #     try:
+        #         # driver = NeublaDriver()
+        #         # assert driver.Init(npu_num) == 0
+        #         #
+        #         # start_load = time.time()
+        #         # assert driver.LoadModel(o_path) == 0
+        #         # end_load = time.time()
+        #         # load_time_ms = (end_load - start_load) * 1000.0
+        #         #
+        #         random_input = np.random.rand(3, 608, 608).astype(np.uint8)
         #         input_data = random_input.tobytes()
-        #
-        #         start_infer = time.time()
-        #         assert driver.SendInput(input_data, 3 * 224 * 224) == 0
+        #         #
+        #         # start_infer = time.time()
+        #         assert driver.SendInput(input_data, 3 * 608 * 608) == 0
         #         assert driver.Launch() == 0
         #         raw_outputs = driver.ReceiveOutputs()
-        #         end_infer = time.time()
-        #         infer_time_ms = (end_infer - start_infer) * 1000.0
+        #         # end_infer = time.time()
+        #         # infer_time_ms = (end_infer - start_infer) * 1000.0
         #
-        #         assert driver.Close() == 0
+        #         # assert driver.Close() == 0
         #
         #     except Exception as e:
         #         try:
         #             driver.Close()
         #         except:
         #             pass
-        #         print(f"[Error] NPU{npu_num}: {e}")
-        #         exit()
         #
-        #     return load_time_ms, infer_time_ms
+        # def close_npu(self, driver):
+        #     try:
+        #         driver.Close()
+        #     except:
+        #         pass
+        # #
+        # # def process_resnet50_npu(self, npu_num, o_path):
+        # #     try:
+        # #         driver = NeublaDriver()
+        # #         assert driver.Init(npu_num) == 0
+        # #
+        # #         start_load = time.time()
+        # #         assert driver.LoadModel(o_path) == 0
+        # #         end_load = time.time()
+        # #         load_time_ms = (end_load - start_load) * 1000.0
+        # #
+        # #         random_input = np.random.rand(3, 224, 224).astype(np.uint8)
+        # #         input_data = random_input.tobytes()
+        # #
+        # #         start_infer = time.time()
+        # #         assert driver.SendInput(input_data, 3 * 224 * 224) == 0
+        # #         assert driver.Launch() == 0
+        # #         raw_outputs = driver.ReceiveOutputs()
+        # #         end_infer = time.time()
+        # #         infer_time_ms = (end_infer - start_infer) * 1000.0
+        # #
+        # #         assert driver.Close() == 0
+        # #
+        # #     except Exception as e:
+        # #         try:
+        # #             driver.Close()
+        # #         except:
+        # #             pass
+        # #         print(f"[Error] NPU{npu_num}: {e}")
+        # #         exit()
+        # #
+        # #     return load_time_ms, infer_time_ms

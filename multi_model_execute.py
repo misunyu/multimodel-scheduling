@@ -139,7 +139,6 @@ def resnet50_preprocess(raw_input_img):
 
 def yolo_process_frame_driver(npu_num):
 
-    print(f"==== Start Driver #{npu_num} ====")
 
     raw_input_img = cv2.imread("../yolov3/dog.jpg")
     yolo_target_model = "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
@@ -218,7 +217,6 @@ def yolo_process_frame_driver(npu_num):
 
 def resnet50_process_frame_driver(npu_num):
 
-    print(f"==== Start Driver # {npu_num}  ====")
 
     driver = NeublaDriver()
 
@@ -274,7 +272,6 @@ def resnet50_process_frame_driver(npu_num):
             elapsed_time = (end_time - start_time)  * 1000
             total_time = total_time + elapsed_time
 
-        print(f"\nmax_idx = {max_index}")
         average_time = total_time/REPEAT
         print(f"\n(Driver1) Average time over {REPEAT} runs is {average_time:.2f} ms")
 
@@ -289,11 +286,9 @@ def resnet50_process_frame_driver(npu_num):
 
 def run_driver_yolo(npu_num):
     yolo_process_frame_driver(npu_num)
-    print(f"Multi-Antara Driver #{npu_num} ended")
 
 def run_driver_resnet50(npu_num):
     resnet50_process_frame_driver(npu_num)
-    print(f"Multi-Antara Driver #{npu_num} ended")
 
 def main():
 
