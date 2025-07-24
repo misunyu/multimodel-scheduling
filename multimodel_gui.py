@@ -13,7 +13,8 @@ import queue
 import threading
 import json
 from datetime import datetime
-# import npu
+import npu
+from npu import initialize_driver, close_driver, send_receive_data_npu, resnet50_prepare_onnx_model, resnet50_preprocess, yolo_prepare_onnx_model, yolo_preprocess
 
 
 
@@ -254,7 +255,8 @@ class UnifiedViewer(QMainWindow):
 
         threading.Thread(target=self.capture_frames, daemon=True).start()
         threading.Thread(target=self.process_yolo_frames, daemon=True).start()
-        threading.Thread(target=self.process_resnet_frames, daemon=True).start()
+        # threading.Thread(target=self.process_resnet_frames, daemon=True).start()
+        threading.Thread(target=self.process_resnet_frames_npu, daemon=True).start()
         threading.Thread(target=self.process_view1_frames, daemon=True).start()
         threading.Thread(target=self.process_view2_frames, daemon=True).start()
         threading.Thread(target=self.display_yolo_frames, daemon=True).start()
@@ -414,6 +416,80 @@ class UnifiedViewer(QMainWindow):
             current_infer_time = (infer_end - infer_start) * 1000.0
             self.update_stats("resnet50", current_infer_time)
             time.sleep(0.1)
+            
+    def process_resnet_frames_npu(self):
+        if not self.resnet_images:
+            return
+            
+        # Initialize NPU driver
+        try:
+            driver = initialize_driver(1, "./resnet50_neubla_ori_best.o")
+            front_sess, _, params = resnet50_prepare_onnx_model(
+                "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
+            )
+            
+            # Extract parameters for post-processing
+            scale = params['/0/avgpool/GlobalAveragePool_output_0_scale'] * params['0.fc.weight_scale']
+            zp_act = params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
+            zp_w = params['0.fc.weight_zero_point']
+            scale_out = params['/0/fc/Gemm_output_0_scale']
+            zp_out = params['/0/fc/Gemm_output_0_zero_point']
+            weight_q = params['0.fc.weight_quantized'].T.astype(np.int32)
+        except Exception as e:
+            print(f"[ResNet NPU ERROR] Failed to initialize NPU: {e}")
+            return
+            
+        try:
+            while not self.yolo_stop_flag.is_set():
+                if self.resnet_index >= len(self.resnet_images):
+                    self.resnet_index = 0
+                img_path = self.resnet_images[self.resnet_index]
+                img = cv2.imread(img_path)
+                self.resnet_index += 1
+                if img is None:
+                    continue
+                    
+                try:
+                    # Preprocess image and run inference
+                    infer_start = time.time()
+                    
+                    # Run front session to get quantized input
+                    input_data = front_sess.run(None, {"input": resnet50_preprocess(img)})[0].tobytes()
+                    
+                    # Send to NPU and get raw outputs
+                    raw_outputs = send_receive_data_npu(driver, input_data, 3 * 224 * 224)
+                    output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
+                    
+                    # Post-process the output
+                    output = np.matmul(output_data.astype(np.int32), weight_q)
+                    output -= zp_act * np.sum(weight_q, axis=0)
+                    output -= zp_w * np.sum(output_data, axis=0)
+                    output += zp_act * zp_w
+                    output = np.round(output * scale / scale_out) + zp_out
+                    output = output.astype(np.uint8)
+                    
+                    infer_end = time.time()
+                    
+                    # Get class with highest probability
+                    max_index = np.argmax(output)
+                    class_name = imagenet_classes[max_index] if max_index < len(imagenet_classes) else f"Class ID: {max_index}"
+                    
+                    # Update UI
+                    cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                    self.resnet_label.setPixmap(convert_cv_qt(img))
+                    
+                    # Update statistics
+                    current_infer_time = (infer_end - infer_start) * 1000.0
+                    self.update_stats("resnet50", current_infer_time)
+                    
+                except Exception as e:
+                    print(f"[ResNet NPU ERROR] {e}")
+                    continue
+                    
+                time.sleep(0.1)
+        finally:
+            # Clean up resources
+            close_driver(driver)
 
     def process_view1_frames(self):
         while not self.yolo_stop_flag.is_set():
