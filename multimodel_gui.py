@@ -491,6 +491,93 @@ class UnifiedViewer(QMainWindow):
             # Clean up resources
             close_driver(driver)
 
+    def process_resnet_frames_npu(self):
+        if not self.resnet_images:
+            print("[ResNet NPU] 이미지 리스트가 비어 있습니다.")
+            return
+
+        # NPU 드라이버 초기화
+        try:
+            print("[ResNet NPU] 드라이버 초기화 시작")
+            driver = initialize_driver(1, "./resnet50_neubla_ori_best.o")
+            print("[ResNet NPU] 드라이버 초기화 완료")
+
+            front_sess, _, params = resnet50_prepare_onnx_model(
+                "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
+            )
+            print("[ResNet NPU] 프론트 세션 로딩 완료")
+
+            # 후처리 파라미터
+            scale = params['/0/avgpool/GlobalAveragePool_output_0_scale'] * params['0.fc.weight_scale']
+            zp_act = params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
+            zp_w = params['0.fc.weight_zero_point']
+            scale_out = params['/0/fc/Gemm_output_0_scale']
+            zp_out = params['/0/fc/Gemm_output_0_zero_point']
+            weight_q = params['0.fc.weight_quantized'].T.astype(np.int32)
+            print("[ResNet NPU] 후처리 파라미터 준비 완료")
+
+        except Exception as e:
+            print(f"[ResNet NPU ERROR] 드라이버/모델 초기화 실패: {e}")
+            return
+
+        try:
+            while not self.yolo_stop_flag.is_set():
+                if self.resnet_index >= len(self.resnet_images):
+                    self.resnet_index = 0
+                img_path = self.resnet_images[self.resnet_index]
+                self.resnet_index += 1
+
+                print(f"[ResNet NPU] 이미지 로드: {img_path}")
+                img = cv2.imread(img_path)
+                if img is None:
+                    print("[ResNet NPU] 이미지 로딩 실패")
+                    continue
+
+                try:
+                    infer_start = time.time()
+
+                    # 전처리 + 프론트 ONNX 실행
+                    input_tensor = resnet50_preprocess(img)
+                    print(f"[ResNet NPU] 입력 텐서 shape: {input_tensor.shape}")
+                    quant_input = front_sess.run(None, {"input": input_tensor})[0].tobytes()
+                    print(f"[ResNet NPU] 전처리 및 front ONNX 완료, size: {len(quant_input)}")
+
+                    # NPU 추론
+                    raw_outputs = send_receive_data_npu(driver, quant_input, 3 * 224 * 224)
+                    print(f"[ResNet NPU] NPU 추론 완료, 출력 크기: {len(raw_outputs[0])}")
+
+                    # 후처리
+                    output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
+                    output = np.matmul(output_data.astype(np.int32), weight_q)
+                    output -= zp_act * np.sum(weight_q, axis=0)
+                    output -= zp_w * np.sum(output_data, axis=0)
+                    output += zp_act * zp_w
+                    output = np.round(output * scale / scale_out) + zp_out
+                    output = output.astype(np.uint8)
+
+                    max_index = np.argmax(output)
+                    class_name = imagenet_classes[max_index] if max_index < len(
+                        imagenet_classes) else f"Class ID: {max_index}"
+                    print(f"[ResNet NPU] 추론 클래스: {class_name} ({max_index})")
+
+                    cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                    self.resnet_label.setPixmap(convert_cv_qt(img))
+                    print("[ResNet NPU] 이미지 QLabel에 출력 완료")
+
+                    infer_end = time.time()
+                    current_infer_time = (infer_end - infer_start) * 1000.0
+                    self.update_stats("resnet50", current_infer_time)
+
+                except Exception as e:
+                    print(f"[ResNet NPU ERROR] 추론 중 오류: {e}")
+                    continue
+
+                time.sleep(0.1)
+
+        finally:
+            print("[ResNet NPU] 드라이버 정리 및 종료")
+            close_driver(driver)
+
     def process_view1_frames(self):
         while not self.yolo_stop_flag.is_set():
             try:
