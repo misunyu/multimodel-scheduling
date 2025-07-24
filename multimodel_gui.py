@@ -13,7 +13,7 @@ import queue
 import threading
 import json
 from datetime import datetime
-import npu
+# import npu
 
 
 
@@ -192,13 +192,13 @@ class UnifiedViewer(QMainWindow):
         except Exception as e:
             print(f"[YOLO Session ERROR] {e}")
             self.yolo_session = None
-            
+
         try:
             self.view1_session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
         except Exception as e:
             print(f"[VIEW1 Session ERROR] {e}")
             self.view1_session = None
-            
+
         try:
             # Check if file exists and is readable
             import os
@@ -214,7 +214,7 @@ class UnifiedViewer(QMainWindow):
             print("[ResNet Session ERROR] Detailed traceback:")
             traceback.print_exc()
             self.resnet_session = None
-            
+
         try:
             self.view2_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")  # view2 용
         except Exception as e:
@@ -261,20 +261,15 @@ class UnifiedViewer(QMainWindow):
         threading.Thread(target=self.display_view1_frames, daemon=True).start()
         threading.Thread(target=self.display_view2_frames, daemon=True).start()
 
-        QTimer.singleShot(0, self.update_resnet)
-
         self.cpu_timer = QTimer()
         self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
         self.cpu_timer.start(1000)
-        
-        # Call npu0_yolo_ready function
-        # npu.npu0_yolo_ready("models/yolov3_big/model/yolov3_big.onnx")
 
     def closeEvent(self, event):
         # Set flag to stop all threads
         self.yolo_stop_flag.set()
         time.sleep(0.2)  # Wait for threads to terminate
-        
+
         # Properly clean up ONNX runtime sessions to prevent errors during termination
         try:
             # Clear all queues to prevent any pending operations
@@ -283,35 +278,35 @@ class UnifiedViewer(QMainWindow):
                     self.yolo_frame_queue.get_nowait()
                 except:
                     pass
-            
+
             while not self.yolo_result_queue.empty():
                 try:
                     self.yolo_result_queue.get_nowait()
                 except:
                     pass
-                    
+
             while not self.view1_frame_queue.empty():
                 try:
                     self.view1_frame_queue.get_nowait()
                 except:
                     pass
-                    
+
             while not self.view1_result_queue.empty():
                 try:
                     self.view1_result_queue.get_nowait()
                 except:
                     pass
-                    
+
             while not self.view2_result_queue.empty():
                 try:
                     self.view2_result_queue.get_nowait()
                 except:
                     pass
-            
+
             # Release video capture resources
             if hasattr(self, 'cap') and self.cap is not None:
                 self.cap.release()
-                
+
             # Explicitly release ONNX runtime sessions
             if hasattr(self, 'yolo_session'):
                 del self.yolo_session
@@ -321,14 +316,14 @@ class UnifiedViewer(QMainWindow):
                 del self.resnet_session
             if hasattr(self, 'view2_session'):
                 del self.view2_session
-                
+
             # Force garbage collection to ensure resources are released
             import gc
             gc.collect()
-            
+
         except Exception as e:
             print(f"Error during cleanup: {e}")
-            
+
         event.accept()
 
 
@@ -366,11 +361,11 @@ class UnifiedViewer(QMainWindow):
                 continue
             input_tensor, (w, h) = preprocess_yolo(frame)
             infer_start = time.time()
-            
+
             # Check if yolo_session exists and is not None
             if not hasattr(self, 'yolo_session') or self.yolo_session is None:
                 continue
-                
+
             try:
                 output = self.yolo_session.run(None, {"images": input_tensor})
             except Exception as e:
@@ -427,11 +422,11 @@ class UnifiedViewer(QMainWindow):
             except queue.Empty:
                 continue
             input_tensor, (w, h) = preprocess_yolo(frame)
-            
+
             # Check if view1_session exists and is not None
             if not hasattr(self, 'view1_session') or self.view1_session is None:
                 continue
-                
+
             try:
                 output = self.view1_session.run(None, {"images": input_tensor})
             except Exception as e:
@@ -477,11 +472,11 @@ class UnifiedViewer(QMainWindow):
             if img is None:
                 continue
             input_tensor = preprocess_resnet(img)
-            
+
             # Check if view2_session exists and is not None
             if not hasattr(self, 'view2_session') or self.view2_session is None:
                 continue
-                
+
             try:
                 output = self.view2_session.run(None, {"data": input_tensor})
             except Exception as e:
@@ -505,57 +500,6 @@ class UnifiedViewer(QMainWindow):
 
     def update_view2_display(self, pixmap):
         self.view2.setPixmap(pixmap)
-
-    # def update_resnet(self):
-    #     # Check if the attribute exists and recreate if necessary
-    #     if not hasattr(self, 'resnet_session'):
-    #         # Attempt to recreate the session if it's missing
-    #         try:
-    #             self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
-    #         except Exception as e:
-    #             print(f"[ResNet] Failed to recreate session: {e}")
-    #             self.resnet_session = None
-    #
-    #     if not self.resnet_images:
-    #         self.resnet_label.setText("No images found.")
-    #         return
-    #
-    #     if self.resnet_index >= len(self.resnet_images):
-    #         self.resnet_index = 0
-    #
-    #     img_path = self.resnet_images[self.resnet_index]
-    #     img = cv2.imread(img_path)
-    #     if img is None:
-    #         self.resnet_label.setText(f"Failed to load {img_path}")
-    #         return
-    #
-    #     self.resnet_index += 1
-    #     input_tensor = preprocess_resnet(img)
-    #     infer_start = time.time()
-    #
-    #     # Check if resnet_session is None
-    #     if self.resnet_session is None:
-    #         self.resnet_label.setText("ResNet model not loaded")
-    #         # Attempt to recreate the session if it's None
-    #         try:
-    #             self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
-    #         except Exception as e:
-    #             print(f"[ResNet ERROR] Failed to recreate session: {e}")
-    #             return
-    #
-    #     try:
-    #         output = self.resnet_session.run(None, {"data": input_tensor})
-    #     except Exception as e:
-    #         print(f"[ResNet ERROR] {e}")
-    #         return
-    #     infer_end = time.time()
-    #     class_id = int(np.argmax(output[0]))
-    #     class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
-    #     cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-    #     self.resnet_label.setPixmap(convert_cv_qt(img))
-    #     current_infer_time = (infer_end - infer_start) * 1000.0
-    #     self.update_stats("resnet50", current_infer_time)
-    #     QTimer.singleShot(0, self.update_resnet)
 
 
     def update_cpu_npu_usage(self):
