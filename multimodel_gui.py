@@ -254,6 +254,7 @@ class UnifiedViewer(QMainWindow):
 
         threading.Thread(target=self.capture_frames, daemon=True).start()
         threading.Thread(target=self.process_yolo_frames, daemon=True).start()
+        threading.Thread(target=self.process_resnet_frames, daemon=True).start()
         threading.Thread(target=self.process_view1_frames, daemon=True).start()
         threading.Thread(target=self.process_view2_frames, daemon=True).start()
         threading.Thread(target=self.display_yolo_frames, daemon=True).start()
@@ -382,27 +383,42 @@ class UnifiedViewer(QMainWindow):
                 self.yolo_result_queue.put((result, current_infer_time))
             self.update_stats("yolov3_big", current_infer_time)
 
-
-    def process_yolo_frames_npu(self):
+    def process_resnet_frames(self):
+        if not self.resnet_images:
+            return
         while not self.yolo_stop_flag.is_set():
-            try:
-                frame = self.yolo_frame_queue.get(timeout=1)
-            except queue.Empty:
+            if self.resnet_index >= len(self.resnet_images):
+                self.resnet_index = 0
+            img_path = self.resnet_images[self.resnet_index]
+            img = cv2.imread(img_path)
+            self.resnet_index += 1
+            if img is None:
                 continue
-            input_tensor, (w, h) = preprocess_yolo(frame)
+            input_tensor = preprocess_resnet(img)
 
-            # infer_start = time.time()
-            # try:
-            #     output = self.yolo_session.run(None, {"images": input_tensor})
-            # except Exception as e:
-            #     print(f"[YOLO ERROR] {e}")
-            #     continue
-            # infer_end = time.time()
-            # result = postprocessing_cpu(output, frame, w, h)
-            # current_infer_time = (infer_end - infer_start) * 1000.0
-            # if not self.yolo_result_queue.full():
-            #     self.yolo_result_queue.put((result, current_infer_time))
-            # self.update_stats("yolov3_big", current_infer_time)
+            if self.resnet_session is None:
+                try:
+                    self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+                except Exception as e:
+                    print(f"[ResNet ERROR] Failed to recreate session: {e}")
+                    continue
+
+            try:
+                infer_start = time.time()
+                output = self.resnet_session.run(None, {"data": input_tensor})
+                infer_end = time.time()
+            except Exception as e:
+                print(f"[ResNet ERROR] {e}")
+                continue
+
+            class_id = int(np.argmax(output[0]))
+            class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
+            cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+            self.resnet_label.setPixmap(convert_cv_qt(img))
+
+            current_infer_time = (infer_end - infer_start) * 1000.0
+            self.update_stats("resnet50", current_infer_time)
+            time.sleep(0.1)
 
     def process_view1_frames(self):
         while not self.yolo_stop_flag.is_set():
@@ -490,56 +506,56 @@ class UnifiedViewer(QMainWindow):
     def update_view2_display(self, pixmap):
         self.view2.setPixmap(pixmap)
 
-    def update_resnet(self):
-        # Check if the attribute exists and recreate if necessary
-        if not hasattr(self, 'resnet_session'):
-            # Attempt to recreate the session if it's missing
-            try:
-                self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
-            except Exception as e:
-                print(f"[ResNet] Failed to recreate session: {e}")
-                self.resnet_session = None
-            
-        if not self.resnet_images:
-            self.resnet_label.setText("No images found.")
-            return
-            
-        if self.resnet_index >= len(self.resnet_images):
-            self.resnet_index = 0
-            
-        img_path = self.resnet_images[self.resnet_index]
-        img = cv2.imread(img_path)
-        if img is None:
-            self.resnet_label.setText(f"Failed to load {img_path}")
-            return
-            
-        self.resnet_index += 1
-        input_tensor = preprocess_resnet(img)
-        infer_start = time.time()
-        
-        # Check if resnet_session is None
-        if self.resnet_session is None:
-            self.resnet_label.setText("ResNet model not loaded")
-            # Attempt to recreate the session if it's None
-            try:
-                self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
-            except Exception as e:
-                print(f"[ResNet ERROR] Failed to recreate session: {e}")
-                return
-            
-        try:
-            output = self.resnet_session.run(None, {"data": input_tensor})
-        except Exception as e:
-            print(f"[ResNet ERROR] {e}")
-            return
-        infer_end = time.time()
-        class_id = int(np.argmax(output[0]))
-        class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
-        cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-        self.resnet_label.setPixmap(convert_cv_qt(img))
-        current_infer_time = (infer_end - infer_start) * 1000.0
-        self.update_stats("resnet50", current_infer_time)
-        QTimer.singleShot(0, self.update_resnet)
+    # def update_resnet(self):
+    #     # Check if the attribute exists and recreate if necessary
+    #     if not hasattr(self, 'resnet_session'):
+    #         # Attempt to recreate the session if it's missing
+    #         try:
+    #             self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+    #         except Exception as e:
+    #             print(f"[ResNet] Failed to recreate session: {e}")
+    #             self.resnet_session = None
+    #
+    #     if not self.resnet_images:
+    #         self.resnet_label.setText("No images found.")
+    #         return
+    #
+    #     if self.resnet_index >= len(self.resnet_images):
+    #         self.resnet_index = 0
+    #
+    #     img_path = self.resnet_images[self.resnet_index]
+    #     img = cv2.imread(img_path)
+    #     if img is None:
+    #         self.resnet_label.setText(f"Failed to load {img_path}")
+    #         return
+    #
+    #     self.resnet_index += 1
+    #     input_tensor = preprocess_resnet(img)
+    #     infer_start = time.time()
+    #
+    #     # Check if resnet_session is None
+    #     if self.resnet_session is None:
+    #         self.resnet_label.setText("ResNet model not loaded")
+    #         # Attempt to recreate the session if it's None
+    #         try:
+    #             self.resnet_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+    #         except Exception as e:
+    #             print(f"[ResNet ERROR] Failed to recreate session: {e}")
+    #             return
+    #
+    #     try:
+    #         output = self.resnet_session.run(None, {"data": input_tensor})
+    #     except Exception as e:
+    #         print(f"[ResNet ERROR] {e}")
+    #         return
+    #     infer_end = time.time()
+    #     class_id = int(np.argmax(output[0]))
+    #     class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
+    #     cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+    #     self.resnet_label.setPixmap(convert_cv_qt(img))
+    #     current_infer_time = (infer_end - infer_start) * 1000.0
+    #     self.update_stats("resnet50", current_infer_time)
+    #     QTimer.singleShot(0, self.update_resnet)
 
 
     def update_cpu_npu_usage(self):
