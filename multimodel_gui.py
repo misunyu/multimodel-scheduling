@@ -499,7 +499,7 @@ class UnifiedViewer(QMainWindow):
         # NPU 드라이버 초기화
         try:
             print("[ResNet NPU] 드라이버 초기화 시작")
-            driver = initialize_driver(1, "./resnet50_neubla_ori_best.o")
+            driver = initialize_driver(1, "./models/resnet50/npu_code/resnet50_neubla_p1.o")
             print("[ResNet NPU] 드라이버 초기화 완료")
 
             front_sess, _, params = resnet50_prepare_onnx_model(
