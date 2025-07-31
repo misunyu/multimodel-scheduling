@@ -18,8 +18,8 @@ from multiprocessing import Process, Queue, Event
 
 class ModelSignals(QObject):
     update_yolo_display = pyqtSignal(QPixmap)
-    update_view1_display = pyqtSignal(QPixmap)
-    update_view2_display = pyqtSignal(QPixmap)
+    update_view3_display = pyqtSignal(QPixmap)
+    update_view4_display = pyqtSignal(QPixmap)
     update_resnet_display = pyqtSignal(QPixmap)
 
 # Constants
@@ -382,8 +382,8 @@ class UnifiedViewer(QMainWindow):
         # Define and connect signals
         self.model_signals = ModelSignals()
         self.model_signals.update_yolo_display.connect(self.update_yolo_display)
-        self.model_signals.update_view1_display.connect(self.update_view1_display)
-        self.model_signals.update_view2_display.connect(self.update_view2_display)
+        self.model_signals.update_view3_display.connect(self.update_view3_display)
+        self.model_signals.update_view4_display.connect(self.update_view4_display)
         self.model_signals.update_resnet_display.connect(self.update_resnet_display)
 
         # Initialize common state variables
@@ -393,11 +393,9 @@ class UnifiedViewer(QMainWindow):
         # Initialize queues and events
         self.video_frame_queue = Queue(maxsize=10)
         self.video_shutdown_event = Event()
-        self.yolo_result_queue = queue.Queue(maxsize=5)
-        self.view1_result_queue = queue.Queue(maxsize=5)
-        self.view2_result_queue = queue.Queue(maxsize=5)
-        self.resnet_result_queue = queue.Queue(maxsize=5)
-        self.view1_frame_queue = queue.Queue(maxsize=10)
+        self.view3_result_queue = queue.Queue(maxsize=5)
+        self.view4_result_queue = queue.Queue(maxsize=5)
+        self.view3_frame_queue = queue.Queue(maxsize=10)
         self.yolo_frame_queue = Queue(maxsize=10)
         self.yolo_output_queue = Queue(maxsize=5)
         self.resnet_output_queue = Queue(maxsize=5)
@@ -414,23 +412,23 @@ class UnifiedViewer(QMainWindow):
         self.resnet_avg_infer_time = 0.0
         self.resnet_avg_fps = 0.0
         # Initialize statistics variables for View1 (YOLO CPU) and View2 (ResNet CPU)
-        self.view1_total_infer_time = 0.0
-        self.view1_infer_count = 0
-        self.view1_avg_infer_time = 0.0
-        self.view1_avg_fps = 0.0
-        self.view2_total_infer_time = 0.0
-        self.view2_infer_count = 0
-        self.view2_avg_infer_time = 0.0
-        self.view2_avg_fps = 0.0
+        self.view3_total_infer_time = 0.0
+        self.view3_infer_count = 0
+        self.view3_avg_infer_time = 0.0
+        self.view3_avg_fps = 0.0
+        self.view4_total_infer_time = 0.0
+        self.view4_infer_count = 0
+        self.view4_avg_infer_time = 0.0
+        self.view4_avg_fps = 0.0
 
         # Initialize images and sessions
         self.resnet_images = [os.path.join("./imagenet-sample-images", f)
                              for f in os.listdir("./imagenet-sample-images")
                              if f.lower().endswith(('jpg', 'jpeg', 'png'))]
         self.resnet_index = 0
-        self.view2_index = 0
-        self.view1_session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
-        self.view2_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+        self.view4_index = 0
+        self.view3_session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
+        self.view4_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
 
         # Start processes
         self.video_reader_proc = Process(
@@ -455,18 +453,18 @@ class UnifiedViewer(QMainWindow):
         # Start threads
         threading.Thread(target=self.display_yolo_frames_from_process, daemon=True).start()
         threading.Thread(target=self.display_resnet_frames_from_process, daemon=True).start()
-        threading.Thread(target=self.process_view1_frames, daemon=True).start()
-        threading.Thread(target=self.process_view2_frames, daemon=True).start()
-        threading.Thread(target=self.display_view1_frames, daemon=True).start()
-        threading.Thread(target=self.display_view2_frames, daemon=True).start()
-        threading.Thread(target=self.feed_view1_queue, daemon=True).start()
+        threading.Thread(target=self.process_view3_frames, daemon=True).start()
+        threading.Thread(target=self.process_view4_frames, daemon=True).start()
+        threading.Thread(target=self.display_view3_frames, daemon=True).start()
+        threading.Thread(target=self.display_view4_frames, daemon=True).start()
+        threading.Thread(target=self.feed_view3_queue, daemon=True).start()
 
         # CPU/NPU monitoring
         self.cpu_timer = QTimer()
         self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
         self.cpu_timer.start(1000)
 
-    def feed_view1_queue(self):
+    def feed_view3_queue(self):
         fps = 30.0
         try:
             cap = cv2.VideoCapture("stockholm_1280x720.mp4")
@@ -475,15 +473,15 @@ class UnifiedViewer(QMainWindow):
                 fps = fps_read
             cap.release()
         except Exception as e:
-            print(f"[feed_view1_queue] Failed to read FPS, using default 30.0: {e}")
+            print(f"[feed_view3_queue] Failed to read FPS, using default 30.0: {e}")
 
         frame_delay = 1.0 / fps
 
         while not self.shutdown_flag.is_set():
             try:
                 frame = self.video_frame_queue.get(timeout=1)
-                if not self.view1_frame_queue.full():
-                    self.view1_frame_queue.put(frame.copy())
+                if not self.view3_frame_queue.full():
+                    self.view3_frame_queue.put(frame.copy())
                 if not self.yolo_frame_queue.full():
                     self.yolo_frame_queue.put(frame.copy())
                 time.sleep(frame_delay)
@@ -513,81 +511,92 @@ class UnifiedViewer(QMainWindow):
                 self.update_stats("resnet50", infer_time)
 
     def closeEvent(self, event):
-        # 1. Set thread termination flag
+        event.accept()  # 먼저 종료 요청 수락
+        # 백그라운드 종료 처리 시작
+        threading.Thread(target=self.shutdown_all, daemon=True).start()
+
+    def shutdown_all(self):
+        import sys
+        import gc
+
+        print("[Shutdown] Cleaning up resources...")
+
+        # 1. Set shutdown flags
         self.shutdown_flag.set()
         time.sleep(0.2)
 
-        # 2. Set process termination event
         try:
             if hasattr(self, 'yolo_shutdown_event'):
                 self.yolo_shutdown_event.set()
             if hasattr(self, 'resnet_shutdown_event'):
                 self.resnet_shutdown_event.set()
+            if hasattr(self, 'video_shutdown_event'):
+                self.video_shutdown_event.set()
         except Exception as e:
             print(f"[Shutdown Event ERROR] {e}")
 
-        # 3. Attempt to terminate processes
+        # 2. Attempt to join/terminate all processes
         try:
-            if hasattr(self, 'yolo_process') and self.yolo_process.is_alive():
-                self.yolo_process.join(timeout=2)
-                if self.yolo_process.is_alive():
-                    print("[YOLO Process] force terminating...")
-                    self.yolo_process.terminate()
-                    self.yolo_process.join()
-
-            if hasattr(self, 'resnet_process') and self.resnet_process.is_alive():
-                self.resnet_process.join(timeout=2)
-                if self.resnet_process.is_alive():
-                    print("[ResNet Process] force terminating...")
-                    self.resnet_process.terminate()
-                    self.resnet_process.join()
+            processes = [
+                getattr(self, 'yolo_process', None),
+                getattr(self, 'resnet_process', None),
+                getattr(self, 'video_reader_proc', None)
+            ]
+            for proc in processes:
+                if proc is not None and proc.is_alive():
+                    proc.join(timeout=2)
+                    if proc.is_alive():
+                        print(f"[Process] Force terminating {proc.name}...")
+                        proc.terminate()
+                        proc.join()
         except Exception as e:
             print(f"[Process Join/Terminate ERROR] {e}")
 
-        # 4. Resource cleanup
+        # 3. Cleanup queues
         try:
-            # Clear queues
-            for q in [
+            queues = [
+                self.video_frame_queue,
                 self.yolo_frame_queue,
-                self.yolo_result_queue,
-                self.view1_frame_queue,
-                self.view1_result_queue,
-                self.view2_result_queue,
-                self.resnet_result_queue,
-            ]:
+                self.view3_frame_queue,
+                self.view3_result_queue,
+                self.view4_result_queue,
+                self.yolo_output_queue,
+                self.resnet_output_queue,
+            ]
+            for q in queues:
                 while not q.empty():
                     try:
                         q.get_nowait()
                     except:
                         break
+        except Exception as e:
+            print(f"[Queue Cleanup ERROR] {e}")
 
-            # Release video capture
-            if hasattr(self, 'cap') and self.cap is not None:
-                self.cap.release()
-
-            # Release ONNX sessions
-            for attr in [
+        # 4. Cleanup sessions and attributes
+        try:
+            attr_list = [
+                'cap',
                 'yolo_session',
-                'view1_session',
+                'view3_session',
                 'resnet_session',
-                'view2_session',
+                'view4_session',
                 'yolo_front_session',
                 'yolo_back_session',
                 'resnet_front_session',
                 'resnet_back_session',
-            ]:
+            ]
+            for attr in attr_list:
                 if hasattr(self, attr):
                     delattr(self, attr)
-
-            # Garbage collection
-            import gc
-            gc.collect()
-
         except Exception as e:
-            print(f"[Cleanup ERROR] {e}")
+            print(f"[Attribute Cleanup ERROR] {e}")
 
-        # 5. Accept event
-        event.accept()
+        # 5. Force garbage collection
+        gc.collect()
+
+        # 6. Final shutdown
+        print("[Shutdown] Exiting application.")
+        sys.exit(0)
 
     def update_stats(self, model_name, current_infer_time):
         """Update average FPS and inference time per model and record logs"""
@@ -605,96 +614,96 @@ class UnifiedViewer(QMainWindow):
         async_log(model_name, current_infer_time,
                  self.yolo_avg_fps if model_name == "yolov3_big" else self.resnet_avg_fps)
 
-    def process_view1_frames(self):
+    def process_view3_frames(self):
         while not self.shutdown_flag.is_set():
             try:
-                frame = self.view1_frame_queue.get(timeout=1)
+                frame = self.view3_frame_queue.get(timeout=1)
             except queue.Empty:
                 continue
             input_tensor, (w, h) = preprocess_yolo(frame)
 
-            if not hasattr(self, 'view1_session') or self.view1_session is None:
+            if not hasattr(self, 'view3_session') or self.view3_session is None:
                 continue
 
             try:
                 infer_start = time.time()
-                output = self.view1_session.run(None, {"images": input_tensor})
+                output = self.view3_session.run(None, {"images": input_tensor})
                 infer_end = time.time()
                 infer_time_ms = (infer_end - infer_start) * 1000.0
                 
-                # Update View1 (YOLO CPU) statistics
-                self.view1_total_infer_time += infer_time_ms
-                self.view1_infer_count += 1
-                self.view1_avg_infer_time = self.view1_total_infer_time / self.view1_infer_count
-                self.view1_avg_fps = 1000.0 / self.view1_avg_infer_time if self.view1_avg_infer_time > 0 else 0.0
+                # Update View3 (YOLO CPU) statistics
+                self.view3_total_infer_time += infer_time_ms
+                self.view3_infer_count += 1
+                self.view3_avg_infer_time = self.view3_total_infer_time / self.view3_infer_count
+                self.view3_avg_fps = 1000.0 / self.view3_avg_infer_time if self.view3_avg_infer_time > 0 else 0.0
             except Exception as e:
-                print(f"[VIEW1 ERROR] {e}")
+                print(f"[VIEW3 ERROR] {e}")
                 continue
             result = postprocessing_cpu(output, frame, w, h)
-            if not self.view1_result_queue.full():
-                self.view1_result_queue.put(result)
+            if not self.view3_result_queue.full():
+                self.view3_result_queue.put(result)
 
     def update_yolo_display(self, pixmap):
         self.view1.setPixmap(pixmap)  # view1 was previously yolo_label
 
-    def display_view1_frames(self):
+    def display_view3_frames(self):
         while not self.shutdown_flag.is_set():
             try:
-                result = self.view1_result_queue.get(timeout=1)
+                result = self.view3_result_queue.get(timeout=1)
             except queue.Empty:
                 continue
             pixmap = convert_cv_qt(result)
-            self.model_signals.update_view1_display.emit(pixmap)
+            self.model_signals.update_view3_display.emit(pixmap)
 
-    def update_view1_display(self, pixmap):
+    def update_view3_display(self, pixmap):
         self.view3.setPixmap(pixmap)  # view3 was previously view1
 
-    def process_view2_frames(self):
+    def process_view4_frames(self):
         if not self.resnet_images:
             return
         while not self.shutdown_flag.is_set():
-            if self.view2_index >= len(self.resnet_images):
-                self.view2_index = 0
-            img_path = self.resnet_images[self.view2_index]
+            if self.view4_index >= len(self.resnet_images):
+                self.view4_index = 0
+            img_path = self.resnet_images[self.view4_index]
             img = cv2.imread(img_path)
-            self.view2_index += 1
+            self.view4_index += 1
             if img is None:
                 continue
             input_tensor = preprocess_resnet(img)
 
-            if not hasattr(self, 'view2_session') or self.view2_session is None:
+            if not hasattr(self, 'view4_session') or self.view4_session is None:
                 continue
 
             try:
                 infer_start = time.time()
-                output = self.view2_session.run(None, {"data": input_tensor})
+                output = self.view4_session.run(None, {"data": input_tensor})
                 infer_end = time.time()
                 infer_time_ms = (infer_end - infer_start) * 1000.0
                 
-                # Update View2 (ResNet CPU) statistics
-                self.view2_total_infer_time += infer_time_ms
-                self.view2_infer_count += 1
-                self.view2_avg_infer_time = self.view2_total_infer_time / self.view2_infer_count
-                self.view2_avg_fps = 1000.0 / self.view2_avg_infer_time if self.view2_avg_infer_time > 0 else 0.0
+                # Update View4 (ResNet CPU) statistics
+                self.view4_total_infer_time += infer_time_ms
+                self.view4_infer_count += 1
+                self.view4_avg_infer_time = self.view4_total_infer_time / self.view4_infer_count
+                self.view4_avg_fps = 1000.0 / self.view4_avg_infer_time if self.view4_avg_infer_time > 0 else 0.0
             except Exception as e:
-                print(f"[View2 ERROR] {e}")
+                print(f"[View4 ERROR] {e}")
                 continue
             class_id = int(np.argmax(output[0]))
             class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
             cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-            if not self.view2_result_queue.full():
-                self.view2_result_queue.put(img)
+            if not self.view4_result_queue.full():
+                self.view4_result_queue.put(img)
 
-    def display_view2_frames(self):
+    def display_view4_frames(self):
         while not self.shutdown_flag.is_set():
             try:
-                result = self.view2_result_queue.get(timeout=1)
+                result = self.view4_result_queue.get(timeout=1)
             except queue.Empty:
                 continue
             pixmap = convert_cv_qt(result)
-            self.model_signals.update_view2_display.emit(pixmap)
+            self.model_signals.update_view4_display.emit(pixmap)
 
-    def update_view2_display(self, pixmap):
+    def update_view4_display(self, pixmap):
         self.view4.setPixmap(pixmap)  # view4 was previously view2
 
     def update_resnet_display(self, pixmap):
@@ -708,8 +717,8 @@ class UnifiedViewer(QMainWindow):
         load1, load5, load15 = current["Load_Average"]
         
         # Calculate total average FPS (total throughput)
-        total_fps = (self.yolo_avg_fps + self.resnet_avg_fps + self.view1_avg_fps + self.view2_avg_fps)
-        total_avg_fps = (self.yolo_avg_fps + self.resnet_avg_fps + self.view1_avg_fps + self.view2_avg_fps)/4
+        total_fps = (self.yolo_avg_fps + self.resnet_avg_fps + self.view3_avg_fps + self.view4_avg_fps)
+        total_avg_fps = (self.yolo_avg_fps + self.resnet_avg_fps + self.view3_avg_fps + self.view4_avg_fps)/4
 
         self.model_performance_label.setText(
             f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
@@ -720,11 +729,11 @@ class UnifiedViewer(QMainWindow):
             f"<span style='color: purple;'>{self.resnet_avg_fps:.1f}</span> "
             f"(<span style='color: purple;'>{self.resnet_avg_infer_time:.1f} ms</span>)<br>"
             f"<b><span style='color: green;'>View3 (YOLO CPU)</span></b> Avg FPS: "
-            f"<span style='color: green;'>{self.view1_avg_fps:.1f}</span> "
-            f"(<span style='color: green;'>{self.view1_avg_infer_time:.1f} ms</span>)<br>"
+            f"<span style='color: green;'>{self.view3_avg_fps:.1f}</span> "
+            f"(<span style='color: green;'>{self.view3_avg_infer_time:.1f} ms</span>)<br>"
             f"<b><span style='color: blue;'>View4 (ResNet CPU)</span></b> Avg FPS: "
-            f"<span style='color: blue;'>{self.view2_avg_fps:.1f}</span> "
-            f"(<span style='color: blue;'>{self.view2_avg_infer_time:.1f} ms</span>)"
+            f"<span style='color: blue;'>{self.view4_avg_fps:.1f}</span> "
+            f"(<span style='color: blue;'>{self.view4_avg_infer_time:.1f} ms</span>)"
         )
 
         self.cpu_info_label.setText(
