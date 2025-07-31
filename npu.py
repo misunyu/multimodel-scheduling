@@ -28,39 +28,55 @@ def send_receive_data_npu(driver, input_data, input_size):
     assert driver.Launch() == 0
     return driver.ReceiveOutputs()
 
-def yolo_prepare_onnx_model(yolo_target_model):
-    front_input_names = ["input"]
-    front_output_names = ["input_quantized"]
-    target_dequant_layer_name = [
+def yolo_prepare_onnx_model(
+    target_model,
+    front_input_names=["input"],
+    front_output_names=["input_quantized"],
+    target_dequant_layer_name=[
         "onnx::Transpose_684_DequantizeLinear",
         "onnx::Transpose_688_DequantizeLinear",
         "onnx::Transpose_692_DequantizeLinear",
-    ]
-    back_input_names = [
+    ],
+    back_input_names=[
         "onnx::Transpose_684",
         "onnx::Transpose_688",
         "onnx::Transpose_692",
-    ]
-    back_output_names = ["dets", "labels"]
+    ],
+    back_output_names=["dets", "labels"],
+):
+    ## Prepare quantize layer(front model), postprocess layers(back model) and scale factors of dequant layers
 
-    onnx_model = onnx.load(yolo_target_model)
+    onnx_model = onnx.load(target_model)
     onnx.checker.check_model(onnx_model)
-    front_output_path = yolo_target_model + ".front"
-    back_output_path = yolo_target_model + ".back"
 
-    onnx.utils.extract_model(yolo_target_model, front_output_path, front_input_names, front_output_names)
+    onnx_graph = onnx_model.graph
+    onnx_graph_nodes = onnx_graph.node
+
+    front_output_path = target_model + ".front"
+    back_output_path = target_model + ".back"
+
+    # Get front model
+    onnx.utils.extract_model(
+        target_model, front_output_path, front_input_names, front_output_names
+    )
     front_sess = ort.InferenceSession(front_output_path)
 
-    scale, zero_point = {}, {}
-    for node in onnx_model.graph.node:
+    # Get scale factor
+    scale = {}
+    zero_point = {}
+    for idx, node in enumerate(onnx_graph_nodes):
         if node.name in target_dequant_layer_name:
-            for init in onnx_model.graph.initializer:
-                if init.name == node.input[1]:
-                    scale[node.name] = onnx.numpy_helper.to_array(init)
-                elif init.name == node.input[2]:
-                    zero_point[node.name] = onnx.numpy_helper.to_array(init)
+            factors = onnx_model.graph.initializer
+            for idx, init in enumerate(factors):
+                if factors[idx].name == node.input[1]:
+                    scale[node.name] = onnx.numpy_helper.to_array(factors[idx])
+                elif factors[idx].name == node.input[2]:
+                    zero_point[node.name] = onnx.numpy_helper.to_array(factors[idx])
 
-    onnx.utils.extract_model(yolo_target_model, back_output_path, back_input_names, back_output_names)
+    # Get back model
+    onnx.utils.extract_model(
+        target_model, back_output_path, back_input_names, back_output_names
+    )
     back_sess = ort.InferenceSession(back_output_path)
 
     return front_sess, back_sess, (scale, zero_point)
@@ -100,7 +116,7 @@ def resnet50_preprocess(img):
     return image_data
 
 def yolo_process_frame_driver():
-    driver = initialize_driver(0, "./yolov3_half.o")
+    driver = initialize_driver(0, "models/yolov3_big/npu_code/yolov3_half.o")
     img = cv2.imread("../yolov3/dog.jpg")
     front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
         "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"

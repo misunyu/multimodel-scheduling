@@ -22,7 +22,7 @@ class ModelSignals(QObject):
     update_yolo_display = pyqtSignal(QPixmap)
     update_view1_display = pyqtSignal(QPixmap)
     update_view2_display = pyqtSignal(QPixmap)  # ✅ view2용 시그널 명확히 추가
-
+    update_resnet_display = pyqtSignal(QPixmap)
 
 LOG_DIR = "./logs"
 MAX_LOG_ENTRIES = 500
@@ -121,12 +121,9 @@ def draw_detections(img, box, score, class_id):
     cv2.rectangle(img, (x, y - text_height - 4), (x + text_width, y), color, -1)
     cv2.putText(img, label, (x, y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
-# def draw_detections(img, box, score, class_id):
-#     class_name = coco_classes[class_id] if class_id < len(coco_classes) else f"ID:{class_id}"
-#     label = f"{class_name} {score:.2f}"
-#     x, y, w, h = box
-#     cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-#     cv2.putText(img, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    # print(f"[YOLO DRAW] x={x}, y={y}, w={w}, h={h}, score={score:.2f}, class_id={class_id}")
+
+
 
 def postprocessing_cpu(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
     output_data = np.squeeze(output[0])
@@ -155,6 +152,7 @@ def postprocessing_cpu(output, original_img, img_width, img_height, confidence_t
             draw_detections(original_img, boxes[i], scores[i], class_ids[i])
     return original_img
 
+
 def postprocessing_npu(
     output, original_img, img_width, img_height,
     confidence_thres=0.5, iou_thres=0.5
@@ -176,56 +174,28 @@ def postprocessing_npu(
             height = int((bottom - top) * y_factor)
             left = int(left * x_factor)
             top = int(top * y_factor)
+
+            # 이상한 bbox 값 걸러내기
+            if width <= 0 or height <= 0 or width > 2000 or height > 2000:
+                continue
+            if left < -100 or top < -100 or left > 3000 or top > 3000:
+                continue
+
             boxes.append([left, top, width, height])
             scores.append(conf)
             class_ids.append(int(output_label[i]))
 
-    indices = cv2.dnn.NMSBoxes(boxes, scores, confidence_thres, iou_thres)
+    valid_indices = cv2.dnn.NMSBoxes(boxes, scores, confidence_thres, iou_thres)
+    drawn_boxes = []
 
-    if indices is not None and len(indices) > 0:
-        for idx in indices:
+    if valid_indices is not None and len(valid_indices) > 0:
+        for idx in valid_indices:
             i = int(idx) if isinstance(idx, (int, np.integer)) else int(idx[0])
             draw_detections(original_img, boxes[i], scores[i], class_ids[i])
+            drawn_boxes.append(boxes[i])
 
-    return original_img
+    return original_img, drawn_boxes  # 🟡 drawn_boxes 리스트 추가 반환
 
-# def postprocessing_npu(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
-#     """
-#     Process YOLO detection outputs and draw bounding boxes on the image.
-#     Based on the postprocessing function from cert_single_yolo_group_infer.py.
-#     """
-#     output_box = np.squeeze(output[0])
-#     output_label = np.squeeze(output[1])
-#
-#     print(f"output_box shape: {output_box.shape}, output_label shape: {output_label.shape}")
-#     print(f"First few scores: {[output_box[i][4] for i in range(min(5, len(output_box)))]}")
-#
-#     rows = output_box.shape[0]
-#     boxes, scores, class_ids = [], [], []
-#
-#     x_factor = img_width / input_width
-#     y_factor = img_height / input_height
-#
-#     for i in range(rows):
-#         conf = output_box[i][4]
-#         if conf >= confidence_thres:
-#             left, top, right, bottom = output_box[i][:4]
-#             width = int((right - left) * x_factor)
-#             height = int((bottom - top) * y_factor)
-#             left = int(left * x_factor)
-#             top = int(top * y_factor)
-#             boxes.append([left, top, width, height])
-#             scores.append(conf)
-#             class_ids.append(int(output_label[i]))
-#
-#     indices = cv2.dnn.NMSBoxes(boxes, scores, confidence_thres, iou_thres)
-#
-#     if indices is not None and len(indices) > 0:
-#         for idx in indices:
-#             i = int(idx) if isinstance(idx, (int, np.integer)) else int(idx[0])
-#             draw_detections(original_img, boxes[i], scores[i], class_ids[i])
-#
-#     return original_img
 
 def convert_cv_qt(cv_img):
     if cv_img is None or cv_img.size == 0:
@@ -269,8 +239,8 @@ class UnifiedViewer(QMainWindow):
         self.model_signals = ModelSignals()
         self.model_signals.update_yolo_display.connect(self.update_yolo_display)
         self.model_signals.update_view1_display.connect(self.update_view1_display)
-        # self.model_signals.update_view2_display = pyqtSignal(QPixmap)  # 시그널 동적 생성
         self.model_signals.update_view2_display.connect(self.update_view2_display)
+        self.model_signals.update_resnet_display.connect(self.update_resnet_display)
 
         # Initialize ONNX sessions with error handling
         try:
@@ -324,14 +294,14 @@ class UnifiedViewer(QMainWindow):
             
         # Initialize YOLO NPU front and back sessions
         try:
-            self.yolo_front_session = ort.InferenceSession("./models/yolov3_big/partitions/yolov3_big_neubla_p0.onnx")
+            self.yolo_front_session = ort.InferenceSession("./models/yolov3_small/partitions/yolov3_small_neubla_p0.onnx")
             print("YOLO NPU front session initialized successfully")
         except Exception as e:
             print(f"[YOLO NPU Front Session ERROR] {e}")
             self.yolo_front_session = None
             
         try:
-            self.yolo_back_session = ort.InferenceSession("./models/yolov3_big/partitions/yolov3_big_neubla_p2.onnx")
+            self.yolo_back_session = ort.InferenceSession("./models/yolov3_small/partitions/yolov3_small_neubla_p2.onnx")
             print("YOLO NPU back session initialized successfully")
         except Exception as e:
             print(f"[YOLO NPU Back Session ERROR] {e}")
@@ -365,6 +335,7 @@ class UnifiedViewer(QMainWindow):
         self.view1_frame_queue = queue.Queue(maxsize=5)
         self.view1_result_queue = queue.Queue(maxsize=5)
         self.view2_result_queue = queue.Queue(maxsize=5)
+        self.resnet_result_queue = queue.Queue(maxsize=5)
         self.shutdown_flag = threading.Event()
 
         threading.Thread(target=self.capture_frames, daemon=True).start()
@@ -379,6 +350,7 @@ class UnifiedViewer(QMainWindow):
         threading.Thread(target=self.display_yolo_frames, daemon=True).start()
         threading.Thread(target=self.display_view1_frames, daemon=True).start()
         threading.Thread(target=self.display_view2_frames, daemon=True).start()
+        threading.Thread(target=self.display_resnet_frames, daemon=True).start()
 
         self.cpu_timer = QTimer()
         self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
@@ -445,16 +417,22 @@ class UnifiedViewer(QMainWindow):
 
         event.accept()
 
-
     def capture_frames(self):
+        # 동영상 FPS 가져오기
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+        frame_delay = 1.0 / fps if fps > 0 else 1.0 / 30.0  # fallback to 30fps
+
         while not self.shutdown_flag.is_set():
             success, frame = self.cap.read()
             if not success:
                 continue
+
             if not self.yolo_frame_queue.full():
                 self.yolo_frame_queue.put(frame.copy())
             if not self.view1_frame_queue.full():
                 self.view1_frame_queue.put(frame)
+
+            time.sleep(frame_delay)  # ✅ 설정된 fps에 맞춰 재생
 
     def update_stats(self, model_name, current_infer_time):
         """모델별 평균 FPS 및 추론 시간 갱신 및 로그 기록"""
@@ -496,118 +474,11 @@ class UnifiedViewer(QMainWindow):
             if not self.yolo_result_queue.full():
                 self.yolo_result_queue.put((result, current_infer_time))
             self.update_stats("yolov3_big", current_infer_time)
-            
-    # def process_yolo_frames_npu(self, front_sess, back_sess):
-    #     # Initialize NPU driver
-    #     try:
-    #         driver = initialize_driver(0, "./models/yolov3_big/npu_code/yolov3_big_neubla_p1.o")
-    #
-    #         # We assume the parameters are already extracted and passed with the sessions
-    #         # For backward compatibility, we'll extract them if needed
-    #         try:
-    #             # Try to use the back session for processing
-    #             # If it fails, we'll fall back to the old method
-    #             if back_sess is None:
-    #                 raise ValueError("Back session is None, falling back to old method")
-    #
-    #             # Parameters needed for post-processing if back_sess can't be used directly
-    #             params = getattr(front_sess, 'params', None)
-    #             if params:
-    #                 # Extract parameters for post-processing if needed
-    #                 pass
-    #         except (ValueError, AttributeError):
-    #             # Fall back to old method if back_sess can't be used
-    #             front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
-    #                 "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
-    #             )
-    #             # Override with the specified model paths from the issue description
-    #             front_sess = ort.InferenceSession("./models/yolov3_big/partitions/yolov3_big_neubla_p0.onnx")
-    #             back_sess = ort.InferenceSession("./models/yolov3_big/partitions/yolov3_big_neubla_p2.onnx")
-    #     except Exception as e:
-    #         print(f"[YOLO NPU ERROR] Failed to initialize NPU: {e}")
-    #         return
-    #
-    #     try:
-    #         while not self.shutdown_flag.is_set():
-    #             try:
-    #                 frame = self.yolo_frame_queue.get(timeout=1)
-    #             except queue.Empty:
-    #                 continue
-    #
-    #             # Preprocess the frame
-    #             input_tensor, (w, h) = preprocess_yolo(frame)
-    #
-    #             # Run the front session
-    #             infer_start = time.time()
-    #             try:
-    #                 front_output = front_sess.run(None, {"input": input_tensor})[0]
-    #
-    #                 # Send to NPU
-    #                 raw_outputs = send_receive_data_npu(driver, front_output.tobytes(), 3 * 608 * 608)
-    #
-    #                 print("Raw output lengths:", [len(out) for out in raw_outputs])
-    #                 print("First few values (raw):", raw_outputs[0][:10])
-    #
-    #                 # Process NPU outputs
-    #                 output_data = [np.frombuffer(out, dtype=np.uint8) for out in raw_outputs]
-    #
-    #                 # Dequantize outputs if needed
-    #                 if 'scale' in locals() and 'zero_point' in locals():
-    #                     output_dequant_data = [
-    #                         (data.astype(np.float32) - zero_point[name]) * scale[name]
-    #                         for name, data in zip(scale.keys(), output_data)
-    #                     ]
-    #
-    #                     # Prepare inputs for back session
-    #                     back_feeds = {
-    #                         "onnx::Transpose_684": (
-    #                             output_dequant_data[0][: 255 * 19 * 19]
-    #                         ).reshape(1, 255, 19, 19),
-    #                         "onnx::Transpose_688": (
-    #                             output_dequant_data[1][: 255 * 38 * 38]
-    #                         ).reshape(1, 255, 38, 38),
-    #                         "onnx::Transpose_692": (
-    #                             output_dequant_data[2][: 255 * 76 * 76]
-    #                         ).reshape(1, 255, 76, 76),
-    #                     }
-    #
-    #                     print("Dequantization scales:", scale.keys())
-    #                     print("First dequant value sample:", output_dequant_data[0].flatten()[:10])
-    #
-    #                     # Run back session
-    #                     output = back_sess.run(None, back_feeds)
-    #                 else:
-    #                     # If we don't have scale and zero_point, we'll need to handle this differently
-    #                     # This is a placeholder for custom processing
-    #                     output = [np.zeros((1, 100, 7)), np.zeros((1, 100))]
-    #
-    #             except Exception as e:
-    #                 print(f"[YOLO NPU ERROR] {e}")
-    #                 continue
-    #
-    #             infer_end = time.time()
-    #
-    #             # Postprocess the results using the new postprocessing function
-    #             result = postprocessing_npu(output, frame, w, h)
-    #             current_infer_time = (infer_end - infer_start) * 1000.0
-    #
-    #             # if not self.yolo_result_queue.full():
-    #             #     self.yolo_result_queue.put((result, current_infer_time))
-    #             if self.yolo_result_queue.full():
-    #                 print("[WARNING] YOLO result queue is full.")
-    #             else:
-    #                 self.yolo_result_queue.put((result, current_infer_time))
-    #
-    #             # self.update_stats("yolov3_big_npu", current_infer_time)
-    #             self.update_stats("yolov3_big", current_infer_time)
-    #
-    #     finally:
-    #         close_driver(driver)
 
     def process_yolo_frames_npu(self, front_sess, back_sess):
         try:
             # 1. 드라이버 초기화
-            driver = initialize_driver(0, "./models/yolov3_big/npu_code/yolov3_big_neubla_p1.o")
+            driver = initialize_driver(0, "models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
 
             # 2. scale/zero_point 준비
             front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
@@ -620,14 +491,15 @@ class UnifiedViewer(QMainWindow):
                 except queue.Empty:
                     continue
 
-                # 3. 전처리 및 front session 실행
                 input_tensor, (w, h) = preprocess_yolo(frame)
                 infer_start = time.time()
+
                 try:
+                    # 3. Front session 실행
                     front_output = front_sess.run(None, {"input": input_tensor})[0]
                     input_data = front_output.tobytes()
 
-                    # 4. NPU 전송
+                    # 4. NPU 전송 및 수신
                     send_result = send_receive_data_npu(driver, input_data, 3 * 608 * 608)
                     raw_outputs = send_result  # 3개의 uint8 버퍼
 
@@ -643,14 +515,13 @@ class UnifiedViewer(QMainWindow):
                         )
                     ]
 
-                    # 6. back session 입력 구성
+                    # 6. Back session 실행
                     back_feeds = {
-                        "onnx::Transpose_684": output_dequant_data[0][: 255 * 19 * 19].reshape(1, 255, 19, 19),
-                        "onnx::Transpose_688": output_dequant_data[1][: 255 * 38 * 38].reshape(1, 255, 38, 38),
-                        "onnx::Transpose_692": output_dequant_data[2][: 255 * 76 * 76].reshape(1, 255, 76, 76),
+                        "onnx::Transpose_684": output_dequant_data[0][:255 * 19 * 19].reshape(1, 255, 19, 19),
+                        "onnx::Transpose_688": output_dequant_data[1][:255 * 38 * 38].reshape(1, 255, 38, 38),
+                        "onnx::Transpose_692": output_dequant_data[2][:255 * 76 * 76].reshape(1, 255, 76, 76),
                     }
 
-                    # 7. back session 실행
                     output = back_sess.run(None, back_feeds)
 
                 except Exception as e:
@@ -659,16 +530,87 @@ class UnifiedViewer(QMainWindow):
 
                 infer_end = time.time()
 
-                # 8. 후처리 및 화면 표시
-                result = postprocessing_npu(output, frame, w, h)
-                current_infer_time = (infer_end - infer_start) * 1000.0
+                # 7. 후처리 및 bbox 필터링
+                result_img, drawn_boxes = postprocessing_npu(output, frame, w, h)
 
-                if not self.yolo_result_queue.full():
-                    self.yolo_result_queue.put((result, current_infer_time))
-                self.update_stats("yolov3_big", current_infer_time)
+                # 8. 유효한 bbox가 있을 때만 화면 출력
+                if drawn_boxes:
+                    current_infer_time = (infer_end - infer_start) * 1000.0
+                    if not self.yolo_result_queue.full():
+                        self.yolo_result_queue.put((result_img, current_infer_time))
+                    self.update_stats("yolov3_big", current_infer_time)
 
         finally:
             close_driver(driver)
+
+    # def process_yolo_frames_npu(self, front_sess, back_sess):
+    #     try:
+    #         # 1. 드라이버 초기화
+    #         driver = initialize_driver(0, "models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+    #         # driver = initialize_driver(0, "../yolov3/yolov3_half.o")
+    #
+    #         # 2. scale/zero_point 준비
+    #         front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
+    #             "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+    #         )
+    #
+    #         while not self.shutdown_flag.is_set():
+    #             try:
+    #                 frame = self.yolo_frame_queue.get(timeout=1)
+    #             except queue.Empty:
+    #                 continue
+    #
+    #             # 3. 전처리 및 front session 실행
+    #             input_tensor, (w, h) = preprocess_yolo(frame)
+    #             infer_start = time.time()
+    #             try:
+    #                 front_output = front_sess.run(None, {"input": input_tensor})[0]
+    #                 input_data = front_output.tobytes()
+    #
+    #                 # 4. NPU 전송
+    #                 send_result = send_receive_data_npu(driver, input_data, 3 * 608 * 608)
+    #                 raw_outputs = send_result  # 3개의 uint8 버퍼
+    #
+    #                 # 5. dequantization
+    #                 output_data = [np.frombuffer(buf, dtype=np.uint8) for buf in raw_outputs]
+    #                 output_dequant_data = [
+    #                     (data.astype(np.float32) - zero_point[name]) * scale[name]
+    #                     for name, data in zip(
+    #                         ["onnx::Transpose_684_DequantizeLinear",
+    #                          "onnx::Transpose_688_DequantizeLinear",
+    #                          "onnx::Transpose_692_DequantizeLinear"],
+    #                         output_data
+    #                     )
+    #                 ]
+    #
+    #                 # 6. back session 입력 구성
+    #                 back_feeds = {
+    #                     "onnx::Transpose_684": output_dequant_data[0][: 255 * 19 * 19].reshape(1, 255, 19, 19),
+    #                     "onnx::Transpose_688": output_dequant_data[1][: 255 * 38 * 38].reshape(1, 255, 38, 38),
+    #                     "onnx::Transpose_692": output_dequant_data[2][: 255 * 76 * 76].reshape(1, 255, 76, 76),
+    #                 }
+    #
+    #                 # 7. back session 실행
+    #                 output = back_sess.run(None, back_feeds)
+    #
+    #             except Exception as e:
+    #                 print(f"[YOLO NPU ERROR] {e}")
+    #                 continue
+    #
+    #             infer_end = time.time()
+    #
+    #             # 8. 후처리 및 화면 표시
+    #             result = postprocessing_npu(output, frame, w, h)
+    #
+    #             current_infer_time = (infer_end - infer_start) * 1000.0
+    #
+    #             if not self.yolo_result_queue.full():
+    #                 self.yolo_result_queue.put((result, current_infer_time))
+    #             self.update_stats("yolov3_big", current_infer_time)
+    #             # time.sleep(0.1)
+    #
+    #     finally:
+    #         close_driver(driver)
 
     def process_resnet_frames(self):
         if not self.resnet_images:
@@ -701,12 +643,10 @@ class UnifiedViewer(QMainWindow):
             class_id = int(np.argmax(output[0]))
             class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
             cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-            self.resnet_label.setPixmap(convert_cv_qt(img))
 
-            current_infer_time = (infer_end - infer_start) * 1000.0
-            self.update_stats("resnet50", current_infer_time)
-            # time.sleep(0.1)
-            
+            if not self.resnet_result_queue.full():
+                self.resnet_result_queue.put((img, infer_end - infer_start))
+
     def process_resnet_frames_npu(self, front_sess, back_sess):
         if not self.resnet_images:
             return
@@ -844,6 +784,7 @@ class UnifiedViewer(QMainWindow):
             if not self.view1_result_queue.full():
                 self.view1_result_queue.put(result)
 
+
     def display_yolo_frames(self):
         while not self.shutdown_flag.is_set():
             try:
@@ -864,6 +805,17 @@ class UnifiedViewer(QMainWindow):
                 continue
             pixmap = convert_cv_qt(result)
             self.model_signals.update_view1_display.emit(pixmap)
+
+    def display_resnet_frames(self):
+        while not self.shutdown_flag.is_set():
+            try:
+                img, infer_time = self.resnet_result_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            pixmap = convert_cv_qt(img)
+            if pixmap and not pixmap.isNull():
+                self.model_signals.update_resnet_display.emit(pixmap)
+                self.update_stats("resnet50", infer_time * 1000.0)
 
     def update_view1_display(self, pixmap):
         self.view1.setPixmap(pixmap)
@@ -895,7 +847,7 @@ class UnifiedViewer(QMainWindow):
             cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
             if not self.view2_result_queue.full():
                 self.view2_result_queue.put(img)
-            time.sleep(0.1)  # 너무 빠르게 순환되지 않도록 조정
+            time.sleep(0.1)
 
     def display_view2_frames(self):
         while not self.shutdown_flag.is_set():
@@ -909,6 +861,8 @@ class UnifiedViewer(QMainWindow):
     def update_view2_display(self, pixmap):
         self.view2.setPixmap(pixmap)
 
+    def update_resnet_display(self, pixmap):
+        self.resnet_label.setPixmap(pixmap)
 
     def update_cpu_npu_usage(self):
         current = get_cpu_metrics(interval=0)
