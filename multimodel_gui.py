@@ -415,6 +415,15 @@ class UnifiedViewer(QMainWindow):
         self.resnet_infer_count = 0
         self.resnet_avg_infer_time = 0.0
         self.resnet_avg_fps = 0.0
+        # Initialize statistics variables for View1 (YOLO CPU) and View2 (ResNet CPU)
+        self.view1_total_infer_time = 0.0
+        self.view1_infer_count = 0
+        self.view1_avg_infer_time = 0.0
+        self.view1_avg_fps = 0.0
+        self.view2_total_infer_time = 0.0
+        self.view2_infer_count = 0
+        self.view2_avg_infer_time = 0.0
+        self.view2_avg_fps = 0.0
 
         # Initialize images and sessions
         self.resnet_images = [os.path.join("./imagenet-sample-images", f)
@@ -610,7 +619,16 @@ class UnifiedViewer(QMainWindow):
                 continue
 
             try:
+                infer_start = time.time()
                 output = self.view1_session.run(None, {"images": input_tensor})
+                infer_end = time.time()
+                infer_time_ms = (infer_end - infer_start) * 1000.0
+                
+                # Update View1 (YOLO CPU) statistics
+                self.view1_total_infer_time += infer_time_ms
+                self.view1_infer_count += 1
+                self.view1_avg_infer_time = self.view1_total_infer_time / self.view1_infer_count
+                self.view1_avg_fps = 1000.0 / self.view1_avg_infer_time if self.view1_avg_infer_time > 0 else 0.0
             except Exception as e:
                 print(f"[VIEW1 ERROR] {e}")
                 continue
@@ -650,7 +668,16 @@ class UnifiedViewer(QMainWindow):
                 continue
 
             try:
+                infer_start = time.time()
                 output = self.view2_session.run(None, {"data": input_tensor})
+                infer_end = time.time()
+                infer_time_ms = (infer_end - infer_start) * 1000.0
+                
+                # Update View2 (ResNet CPU) statistics
+                self.view2_total_infer_time += infer_time_ms
+                self.view2_infer_count += 1
+                self.view2_avg_infer_time = self.view2_total_infer_time / self.view2_infer_count
+                self.view2_avg_fps = 1000.0 / self.view2_avg_infer_time if self.view2_avg_infer_time > 0 else 0.0
             except Exception as e:
                 print(f"[View2 ERROR] {e}")
                 continue
@@ -683,11 +710,17 @@ class UnifiedViewer(QMainWindow):
         load1, load5, load15 = current["Load_Average"]
 
         self.yolo_info_label.setText(
-            f"<b>YOLO</b> Avg FPS: {self.yolo_avg_fps:.1f} "
-            f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>) | "
-            f"<b><span style='color: purple;'>ResNet</span></b> Avg FPS: "
+            f"<b>YOLO NPU</b> Avg FPS: {self.yolo_avg_fps:.1f} "
+            f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>)<br>"
+            f"<b><span style='color: purple;'>ResNet NPU</span></b> Avg FPS: "
             f"<span style='color: purple;'>{self.resnet_avg_fps:.1f}</span> "
-            f"(<span style='color: purple;'>{self.resnet_avg_infer_time:.1f} ms</span>)"
+            f"(<span style='color: purple;'>{self.resnet_avg_infer_time:.1f} ms</span>)<br>"
+            f"<b><span style='color: green;'>View1 (YOLO CPU)</span></b> Avg FPS: "
+            f"<span style='color: green;'>{self.view1_avg_fps:.1f}</span> "
+            f"(<span style='color: green;'>{self.view1_avg_infer_time:.1f} ms</span>)<br>"
+            f"<b><span style='color: blue;'>View2 (ResNet CPU)</span></b> Avg FPS: "
+            f"<span style='color: blue;'>{self.view2_avg_fps:.1f}</span> "
+            f"(<span style='color: blue;'>{self.view2_avg_infer_time:.1f} ms</span>)"
         )
 
         self.cpu_info_label.setText(
