@@ -13,9 +13,8 @@ import queue
 import threading
 import json
 from datetime import datetime
-import npu
 from npu import initialize_driver, close_driver, send_receive_data_npu, resnet50_prepare_onnx_model, resnet50_preprocess, yolo_prepare_onnx_model, yolo_preprocess
-
+from multiprocessing import Process, Queue, Event
 
 
 class ModelSignals(QObject):
@@ -223,6 +222,147 @@ def get_cpu_metrics(interval=0):
         "Interrupts": interrupts
     }
 
+def run_resnet_npu_process(image_dir, output_queue, shutdown_event):
+    try:
+        image_files = [os.path.join(image_dir, f)
+                       for f in os.listdir(image_dir)
+                       if f.lower().endswith(('jpg', 'jpeg', 'png'))]
+        if not image_files:
+            print("[ResNet NPU] No images found")
+            return
+
+        front_sess, back_sess, params = resnet50_prepare_onnx_model(
+            "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
+        )
+
+        scale = params['/0/avgpool/GlobalAveragePool_output_0_scale'] * params['0.fc.weight_scale']
+        zp_act = params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
+        zp_w = params['0.fc.weight_zero_point']
+        scale_out = params['/0/fc/Gemm_output_0_scale']
+        zp_out = params['/0/fc/Gemm_output_0_zero_point']
+        weight_q = params['0.fc.weight_quantized'].T.astype(np.int32)
+
+        driver = initialize_driver(1, "./models/resnet50/npu_code/resnet50_neubla_p1.o")
+
+        index = 0
+        while not shutdown_event.is_set():
+            if index >= len(image_files):
+                index = 0
+
+            img = cv2.imread(image_files[index])
+            index += 1
+            if img is None:
+                continue
+
+            infer_start = time.time()
+            input_data = front_sess.run(None, {"input": resnet50_preprocess(img)})[0].tobytes()
+            raw_outputs = send_receive_data_npu(driver, input_data, 3 * 224 * 224)
+            output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
+
+            try:
+                back_output = back_sess.run(None, {"input": output_data.reshape(1, -1)})
+                output = back_output[0]
+                max_index = int(np.argmax(output))
+            except Exception as e:
+                output = np.matmul(output_data.astype(np.int32), weight_q)
+                output -= zp_act * np.sum(weight_q, axis=0)
+                output -= zp_w * np.sum(output_data, axis=0)
+                output += zp_act * zp_w
+                output = np.round(output * scale / scale_out) + zp_out
+                output = output.astype(np.uint8)
+                max_index = int(np.argmax(output))
+
+            infer_end = time.time()
+            class_name = f"Class ID: {max_index}"
+            cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+            output_queue.put((img, class_name, (infer_end - infer_start) * 1000.0))
+
+    except Exception as e:
+        print(f"[ResNet NPU Process ERROR] {e}")
+    finally:
+        close_driver(driver)
+
+def run_yolo_npu_process(video_path, output_queue, shutdown_event):
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"[YOLO NPU Process] Failed to open video: {video_path}")
+            return
+
+        # 세션 및 quantization 파라미터 준비
+        front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
+            "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+        )
+
+        driver = initialize_driver(0, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_delay = 1.0 / fps if fps > 0 else 1.0 / 30.0
+
+        while not shutdown_event.is_set():
+            success, frame = cap.read()
+            if not success:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+
+            input_tensor, (w, h) = preprocess_yolo(frame)
+            infer_start = time.time()
+
+            try:
+                front_output = front_sess.run(None, {"input": input_tensor})[0]
+                input_data = front_output.tobytes()
+
+                raw_outputs = send_receive_data_npu(driver, input_data, 3 * 608 * 608)
+                output_data = [np.frombuffer(buf, dtype=np.uint8) for buf in raw_outputs]
+
+                output_dequant_data = [
+                    (data.astype(np.float32) - zero_point[name]) * scale[name]
+                    for name, data in zip(
+                        ["onnx::Transpose_684_DequantizeLinear",
+                         "onnx::Transpose_688_DequantizeLinear",
+                         "onnx::Transpose_692_DequantizeLinear"],
+                        output_data
+                    )
+                ]
+
+                # ✅ 안전한 reshape을 위한 정보
+                shape_dict = {
+                    "onnx::Transpose_684": (1, 255, 19, 19),
+                    "onnx::Transpose_688": (1, 255, 38, 38),
+                    "onnx::Transpose_692": (1, 255, 76, 76),
+                }
+
+                back_feeds = {}
+                for name, data in zip(shape_dict.keys(), output_dequant_data):
+                    needed_size = np.prod(shape_dict[name])
+                    if data.size < needed_size:
+                        print(f"[YOLO NPU ERROR] insufficient data for {name}, expected {needed_size}, got {data.size}")
+                        raise ValueError("Invalid data size")
+                    back_feeds[name] = data[:needed_size].reshape(shape_dict[name])
+
+                output = back_sess.run(None, back_feeds)
+
+            except Exception as e:
+                print(f"[YOLO NPU ERROR] {e}")
+                continue
+
+            infer_end = time.time()
+
+            result_img, drawn_boxes = postprocessing_npu(output, frame, w, h)
+
+            if drawn_boxes:
+                infer_time_ms = (infer_end - infer_start) * 1000.0
+                output_queue.put((result_img, infer_time_ms))
+
+            time.sleep(frame_delay)
+
+    except Exception as e:
+        print(f"[YOLO NPU Process ERROR] {e}")
+
+    finally:
+        cap.release()
+        close_driver(driver)
+
 class UnifiedViewer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -338,13 +478,18 @@ class UnifiedViewer(QMainWindow):
         self.resnet_result_queue = queue.Queue(maxsize=5)
         self.shutdown_flag = threading.Event()
 
+        self.yolo_output_queue = Queue(maxsize=5)
+        self.resnet_output_queue = Queue(maxsize=5)
+        self.yolo_shutdown_event = Event()
+        self.resnet_shutdown_event = Event()
+
         threading.Thread(target=self.capture_frames, daemon=True).start()
         # threading.Thread(target=self.process_yolo_frames, daemon=True).start()
-        threading.Thread(target=self.process_resnet_frames, daemon=True).start()
+        # threading.Thread(target=self.process_resnet_frames, daemon=True).start()
         # threading.Thread(target=lambda: self.process_resnet_frames_npu(self.resnet_front_session, self.resnet_back_session), daemon=True).start()
         # threading.Thread(target=lambda: self.process_resnet_frames_npu(self.resnet_front_session, None), daemon=True).start()
         # Start YOLO NPU processing thread
-        threading.Thread(target=lambda: self.process_yolo_frames_npu(self.yolo_front_session, self.yolo_back_session), daemon=True).start()
+        # threading.Thread(target=lambda: self.process_yolo_frames_npu(self.yolo_front_session, self.yolo_back_session), daemon=True).start()
         threading.Thread(target=self.process_view1_frames, daemon=True).start()
         threading.Thread(target=self.process_view2_frames, daemon=True).start()
         threading.Thread(target=self.display_yolo_frames, daemon=True).start()
@@ -352,14 +497,87 @@ class UnifiedViewer(QMainWindow):
         threading.Thread(target=self.display_view2_frames, daemon=True).start()
         threading.Thread(target=self.display_resnet_frames, daemon=True).start()
 
+        self.yolo_process = Process(
+            target=run_yolo_npu_process,
+            args=(
+                "./stockholm_1280x720.mp4",
+                self.yolo_output_queue,
+                self.yolo_shutdown_event
+            ),
+        )
+        self.yolo_process.start()
+
+        # ResNet NPU 프로세스 시작
+        self.resnet_process = Process(
+            target=run_resnet_npu_process,
+            args=(
+                "./imagenet-sample-images",
+                self.resnet_output_queue,
+                self.resnet_shutdown_event
+            ),
+        )
+        self.resnet_process.start()
+        # 결과 디스플레이 스레드
+        threading.Thread(target=self.display_yolo_frames_from_process, daemon=True).start()
+        threading.Thread(target=self.display_resnet_frames_from_process, daemon=True).start()
+
         self.cpu_timer = QTimer()
         self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
         self.cpu_timer.start(1000)
+
+    def display_yolo_frames_from_process(self):
+        while not self.shutdown_flag.is_set():
+            try:
+                frame, infer_time = self.yolo_output_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            pixmap = convert_cv_qt(frame)
+            if not pixmap.isNull():
+                self.model_signals.update_yolo_display.emit(pixmap)
+                self.update_stats("yolov3_big", infer_time)
+
+    def display_resnet_frames_from_process(self):
+        while not self.shutdown_flag.is_set():
+            try:
+                frame, class_name, infer_time = self.resnet_output_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            pixmap = convert_cv_qt(frame)
+            if not pixmap.isNull():
+                self.model_signals.update_resnet_display.emit(pixmap)
+                self.update_stats("resnet50", infer_time)
 
     def closeEvent(self, event):
         # Set flag to stop all threads
         self.shutdown_flag.set()
         time.sleep(0.2)  # Wait for threads to terminate
+
+        # 2. 프로세스 종료 이벤트 설정
+        try:
+            if hasattr(self, 'yolo_shutdown_event'):
+                self.yolo_shutdown_event.set()
+            if hasattr(self, 'resnet_shutdown_event'):
+                self.resnet_shutdown_event.set()
+        except Exception as e:
+            print(f"[Shutdown Event ERROR] {e}")
+
+        # 3. 프로세스 종료 시도 (join 후 종료 안 되면 강제 종료)
+        try:
+            if hasattr(self, 'yolo_process') and self.yolo_process.is_alive():
+                self.yolo_process.join(timeout=2)
+                if self.yolo_process.is_alive():
+                    print("[YOLO Process] force terminating...")
+                    self.yolo_process.terminate()
+                    self.yolo_process.join()
+
+            if hasattr(self, 'resnet_process') and self.resnet_process.is_alive():
+                self.resnet_process.join(timeout=2)
+                if self.resnet_process.is_alive():
+                    print("[ResNet Process] force terminating...")
+                    self.resnet_process.terminate()
+                    self.resnet_process.join()
+        except Exception as e:
+            print(f"[Process Join/Terminate ERROR] {e}")
 
         # Properly clean up ONNX runtime sessions to prevent errors during termination
         try:
@@ -542,75 +760,6 @@ class UnifiedViewer(QMainWindow):
 
         finally:
             close_driver(driver)
-
-    # def process_yolo_frames_npu(self, front_sess, back_sess):
-    #     try:
-    #         # 1. 드라이버 초기화
-    #         driver = initialize_driver(0, "models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
-    #         # driver = initialize_driver(0, "../yolov3/yolov3_half.o")
-    #
-    #         # 2. scale/zero_point 준비
-    #         front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
-    #             "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
-    #         )
-    #
-    #         while not self.shutdown_flag.is_set():
-    #             try:
-    #                 frame = self.yolo_frame_queue.get(timeout=1)
-    #             except queue.Empty:
-    #                 continue
-    #
-    #             # 3. 전처리 및 front session 실행
-    #             input_tensor, (w, h) = preprocess_yolo(frame)
-    #             infer_start = time.time()
-    #             try:
-    #                 front_output = front_sess.run(None, {"input": input_tensor})[0]
-    #                 input_data = front_output.tobytes()
-    #
-    #                 # 4. NPU 전송
-    #                 send_result = send_receive_data_npu(driver, input_data, 3 * 608 * 608)
-    #                 raw_outputs = send_result  # 3개의 uint8 버퍼
-    #
-    #                 # 5. dequantization
-    #                 output_data = [np.frombuffer(buf, dtype=np.uint8) for buf in raw_outputs]
-    #                 output_dequant_data = [
-    #                     (data.astype(np.float32) - zero_point[name]) * scale[name]
-    #                     for name, data in zip(
-    #                         ["onnx::Transpose_684_DequantizeLinear",
-    #                          "onnx::Transpose_688_DequantizeLinear",
-    #                          "onnx::Transpose_692_DequantizeLinear"],
-    #                         output_data
-    #                     )
-    #                 ]
-    #
-    #                 # 6. back session 입력 구성
-    #                 back_feeds = {
-    #                     "onnx::Transpose_684": output_dequant_data[0][: 255 * 19 * 19].reshape(1, 255, 19, 19),
-    #                     "onnx::Transpose_688": output_dequant_data[1][: 255 * 38 * 38].reshape(1, 255, 38, 38),
-    #                     "onnx::Transpose_692": output_dequant_data[2][: 255 * 76 * 76].reshape(1, 255, 76, 76),
-    #                 }
-    #
-    #                 # 7. back session 실행
-    #                 output = back_sess.run(None, back_feeds)
-    #
-    #             except Exception as e:
-    #                 print(f"[YOLO NPU ERROR] {e}")
-    #                 continue
-    #
-    #             infer_end = time.time()
-    #
-    #             # 8. 후처리 및 화면 표시
-    #             result = postprocessing_npu(output, frame, w, h)
-    #
-    #             current_infer_time = (infer_end - infer_start) * 1000.0
-    #
-    #             if not self.yolo_result_queue.full():
-    #                 self.yolo_result_queue.put((result, current_infer_time))
-    #             self.update_stats("yolov3_big", current_infer_time)
-    #             # time.sleep(0.1)
-    #
-    #     finally:
-    #         close_driver(driver)
 
     def process_resnet_frames(self):
         if not self.resnet_images:
