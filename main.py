@@ -114,14 +114,14 @@ class UnifiedViewer(QWidget):
 
         # -------------------- 상단 영상 뷰어 --------------------
         video_layout = QHBoxLayout()
-        self.yolo_label = QLabel()
-        self.resnet_label = QLabel()
-        self.yolo_label.setFixedSize(640, 480)
-        self.resnet_label.setFixedSize(640, 480)
-        self.yolo_label.setScaledContents(True)
-        self.resnet_label.setScaledContents(True)
-        video_layout.addWidget(self.yolo_label)
-        video_layout.addWidget(self.resnet_label)
+        self.view1_label = QLabel()  # Previously yolo_label
+        self.view2_label = QLabel()  # Previously resnet_label
+        self.view1_label.setFixedSize(640, 480)
+        self.view2_label.setFixedSize(640, 480)
+        self.view1_label.setScaledContents(True)
+        self.view2_label.setScaledContents(True)
+        video_layout.addWidget(self.view1_label)
+        video_layout.addWidget(self.view2_label)
 
         # -------------------- 상단 추론 정보 라벨 (YOLO + ResNet) --------------------
         self.yolo_info_label = QLabel()
@@ -195,7 +195,7 @@ class UnifiedViewer(QWidget):
     def update_yolo(self):
         success, frame = self.cap.read()
         if not success:
-            self.yolo_label.setText("YOLO: No video")
+            self.view1_label.setText("View1 (YOLO): No video")
             return
 
         input_tensor, (w, h) = preprocess_yolo(frame)
@@ -210,7 +210,7 @@ class UnifiedViewer(QWidget):
         infer_end = time.time()
 
         result = postprocessing(output, frame, w, h)
-        self.yolo_label.setPixmap(convert_cv_qt(result))
+        self.view1_label.setPixmap(convert_cv_qt(result))
 
         # 현재 추론 시간
         current_infer_time = (infer_end - infer_start) * 1000.0  # ms
@@ -223,7 +223,7 @@ class UnifiedViewer(QWidget):
 
     def update_resnet(self):
         if not self.resnet_images:
-            self.resnet_label.setText("No images found.")
+            self.view2_label.setText("No images found.")
             return
 
         if self.resnet_index >= len(self.resnet_images):
@@ -232,7 +232,7 @@ class UnifiedViewer(QWidget):
         img_path = self.resnet_images[self.resnet_index]
         img = cv2.imread(img_path)
         if img is None:
-            self.resnet_label.setText(f"Failed to load {img_path}")
+            self.view2_label.setText(f"Failed to load {img_path}")
             return
 
         self.resnet_index += 1
@@ -245,7 +245,7 @@ class UnifiedViewer(QWidget):
         class_id = int(np.argmax(output[0]))
         class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
         cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-        self.resnet_label.setPixmap(convert_cv_qt(img))
+        self.view2_label.setPixmap(convert_cv_qt(img))
 
         # 현재 추론 시간
         current_infer_time = (infer_end - infer_start) * 1000.0  # ms
@@ -264,12 +264,12 @@ class UnifiedViewer(QWidget):
         delta_int = current["Interrupts"] - prev["Interrupts"]
         load1, load5, load15 = current["Load_Average"]
 
-        # ▶ YOLO + ResNet 정보를 한 줄로 통합 출력 (왼쪽 위)
+        # ▶ View1 (YOLO) + View2 (ResNet) 정보를 한 줄로 통합 출력 (왼쪽 위)
         self.yolo_info_label.setText(
-            f"<b>YOLO</b> Avg FPS: {self.yolo_avg_fps:.1f} "
+            f"<b>View1 (YOLO)</b> Avg FPS: {self.yolo_avg_fps:.1f} "
             f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>)"
             f" | "
-            f"<b><span style='color: purple;'>ResNet</span></b> Avg FPS: "
+            f"<b><span style='color: purple;'>View2 (ResNet)</span></b> Avg FPS: "
             f"<span style='color: purple;'>{self.resnet_avg_fps:.1f}</span> "
             f"(<span style='color: purple;'>{self.resnet_avg_infer_time:.1f} ms</span>)"
         )

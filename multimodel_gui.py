@@ -373,10 +373,10 @@ class UnifiedViewer(QMainWindow):
         uic.loadUi("multimodel_display_layout.ui", self)
 
         # UI objects
-        self.yolo_label = self.findChild(QLabel, "yolo_label")
-        self.resnet_label = self.findChild(QLabel, "resnet_label")
-        self.view1 = self.findChild(QLabel, "view1")
-        self.view2 = self.findChild(QLabel, "view2")
+        self.yolo_label = self.findChild(QLabel, "view1")
+        self.resnet_label = self.findChild(QLabel, "view2")
+        self.view1 = self.findChild(QLabel, "view3")
+        self.view2 = self.findChild(QLabel, "view4")
         self.yolo_info_label = self.findChild(QLabel, "yolo_info_label")
         self.cpu_info_label = self.findChild(QLabel, "cpu_info_label")
         self.npu_info_label = self.findChild(QLabel, "npu_info_label")
@@ -637,7 +637,7 @@ class UnifiedViewer(QMainWindow):
                 self.view1_result_queue.put(result)
 
     def update_yolo_display(self, pixmap):
-        self.yolo_label.setPixmap(pixmap)
+        self.yolo_label.setPixmap(pixmap)  # yolo_label now references view1
 
     def display_view1_frames(self):
         while not self.shutdown_flag.is_set():
@@ -700,7 +700,7 @@ class UnifiedViewer(QMainWindow):
         self.view2.setPixmap(pixmap)
 
     def update_resnet_display(self, pixmap):
-        self.resnet_label.setPixmap(pixmap)
+        self.resnet_label.setPixmap(pixmap)  # resnet_label now references view2
 
     def update_cpu_npu_usage(self):
         current = get_cpu_metrics(interval=0)
@@ -710,15 +710,15 @@ class UnifiedViewer(QMainWindow):
         load1, load5, load15 = current["Load_Average"]
 
         self.yolo_info_label.setText(
-            f"<b>YOLO NPU</b> Avg FPS: {self.yolo_avg_fps:.1f} "
+            f"<b>View1 (YOLO NPU)</b> Avg FPS: {self.yolo_avg_fps:.1f} "
             f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: purple;'>ResNet NPU</span></b> Avg FPS: "
+            f"<b><span style='color: purple;'>View2 (ResNet NPU)</span></b> Avg FPS: "
             f"<span style='color: purple;'>{self.resnet_avg_fps:.1f}</span> "
             f"(<span style='color: purple;'>{self.resnet_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: green;'>View1 (YOLO CPU)</span></b> Avg FPS: "
+            f"<b><span style='color: green;'>View3 (YOLO CPU)</span></b> Avg FPS: "
             f"<span style='color: green;'>{self.view1_avg_fps:.1f}</span> "
             f"(<span style='color: green;'>{self.view1_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: blue;'>View2 (ResNet CPU)</span></b> Avg FPS: "
+            f"<b><span style='color: blue;'>View4 (ResNet CPU)</span></b> Avg FPS: "
             f"<span style='color: blue;'>{self.view2_avg_fps:.1f}</span> "
             f"(<span style='color: blue;'>{self.view2_avg_infer_time:.1f} ms</span>)"
         )
