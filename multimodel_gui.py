@@ -113,7 +113,6 @@ def async_log(model_name, infer_time_ms, avg_fps):
     threading.Thread(target=write_log).start()
 
 # Image preprocessing functions
-# Image preprocessing functions
 def preprocess_image(raw_input_img, target_width, target_height):
     img = cv2.cvtColor(raw_input_img, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, (target_width, target_height))
@@ -360,7 +359,6 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event):
                 infer_time_ms = (infer_end - infer_start) * 1000.0
                 output_queue.put((result_img, infer_time_ms))
 
-            time.sleep(frame_delay)
 
     except Exception as e:
         print(f"[YOLO NPU Process ERROR] {e}")
@@ -373,11 +371,11 @@ class UnifiedViewer(QMainWindow):
         uic.loadUi("multimodel_display_layout.ui", self)
 
         # UI objects
-        self.yolo_label = self.findChild(QLabel, "view1")
-        self.resnet_label = self.findChild(QLabel, "view2")
-        self.view1 = self.findChild(QLabel, "view3")
-        self.view2 = self.findChild(QLabel, "view4")
-        self.yolo_info_label = self.findChild(QLabel, "yolo_info_label")
+        self.view1 = self.findChild(QLabel, "view1")
+        self.view2 = self.findChild(QLabel, "view2")
+        self.view3 = self.findChild(QLabel, "view3")
+        self.view4 = self.findChild(QLabel, "view4")
+        self.model_performance_label = self.findChild(QLabel, "model_performance_label")
         self.cpu_info_label = self.findChild(QLabel, "cpu_info_label")
         self.npu_info_label = self.findChild(QLabel, "npu_info_label")
 
@@ -637,7 +635,7 @@ class UnifiedViewer(QMainWindow):
                 self.view1_result_queue.put(result)
 
     def update_yolo_display(self, pixmap):
-        self.yolo_label.setPixmap(pixmap)  # yolo_label now references view1
+        self.view1.setPixmap(pixmap)  # view1 was previously yolo_label
 
     def display_view1_frames(self):
         while not self.shutdown_flag.is_set():
@@ -649,7 +647,7 @@ class UnifiedViewer(QMainWindow):
             self.model_signals.update_view1_display.emit(pixmap)
 
     def update_view1_display(self, pixmap):
-        self.view1.setPixmap(pixmap)
+        self.view3.setPixmap(pixmap)  # view3 was previously view1
 
     def process_view2_frames(self):
         if not self.resnet_images:
@@ -697,10 +695,10 @@ class UnifiedViewer(QMainWindow):
             self.model_signals.update_view2_display.emit(pixmap)
 
     def update_view2_display(self, pixmap):
-        self.view2.setPixmap(pixmap)
+        self.view4.setPixmap(pixmap)  # view4 was previously view2
 
     def update_resnet_display(self, pixmap):
-        self.resnet_label.setPixmap(pixmap)  # resnet_label now references view2
+        self.view2.setPixmap(pixmap)  # view2 was previously resnet_label
 
     def update_cpu_npu_usage(self):
         current = get_cpu_metrics(interval=0)
@@ -708,8 +706,14 @@ class UnifiedViewer(QMainWindow):
         delta_ctx = current["Context_Switches"] - prev["Context_Switches"]
         delta_int = current["Interrupts"] - prev["Interrupts"]
         load1, load5, load15 = current["Load_Average"]
+        
+        # Calculate total average FPS (total throughput)
+        total_fps = (self.yolo_avg_fps + self.resnet_avg_fps + self.view1_avg_fps + self.view2_avg_fps)
+        total_avg_fps = (self.yolo_avg_fps + self.resnet_avg_fps + self.view1_avg_fps + self.view2_avg_fps)/4
 
-        self.yolo_info_label.setText(
+        self.model_performance_label.setText(
+            f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
+            f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>"
             f"<b>View1 (YOLO NPU)</b> Avg FPS: {self.yolo_avg_fps:.1f} "
             f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>)<br>"
             f"<b><span style='color: purple;'>View2 (ResNet NPU)</span></b> Avg FPS: "

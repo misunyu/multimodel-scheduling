@@ -124,10 +124,10 @@ class UnifiedViewer(QWidget):
         video_layout.addWidget(self.view2_label)
 
         # -------------------- 상단 추론 정보 라벨 (YOLO + ResNet) --------------------
-        self.yolo_info_label = QLabel()
-        self.yolo_info_label.setAlignment(Qt.AlignLeft)
-        self.yolo_info_label.setStyleSheet("font-size: 14px; padding: 4px;")
-        self.yolo_info_label.setTextFormat(Qt.RichText)
+        self.model_performance_label = QLabel()
+        self.model_performance_label.setAlignment(Qt.AlignLeft)
+        self.model_performance_label.setStyleSheet("font-size: 14px; padding: 4px;")
+        self.model_performance_label.setTextFormat(Qt.RichText)
 
         # -------------------- CPU / NPU 정보 라벨 --------------------
         self.cpu_info_label = QLabel()
@@ -146,7 +146,7 @@ class UnifiedViewer(QWidget):
         # -------------------- 하단 정보 레이아웃 --------------------
         info_layout = QVBoxLayout()
         info_layout.setSpacing(4)  # YOLO FPS와 CPU info 사이 간격 최소화
-        info_layout.addWidget(self.yolo_info_label)
+        info_layout.addWidget(self.model_performance_label)
         info_layout.addLayout(cpu_npu_layout)
 
         # -------------------- 전체 레이아웃 --------------------
@@ -265,7 +265,7 @@ class UnifiedViewer(QWidget):
         load1, load5, load15 = current["Load_Average"]
 
         # ▶ View1 (YOLO) + View2 (ResNet) 정보를 한 줄로 통합 출력 (왼쪽 위)
-        self.yolo_info_label.setText(
+        self.model_performance_label.setText(
             f"<b>View1 (YOLO)</b> Avg FPS: {self.yolo_avg_fps:.1f} "
             f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>)"
             f" | "
