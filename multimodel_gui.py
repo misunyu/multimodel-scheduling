@@ -6,7 +6,7 @@ import numpy as np
 import psutil
 import onnxruntime as ort
 from PyQt5.QtWidgets import QMainWindow, QLabel
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5 import uic
 import queue
@@ -17,10 +17,10 @@ from npu import initialize_driver, close_driver, send_receive_data_npu, resnet50
 from multiprocessing import Process, Queue, Event
 
 class ModelSignals(QObject):
-    update_yolo_display = pyqtSignal(QPixmap)
+    update_view1_display = pyqtSignal(QPixmap)
     update_view3_display = pyqtSignal(QPixmap)
     update_view4_display = pyqtSignal(QPixmap)
-    update_resnet_display = pyqtSignal(QPixmap)
+    update_view2_display = pyqtSignal(QPixmap)
 
 # Constants
 LOG_DIR = "./logs"
@@ -113,7 +113,7 @@ def async_log(model_name, infer_time_ms, avg_fps):
     threading.Thread(target=write_log).start()
 
 # Image preprocessing functions
-def preprocess_image(raw_input_img, target_width, target_height):
+def image_preprocess(raw_input_img, target_width, target_height):
     img = cv2.cvtColor(raw_input_img, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, (target_width, target_height))
     image_data = np.array(img) / 255.0
@@ -121,15 +121,15 @@ def preprocess_image(raw_input_img, target_width, target_height):
     image_data = np.expand_dims(image_data, axis=0).astype(np.float32)
     return image_data
 
-def preprocess_yolo(raw_input_img):
-    image_data = preprocess_image(raw_input_img, input_width, input_height)
+def yolo_preprocess_local(raw_input_img):
+    image_data = image_preprocess(raw_input_img, input_width, input_height)
     return image_data, (raw_input_img.shape[1], raw_input_img.shape[0])
 
-def preprocess_resnet(raw_input_img):
-    return preprocess_image(raw_input_img, 224, 224)
+def resnet50_preprocess_local(raw_input_img):
+    return image_preprocess(raw_input_img, 224, 224)
 
 # Detection visualization
-def draw_detections(img, box, score, class_id):
+def draw_detection_boxes(img, box, score, class_id):
     class_name = coco_classes[class_id] if class_id < len(coco_classes) else f"ID:{class_id}"
     label = f"{class_name} {score:.2f}"
     x, y, w, h = box
@@ -142,7 +142,7 @@ def draw_detections(img, box, score, class_id):
     cv2.putText(img, label, (x, y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
 # Post-processing functions
-def postprocessing_cpu(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
+def yolo_postprocess_cpu(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
     output_data = np.squeeze(output[0])
     boxes, scores, class_ids = [], [], []
     x_factor = img_width / input_width
@@ -166,10 +166,10 @@ def postprocessing_cpu(output, original_img, img_width, img_height, confidence_t
     if indices is not None and len(indices) > 0:
         for idx in indices:
             i = int(idx) if isinstance(idx, (int, np.integer)) else int(idx[0])
-            draw_detections(original_img, boxes[i], scores[i], class_ids[i])
+            draw_detection_boxes(original_img, boxes[i], scores[i], class_ids[i])
     return original_img
 
-def postprocessing_npu(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
+def yolo_postprocess_npu(output, original_img, img_width, img_height, confidence_thres=0.5, iou_thres=0.5):
     output_box = np.squeeze(output[0])
     output_label = np.squeeze(output[1])
 
@@ -204,13 +204,13 @@ def postprocessing_npu(output, original_img, img_width, img_height, confidence_t
     if valid_indices is not None and len(valid_indices) > 0:
         for idx in valid_indices:
             i = int(idx) if isinstance(idx, (int, np.integer)) else int(idx[0])
-            draw_detections(original_img, boxes[i], scores[i], class_ids[i])
+            draw_detection_boxes(original_img, boxes[i], scores[i], class_ids[i])
             drawn_boxes.append(boxes[i])
 
     return original_img, drawn_boxes
 
 # Utility functions
-def convert_cv_qt(cv_img):
+def convert_cv_to_qt(cv_img):
     if cv_img is None or cv_img.size == 0:
         return QPixmap()
     try:
@@ -220,7 +220,7 @@ def convert_cv_qt(cv_img):
         qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
         return QPixmap.fromImage(qt_image)
     except Exception as e:
-        print(f"[convert_cv_qt ERROR] {e}")
+        print(f"[convert_cv_to_qt ERROR] {e}")
         return QPixmap()
 
 def get_cpu_metrics(interval=0):
@@ -288,7 +288,7 @@ def run_resnet_npu_process(image_dir, output_queue, shutdown_event):
                 max_index = int(np.argmax(output))
 
             infer_end = time.time()
-            class_name = f"Class ID: {max_index}"
+            class_name = imagenet_classes[max_index] if max_index < len(imagenet_classes) else f"Class ID: {max_index}"
             cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
             output_queue.put((img, class_name, (infer_end - infer_start) * 1000.0))
 
@@ -296,6 +296,80 @@ def run_resnet_npu_process(image_dir, output_queue, shutdown_event):
         print(f"[ResNet NPU Process ERROR] {e}")
     finally:
         close_driver(driver)
+
+def run_yolo_cpu_process(input_queue, output_queue, shutdown_event):
+    try:
+        # Load the YOLO model
+        session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
+        
+        while not shutdown_event.is_set():
+            try:
+                frame = input_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+                
+            input_tensor, (w, h) = yolo_preprocess_local(frame)
+            
+            try:
+                infer_start = time.time()
+                output = session.run(None, {"images": input_tensor})
+                infer_end = time.time()
+                
+                infer_time_ms = (infer_end - infer_start) * 1000.0
+                result = yolo_postprocess_cpu(output, frame, w, h)
+                output_queue.put((result, infer_time_ms))
+                
+            except Exception as e:
+                print(f"[YOLO CPU Process ERROR] {e}")
+                continue
+                
+    except Exception as e:
+        print(f"[YOLO CPU Process ERROR] {e}")
+
+def run_resnet_cpu_process(image_dir, output_queue, shutdown_event):
+    try:
+        # Load the ResNet model
+        session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+        
+        # Get list of image files
+        image_files = [os.path.join(image_dir, f)
+                      for f in os.listdir(image_dir)
+                      if f.lower().endswith(('jpg', 'jpeg', 'png'))]
+        if not image_files:
+            print("[ResNet CPU] No images found")
+            return
+            
+        index = 0
+        while not shutdown_event.is_set():
+            if index >= len(image_files):
+                index = 0
+                
+            img = cv2.imread(image_files[index])
+            index += 1
+            if img is None:
+                continue
+                
+            input_tensor = resnet50_preprocess_local(img)
+            
+            try:
+                infer_start = time.time()
+                output = session.run(None, {"data": input_tensor})
+                infer_end = time.time()
+                
+                infer_time_ms = (infer_end - infer_start) * 1000.0
+                
+                class_id = int(np.argmax(output[0]))
+                class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
+                cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                
+                output_queue.put((img, class_name, infer_time_ms))
+                
+            except Exception as e:
+                print(f"[ResNet CPU Process ERROR] {e}")
+                continue
+                
+    except Exception as e:
+        print(f"[ResNet CPU Process ERROR] {e}")
 
 def run_yolo_npu_process(input_queue, output_queue, shutdown_event):
     try:
@@ -312,7 +386,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event):
             except queue.Empty:
                 continue
 
-            input_tensor, (w, h) = preprocess_yolo(frame)
+            input_tensor, (w, h) = yolo_preprocess_local(frame)
             infer_start = time.time()
 
             try:
@@ -353,7 +427,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event):
                 continue
 
             infer_end = time.time()
-            result_img, drawn_boxes = postprocessing_npu(output, frame, w, h)
+            result_img, drawn_boxes = yolo_postprocess_npu(output, frame, w, h)
 
             if drawn_boxes:
                 infer_time_ms = (infer_end - infer_start) * 1000.0
@@ -381,10 +455,10 @@ class UnifiedViewer(QMainWindow):
 
         # Define and connect signals
         self.model_signals = ModelSignals()
-        self.model_signals.update_yolo_display.connect(self.update_yolo_display)
+        self.model_signals.update_view1_display.connect(self.update_view1_display)
+        self.model_signals.update_view2_display.connect(self.update_view2_display)
         self.model_signals.update_view3_display.connect(self.update_view3_display)
         self.model_signals.update_view4_display.connect(self.update_view4_display)
-        self.model_signals.update_resnet_display.connect(self.update_resnet_display)
 
         # Initialize common state variables
         self.shutdown_flag = threading.Event()
@@ -393,42 +467,51 @@ class UnifiedViewer(QMainWindow):
         # Initialize queues and events
         self.video_frame_queue = Queue(maxsize=10)
         self.video_shutdown_event = Event()
-        self.view3_result_queue = queue.Queue(maxsize=5)
-        self.view4_result_queue = queue.Queue(maxsize=5)
-        self.view3_frame_queue = queue.Queue(maxsize=10)
-        self.yolo_frame_queue = Queue(maxsize=10)
-        self.yolo_output_queue = Queue(maxsize=5)
-        self.resnet_output_queue = Queue(maxsize=5)
-        self.yolo_shutdown_event = Event()
-        self.resnet_shutdown_event = Event()
+        
+        # View1 queues and events
+        self.view1_frame_queue = Queue(maxsize=10)
+        self.view1_output_queue = Queue(maxsize=5)
+        self.view1_shutdown_event = Event()
+        
+        # View2 queues and events
+        self.view2_output_queue = Queue(maxsize=5)
+        self.view2_shutdown_event = Event()
+        
+        # View3 queues and events
+        self.view3_frame_queue = Queue(maxsize=10)
+        self.view3_result_queue = Queue(maxsize=5)
+        self.view3_shutdown_event = Event()
+        
+        # View4 queues and events
+        self.view4_result_queue = Queue(maxsize=5)
+        self.view4_shutdown_event = Event()
 
         # Initialize statistics variables
-        self.yolo_total_infer_time = 0.0
-        self.yolo_infer_count = 0
-        self.yolo_avg_infer_time = 0.0
-        self.yolo_avg_fps = 0.0
-        self.resnet_total_infer_time = 0.0
-        self.resnet_infer_count = 0
-        self.resnet_avg_infer_time = 0.0
-        self.resnet_avg_fps = 0.0
-        # Initialize statistics variables for View1 (YOLO CPU) and View2 (ResNet CPU)
+        # View1 statistics (YOLO NPU)
+        self.view1_total_infer_time = 0.0
+        self.view1_infer_count = 0
+        self.view1_avg_infer_time = 0.0
+        self.view1_avg_fps = 0.0
+        
+        # View2 statistics (ResNet NPU)
+        self.view2_total_infer_time = 0.0
+        self.view2_infer_count = 0
+        self.view2_avg_infer_time = 0.0
+        self.view2_avg_fps = 0.0
+        
+        # View3 statistics (YOLO CPU)
         self.view3_total_infer_time = 0.0
         self.view3_infer_count = 0
         self.view3_avg_infer_time = 0.0
         self.view3_avg_fps = 0.0
+        
+        # View4 statistics (ResNet CPU)
         self.view4_total_infer_time = 0.0
         self.view4_infer_count = 0
         self.view4_avg_infer_time = 0.0
         self.view4_avg_fps = 0.0
 
-        # Initialize images and sessions
-        self.resnet_images = [os.path.join("./imagenet-sample-images", f)
-                             for f in os.listdir("./imagenet-sample-images")
-                             if f.lower().endswith(('jpg', 'jpeg', 'png'))]
-        self.resnet_index = 0
-        self.view4_index = 0
-        self.view3_session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
-        self.view4_session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+        # Initialize sessions
 
         # Start processes
         self.video_reader_proc = Process(
@@ -438,26 +521,49 @@ class UnifiedViewer(QMainWindow):
         )
         self.video_reader_proc.start()
 
-        self.yolo_process = Process(
+        # View1 process (YOLO NPU)
+        self.view1_process = Process(
             target=run_yolo_npu_process,
-            args=(self.yolo_frame_queue, self.yolo_output_queue, self.yolo_shutdown_event),
+            args=(self.view1_frame_queue, self.view1_output_queue, self.view1_shutdown_event),
         )
-        self.yolo_process.start()
+        self.view1_process.start()
 
-        self.resnet_process = Process(
+        # View2 process (ResNet NPU)
+        self.view2_process = Process(
             target=run_resnet_npu_process,
-            args=("./imagenet-sample-images", self.resnet_output_queue, self.resnet_shutdown_event),
+            args=("./imagenet-sample-images", self.view2_output_queue, self.view2_shutdown_event),
         )
-        self.resnet_process.start()
+        self.view2_process.start()
+
+        # View3 process (YOLO CPU)
+        self.view3_process = Process(
+            target=run_yolo_cpu_process,
+            args=(self.view3_frame_queue, self.view3_result_queue, self.view3_shutdown_event),
+        )
+        self.view3_process.start()
+
+        # View4 process (ResNet CPU)
+        self.view4_process = Process(
+            target=run_resnet_cpu_process,
+            args=("./imagenet-sample-images", self.view4_result_queue, self.view4_shutdown_event),
+        )
+        self.view4_process.start()
 
         # Start threads
-        threading.Thread(target=self.display_yolo_frames_from_process, daemon=True).start()
-        threading.Thread(target=self.display_resnet_frames_from_process, daemon=True).start()
-        threading.Thread(target=self.process_view3_frames, daemon=True).start()
-        threading.Thread(target=self.process_view4_frames, daemon=True).start()
-        threading.Thread(target=self.display_view3_frames, daemon=True).start()
-        threading.Thread(target=self.display_view4_frames, daemon=True).start()
+        # Feed queue thread (feeds both view1 and view3)
         threading.Thread(target=self.feed_view3_queue, daemon=True).start()
+        
+        # View1 thread
+        threading.Thread(target=self.display_view1_frames_from_process, daemon=True).start()
+        
+        # View2 thread
+        threading.Thread(target=self.display_view2_frames_from_process, daemon=True).start()
+        
+        # View3 thread
+        threading.Thread(target=self.display_view3_frames, daemon=True).start()
+        
+        # View4 thread
+        threading.Thread(target=self.display_view4_frames, daemon=True).start()
 
         # CPU/NPU monitoring
         self.cpu_timer = QTimer()
@@ -482,33 +588,41 @@ class UnifiedViewer(QMainWindow):
                 frame = self.video_frame_queue.get(timeout=1)
                 if not self.view3_frame_queue.full():
                     self.view3_frame_queue.put(frame.copy())
-                if not self.yolo_frame_queue.full():
-                    self.yolo_frame_queue.put(frame.copy())
+                if not self.view1_frame_queue.full():
+                    self.view1_frame_queue.put(frame.copy())
                 time.sleep(frame_delay)
             except queue.Empty:
                 continue
 
-    def display_yolo_frames_from_process(self):
+    # View1 functions
+    def display_view1_frames_from_process(self):
         while not self.shutdown_flag.is_set():
             try:
-                frame, infer_time = self.yolo_output_queue.get(timeout=1)
+                frame, infer_time = self.view1_output_queue.get(timeout=1)
             except queue.Empty:
                 continue
-            pixmap = convert_cv_qt(frame)
+            pixmap = convert_cv_to_qt(frame)
             if not pixmap.isNull():
-                self.model_signals.update_yolo_display.emit(pixmap)
+                self.model_signals.update_view1_display.emit(pixmap)
                 self.update_stats("yolov3_big", infer_time)
-
-    def display_resnet_frames_from_process(self):
+                
+    def update_view1_display(self, pixmap):
+        self.view1.setPixmap(pixmap)  # view1 was previously yolo_label
+        
+    # View2 functions
+    def display_view2_frames_from_process(self):
         while not self.shutdown_flag.is_set():
             try:
-                frame, class_name, infer_time = self.resnet_output_queue.get(timeout=1)
+                frame, class_name, infer_time = self.view2_output_queue.get(timeout=1)
             except queue.Empty:
                 continue
-            pixmap = convert_cv_qt(frame)
+            pixmap = convert_cv_to_qt(frame)
             if not pixmap.isNull():
-                self.model_signals.update_resnet_display.emit(pixmap)
+                self.model_signals.update_view2_display.emit(pixmap)
                 self.update_stats("resnet50", infer_time)
+                
+    def update_view2_display(self, pixmap):
+        self.view2.setPixmap(pixmap)  # view2 was previously resnet_label
 
     def closeEvent(self, event):
         event.accept()  # 먼저 종료 요청 수락
@@ -526,10 +640,14 @@ class UnifiedViewer(QMainWindow):
         time.sleep(0.2)
 
         try:
-            if hasattr(self, 'yolo_shutdown_event'):
-                self.yolo_shutdown_event.set()
-            if hasattr(self, 'resnet_shutdown_event'):
-                self.resnet_shutdown_event.set()
+            if hasattr(self, 'view1_shutdown_event'):
+                self.view1_shutdown_event.set()
+            if hasattr(self, 'view2_shutdown_event'):
+                self.view2_shutdown_event.set()
+            if hasattr(self, 'view3_shutdown_event'):
+                self.view3_shutdown_event.set()
+            if hasattr(self, 'view4_shutdown_event'):
+                self.view4_shutdown_event.set()
             if hasattr(self, 'video_shutdown_event'):
                 self.video_shutdown_event.set()
         except Exception as e:
@@ -538,8 +656,10 @@ class UnifiedViewer(QMainWindow):
         # 2. Attempt to join/terminate all processes
         try:
             processes = [
-                getattr(self, 'yolo_process', None),
-                getattr(self, 'resnet_process', None),
+                getattr(self, 'view1_process', None),
+                getattr(self, 'view2_process', None),
+                getattr(self, 'view3_process', None),
+                getattr(self, 'view4_process', None),
                 getattr(self, 'video_reader_proc', None)
             ]
             for proc in processes:
@@ -555,13 +675,17 @@ class UnifiedViewer(QMainWindow):
         # 3. Cleanup queues
         try:
             queues = [
-                self.video_frame_queue,
-                self.yolo_frame_queue,
+                self.video_frame_queue,  # Common queue
+                # View1 queues
+                self.view1_frame_queue,
+                self.view1_output_queue,
+                # View2 queue
+                self.view2_output_queue,
+                # View3 queues
                 self.view3_frame_queue,
                 self.view3_result_queue,
+                # View4 queue
                 self.view4_result_queue,
-                self.yolo_output_queue,
-                self.resnet_output_queue,
             ]
             for q in queues:
                 while not q.empty():
@@ -576,14 +700,14 @@ class UnifiedViewer(QMainWindow):
         try:
             attr_list = [
                 'cap',
-                'yolo_session',
+                'view1_session',
+                'view2_session',
                 'view3_session',
-                'resnet_session',
                 'view4_session',
-                'yolo_front_session',
-                'yolo_back_session',
-                'resnet_front_session',
-                'resnet_back_session',
+                'view1_front_session',
+                'view1_back_session',
+                'view2_front_session',
+                'view2_back_session',
             ]
             for attr in attr_list:
                 if hasattr(self, attr):
@@ -598,116 +722,68 @@ class UnifiedViewer(QMainWindow):
         print("[Shutdown] Exiting application.")
         sys.exit(0)
 
-    def update_stats(self, model_name, current_infer_time):
-        """Update average FPS and inference time per model and record logs"""
-        if model_name == "yolov3_big":
-            self.yolo_total_infer_time += current_infer_time
-            self.yolo_infer_count += 1
-            self.yolo_avg_infer_time = self.yolo_total_infer_time / self.yolo_infer_count
-            self.yolo_avg_fps = 1000.0 / self.yolo_avg_infer_time if self.yolo_avg_infer_time > 0 else 0.0
-        elif model_name == "resnet50":
-            self.resnet_total_infer_time += current_infer_time
-            self.resnet_infer_count += 1
-            self.resnet_avg_infer_time = self.resnet_total_infer_time / self.resnet_infer_count
-            self.resnet_avg_fps = 1000.0 / self.resnet_avg_infer_time if self.resnet_avg_infer_time > 0 else 0.0
-
-        async_log(model_name, current_infer_time,
-                 self.yolo_avg_fps if model_name == "yolov3_big" else self.resnet_avg_fps)
-
-    def process_view3_frames(self):
-        while not self.shutdown_flag.is_set():
-            try:
-                frame = self.view3_frame_queue.get(timeout=1)
-            except queue.Empty:
-                continue
-            input_tensor, (w, h) = preprocess_yolo(frame)
-
-            if not hasattr(self, 'view3_session') or self.view3_session is None:
-                continue
-
-            try:
-                infer_start = time.time()
-                output = self.view3_session.run(None, {"images": input_tensor})
-                infer_end = time.time()
-                infer_time_ms = (infer_end - infer_start) * 1000.0
-                
-                # Update View3 (YOLO CPU) statistics
-                self.view3_total_infer_time += infer_time_ms
-                self.view3_infer_count += 1
-                self.view3_avg_infer_time = self.view3_total_infer_time / self.view3_infer_count
-                self.view3_avg_fps = 1000.0 / self.view3_avg_infer_time if self.view3_avg_infer_time > 0 else 0.0
-            except Exception as e:
-                print(f"[VIEW3 ERROR] {e}")
-                continue
-            result = postprocessing_cpu(output, frame, w, h)
-            if not self.view3_result_queue.full():
-                self.view3_result_queue.put(result)
-
-    def update_yolo_display(self, pixmap):
-        self.view1.setPixmap(pixmap)  # view1 was previously yolo_label
-
+    # View3 functions
     def display_view3_frames(self):
         while not self.shutdown_flag.is_set():
             try:
-                result = self.view3_result_queue.get(timeout=1)
+                result, infer_time = self.view3_result_queue.get(timeout=1)
             except queue.Empty:
                 continue
-            pixmap = convert_cv_qt(result)
-            self.model_signals.update_view3_display.emit(pixmap)
+            pixmap = convert_cv_to_qt(result)
+            if not pixmap.isNull():
+                self.model_signals.update_view3_display.emit(pixmap)
+                self.update_stats("yolov3_small", infer_time)
 
     def update_view3_display(self, pixmap):
         self.view3.setPixmap(pixmap)  # view3 was previously view1
 
-    def process_view4_frames(self):
-        if not self.resnet_images:
-            return
-        while not self.shutdown_flag.is_set():
-            if self.view4_index >= len(self.resnet_images):
-                self.view4_index = 0
-            img_path = self.resnet_images[self.view4_index]
-            img = cv2.imread(img_path)
-            self.view4_index += 1
-            if img is None:
-                continue
-            input_tensor = preprocess_resnet(img)
-
-            if not hasattr(self, 'view4_session') or self.view4_session is None:
-                continue
-
-            try:
-                infer_start = time.time()
-                output = self.view4_session.run(None, {"data": input_tensor})
-                infer_end = time.time()
-                infer_time_ms = (infer_end - infer_start) * 1000.0
-                
-                # Update View4 (ResNet CPU) statistics
-                self.view4_total_infer_time += infer_time_ms
-                self.view4_infer_count += 1
-                self.view4_avg_infer_time = self.view4_total_infer_time / self.view4_infer_count
-                self.view4_avg_fps = 1000.0 / self.view4_avg_infer_time if self.view4_avg_infer_time > 0 else 0.0
-            except Exception as e:
-                print(f"[View4 ERROR] {e}")
-                continue
-            class_id = int(np.argmax(output[0]))
-            class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
-            cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-            if not self.view4_result_queue.full():
-                self.view4_result_queue.put(img)
-
+    # View4 functions
     def display_view4_frames(self):
         while not self.shutdown_flag.is_set():
             try:
-                result = self.view4_result_queue.get(timeout=1)
+                frame, class_name, infer_time = self.view4_result_queue.get(timeout=1)
             except queue.Empty:
                 continue
-            pixmap = convert_cv_qt(result)
-            self.model_signals.update_view4_display.emit(pixmap)
+            pixmap = convert_cv_to_qt(frame)
+            if not pixmap.isNull():
+                self.model_signals.update_view4_display.emit(pixmap)
+                self.update_stats("resnet50_cpu", infer_time)
 
     def update_view4_display(self, pixmap):
         self.view4.setPixmap(pixmap)  # view4 was previously view2
+        
+    # Statistics and monitoring functions
+    def update_stats(self, model_name, current_infer_time):
+        if model_name == "yolov3_big":
+            self.view1_total_infer_time += current_infer_time
+            self.view1_infer_count += 1
+            self.view1_avg_infer_time = self.view1_total_infer_time / self.view1_infer_count
+            self.view1_avg_fps = 1000.0 / self.view1_avg_infer_time if self.view1_avg_infer_time > 0 else 0.0
+        elif model_name == "resnet50":
+            self.view2_total_infer_time += current_infer_time
+            self.view2_infer_count += 1
+            self.view2_avg_infer_time = self.view2_total_infer_time / self.view2_infer_count
+            self.view2_avg_fps = 1000.0 / self.view2_avg_infer_time if self.view2_avg_infer_time > 0 else 0.0
+        elif model_name == "yolov3_small":
+            self.view3_total_infer_time += current_infer_time
+            self.view3_infer_count += 1
+            self.view3_avg_infer_time = self.view3_total_infer_time / self.view3_infer_count
+            self.view3_avg_fps = 1000.0 / self.view3_avg_infer_time if self.view3_avg_infer_time > 0 else 0.0
+        elif model_name == "resnet50_cpu":
+            self.view4_total_infer_time += current_infer_time
+            self.view4_infer_count += 1
+            self.view4_avg_infer_time = self.view4_total_infer_time / self.view4_infer_count
+            self.view4_avg_fps = 1000.0 / self.view4_avg_infer_time if self.view4_avg_infer_time > 0 else 0.0
 
-    def update_resnet_display(self, pixmap):
-        self.view2.setPixmap(pixmap)  # view2 was previously resnet_label
+        avg_fps = 0.0
+        if model_name == "yolov3_big":
+            avg_fps = self.view1_avg_fps
+        elif model_name == "resnet50":
+            avg_fps = self.view2_avg_fps
+        elif model_name == "yolov3_small":
+            avg_fps = self.view3_avg_fps
+            
+        async_log(model_name, current_infer_time, avg_fps)
 
     def update_cpu_npu_usage(self):
         current = get_cpu_metrics(interval=0)
@@ -717,17 +793,17 @@ class UnifiedViewer(QMainWindow):
         load1, load5, load15 = current["Load_Average"]
         
         # Calculate total average FPS (total throughput)
-        total_fps = (self.yolo_avg_fps + self.resnet_avg_fps + self.view3_avg_fps + self.view4_avg_fps)
-        total_avg_fps = (self.yolo_avg_fps + self.resnet_avg_fps + self.view3_avg_fps + self.view4_avg_fps)/4
+        total_fps = (self.view1_avg_fps + self.view2_avg_fps + self.view3_avg_fps + self.view4_avg_fps)
+        total_avg_fps = (self.view1_avg_fps + self.view2_avg_fps + self.view3_avg_fps + self.view4_avg_fps)/4
 
         self.model_performance_label.setText(
             f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
             f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>"
-            f"<b>View1 (YOLO NPU)</b> Avg FPS: {self.yolo_avg_fps:.1f} "
-            f"(<span style='color: gray;'>{self.yolo_avg_infer_time:.1f} ms</span>)<br>"
+            f"<b>View1 (YOLO NPU)</b> Avg FPS: {self.view1_avg_fps:.1f} "
+            f"(<span style='color: gray;'>{self.view1_avg_infer_time:.1f} ms</span>)<br>"
             f"<b><span style='color: purple;'>View2 (ResNet NPU)</span></b> Avg FPS: "
-            f"<span style='color: purple;'>{self.resnet_avg_fps:.1f}</span> "
-            f"(<span style='color: purple;'>{self.resnet_avg_infer_time:.1f} ms</span>)<br>"
+            f"<span style='color: purple;'>{self.view2_avg_fps:.1f}</span> "
+            f"(<span style='color: purple;'>{self.view2_avg_infer_time:.1f} ms</span>)<br>"
             f"<b><span style='color: green;'>View3 (YOLO CPU)</span></b> Avg FPS: "
             f"<span style='color: green;'>{self.view3_avg_fps:.1f}</span> "
             f"(<span style='color: green;'>{self.view3_avg_infer_time:.1f} ms</span>)<br>"
