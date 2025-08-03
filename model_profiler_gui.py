@@ -135,49 +135,8 @@ class ONNXProfiler(QMainWindow):
         if self.load_sample_button:
             self.load_sample_button.clicked.connect(self.load_sample_data)
 
-        self.actionLoad_Runtime_Log = self.findChild(QAction, "actionLoad_Runtime_Log")
-        if self.actionLoad_Runtime_Log:
-            self.actionLoad_Runtime_Log.triggered.connect(self.update_frequencies_from_log)
 
-        self.model_freq_table.horizontalHeader().setStretchLastSection(True)
-        self.populate_model_frequencies(["resnet50", "yolov3_small", "yolov3_big"])
 
-    def populate_model_frequencies(self, model_names: List[str]):
-        if not hasattr(self, "model_freq_table"):
-            return
-
-        self.model_freq_table.setRowCount(len(model_names))
-        self.model_freq_table.setColumnCount(2)
-        self.model_freq_table.setHorizontalHeaderLabels(["Model", "Freq"])
-
-        # 모델별 기본 frequency 설정
-        default_freqs = {
-            "resnet50": "1",
-            "yolov3_small": "60",
-            "yolov3_big": "40"
-        }
-
-        for row, model_name in enumerate(model_names):
-            # 모델명만 추출 (디렉토리나 확장자 제거)
-            base_name = model_name.split(os.sep)[0]  # 'resnet50', 'yolov3_small' 등
-
-            # 모델명 셀
-            model_item = QTableWidgetItem(model_name)
-            model_item.setFlags(Qt.ItemIsEnabled)
-            self.model_freq_table.setItem(row, 0, model_item)
-
-            # frequency 셀
-            freq_value = default_freqs.get(base_name, "1")
-            freq_item = QTableWidgetItem(freq_value)
-            freq_item.setTextAlignment(Qt.AlignCenter)
-            self.model_freq_table.setItem(row, 1, freq_item)
-
-        header = self.model_freq_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.model_freq_table.viewport().update()
-
-        self.model_freq_table.resizeColumnsToContents()
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
@@ -874,18 +833,8 @@ class ONNXProfiler(QMainWindow):
         for idx, (cpu_t, npu1_t, npu2_t) in enumerate(times):
             model_name = models[idx][1]  # (row_index, model_name)
 
-            # 1. Get frequency value for the model
+            # Default frequency value for the model
             freq = 1
-            if hasattr(self, "model_freq_table"):
-                for row in range(self.model_freq_table.rowCount()):
-                    name_item = self.model_freq_table.item(row, 0)
-                    freq_item = self.model_freq_table.item(row, 1)
-                    if name_item and name_item.text() == model_name and freq_item:
-                        try:
-                            freq = int(freq_item.text())
-                        except ValueError:
-                            freq = 1
-                        break
 
             # 2. Determine which devices are available
             device_candidates = ["CPU", "NPU1"]
@@ -1171,43 +1120,3 @@ class ONNXProfiler(QMainWindow):
         dialog.resize(720, 600)
         dialog.show()
 
-    def update_frequencies_from_log(self):
-        log_dir = "./logs"  # ← log 디렉토리 경로를 명시적으로 지정
-        model_freqs = defaultdict(list)
-
-        for filename in os.listdir(log_dir):
-            if not filename.endswith("_log.json"):
-                continue
-
-            model_name = filename.replace("_log.json", "")
-            log_path = os.path.join(log_dir, filename)
-
-            try:
-                with open(log_path, "r") as f:
-                    for line in f:
-                        try:
-                            entry = json.loads(line.strip())
-                            fps = entry.get("average_fps", None)
-                            if fps is not None:
-                                model_freqs[model_name].append(fps)
-                        except json.JSONDecodeError:
-                            continue
-
-            except Exception as e:
-                print(f"[Error] {log_path} 읽기 실패: {e}")
-                continue
-
-        updated_count = 0
-        for row in range(self.model_freq_table.rowCount()):
-            model_item = self.model_freq_table.item(row, 0)
-            freq_item = self.model_freq_table.item(row, 1)
-            if model_item is None or freq_item is None:
-                continue
-
-            model_name = model_item.text()
-            if model_name in model_freqs and model_freqs[model_name]:
-                avg_freq = round(sum(model_freqs[model_name]) / len(model_freqs[model_name]))
-                freq_item.setText(str(avg_freq))
-                updated_count += 1
-
-        print(f"[Info] Frequency 업데이트 완료: {updated_count}개 모델")
