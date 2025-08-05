@@ -135,10 +135,21 @@ class ONNXProfiler(QMainWindow):
         self.actionSave_Sample_Data = self.findChild(QAction, "actionSave_Sample_Data")
         if self.actionSave_Sample_Data:
             self.actionSave_Sample_Data.triggered.connect(self.save_sample_data)
+            
+        # Connect Settings menu action
+        self.actionSettings = self.findChild(QAction, "actionSettings")
+        if self.actionSettings:
+            self.actionSettings.triggered.connect(self.show_settings_dialog)
 
         self.load_sample_button = self.findChild(QPushButton, "load_sample_button")
         if self.load_sample_button:
             self.load_sample_button.clicked.connect(self.load_sample_data)
+            
+        # Default device settings file
+        self.device_settings_file = "target_device.yaml"
+        
+        # Load device settings from file
+        self.load_device_settings()
 
 
 
@@ -1033,12 +1044,16 @@ class ONNXProfiler(QMainWindow):
 
         self.save_schedule_to_yaml("mpopt_sched.yaml")
 
-    def save_schedule_to_yaml(self, filename="mpopt_sched.yaml"):
+    def save_schedule_to_yaml(self, filename=None):
         """Save scheduling result with partition lists to a YAML file."""
         if not self.assignment_results:
             if self.log_output:
                 self.log_output.appendPlainText("[Warning] No assignment results to save.\n")
             return
+            
+        # Use the device_settings_file if filename is not provided
+        if filename is None:
+            filename = self.device_settings_file
 
         root_folder = self.folder_input.text().strip()
         yaml_data = {}
@@ -1188,6 +1203,102 @@ class ONNXProfiler(QMainWindow):
         fig.tight_layout()
         return canvas
 
+    def load_device_settings(self):
+        """Load settings from the device settings file."""
+        try:
+            if os.path.exists(self.device_settings_file):
+                with open(self.device_settings_file, 'r') as f:
+                    settings = yaml.safe_load(f)
+                
+                # Store device settings in class attributes
+                if settings and 'devices' in settings:
+                    # CPU settings
+                    if 'cpu' in settings['devices']:
+                        self.cpu_count = settings['devices']['cpu'].get('count', 1)
+                    
+                    # NPU settings
+                    if 'npu' in settings['devices']:
+                        self.npu_count = settings['devices']['npu'].get('count', 0)
+                        self.npu_ids = settings['devices']['npu'].get('ids', [])
+                        
+                        # Update NPU2 checkbox based on NPU count
+                        if hasattr(self, 'enable_npu2_checkbox') and self.enable_npu2_checkbox:
+                            self.enable_npu2_checkbox.setChecked(self.npu_count > 1)
+                
+                if self.log_output:
+                    self.log_output.appendPlainText(f"[Info] Loaded device settings from {self.device_settings_file}")
+                    
+                return settings
+            else:
+                if self.log_output:
+                    self.log_output.appendPlainText(f"[Warning] Device settings file {self.device_settings_file} not found")
+        except Exception as e:
+            if self.log_output:
+                self.log_output.appendPlainText(f"[Error] Failed to load device settings: {str(e)}")
+        
+        # Set default values if loading failed
+        self.cpu_count = 1
+        self.npu_count = 2
+        self.npu_ids = [0, 1]
+                
+        return {}
+        
+    def show_settings_dialog(self):
+        """Show a dialog to configure device settings file."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Device Settings")
+        dialog.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Create file name input field
+        file_layout = QHBoxLayout()
+        file_label = QLabel("Device Settings File:")
+        file_input = QLineEdit(self.device_settings_file)
+        browse_button = QPushButton("Browse...")
+        
+        file_layout.addWidget(file_label)
+        file_layout.addWidget(file_input, 1)
+        file_layout.addWidget(browse_button)
+        
+        # Create button box
+        button_layout = QHBoxLayout()
+        ok_button = QPushButton("OK")
+        cancel_button = QPushButton("Cancel")
+        
+        button_layout.addStretch(1)
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        
+        layout.addLayout(file_layout)
+        layout.addStretch(1)
+        layout.addLayout(button_layout)
+        
+        # Connect signals
+        def browse_file():
+            # Allow both opening existing files and creating new ones
+            file_path, _ = QFileDialog.getSaveFileName(
+                dialog, "Select Device Settings File", self.device_settings_file, 
+                "YAML Files (*.yaml *.yml)"
+            )
+            if file_path:
+                # Add .yaml extension if not present
+                if not file_path.endswith('.yaml') and not file_path.endswith('.yml'):
+                    file_path += '.yaml'
+                file_input.setText(file_path)
+        
+        def accept():
+            self.device_settings_file = file_input.text()
+            if self.log_output:
+                self.log_output.appendPlainText(f"[Info] Device settings file set to: {self.device_settings_file}")
+            dialog.accept()
+        
+        browse_button.clicked.connect(browse_file)
+        ok_button.clicked.connect(accept)
+        cancel_button.clicked.connect(dialog.reject)
+        
+        dialog.exec_()
+    
     def show_partition_assignment_dialog(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Partition Assignment Overview")
