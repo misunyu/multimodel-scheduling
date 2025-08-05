@@ -29,6 +29,9 @@ MAX_LOG_ENTRIES = 500
 log = 0  # Controls whether to record logs
 input_width = input_height = 608
 
+# Global flag for signaling threads to exit
+global_exit_flag = False
+
 # Load class labels
 with open("imagenet_classes.txt", "r") as f:
     imagenet_classes = [line.strip() for line in f.readlines()]
@@ -451,6 +454,10 @@ class UnifiedViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         uic.loadUi("multimodel_display_layout.ui", self)
+        
+        # Set up signal handler for SIGINT (Ctrl+C)
+        import signal
+        signal.signal(signal.SIGINT, self.signal_handler)
 
         # Load model settings from YAML
         self.model_settings = {}
@@ -745,6 +752,7 @@ class UnifiedViewer(QMainWindow):
         self.cpu_timer.start(1000)
 
     def feed_view3_queue(self):
+        global global_exit_flag
         fps = 30.0
         try:
             cap = cv2.VideoCapture("./stockholm_1280x720.mp4")
@@ -765,7 +773,7 @@ class UnifiedViewer(QMainWindow):
             "view4": self.view4_frame_queue
         }
 
-        while not self.shutdown_flag.is_set():
+        while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
                 frame = self.video_frame_queue.get(timeout=1)
                 
@@ -774,16 +782,25 @@ class UnifiedViewer(QMainWindow):
                     if view_name in view_frame_queues:
                         queue = view_frame_queues[view_name]
                         if not queue.full():
-                            queue.put(frame.copy())
+                            try:
+                                queue.put(frame.copy())
+                            except (EOFError, BrokenPipeError, OSError):
+                                # Queue might be closed during shutdown
+                                pass
                 
                 time.sleep(frame_delay)
             except queue.Empty:
                 continue
+            except Exception as e:
+                print(f"[feed_view3_queue ERROR] {e}")
+                if self.shutdown_flag.is_set() or global_exit_flag:
+                    break
 
     # View1 functions
     def display_view1_frames(self):
+        global global_exit_flag
         view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
-        while not self.shutdown_flag.is_set():
+        while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
                 # Handle different output formats based on model type
                 if view1_model.startswith("yolov3"):
@@ -794,13 +811,25 @@ class UnifiedViewer(QMainWindow):
                     # print(f"[View1] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
-            pixmap = convert_cv_to_qt(frame)
-            if not pixmap.isNull():
-                # print("[View1] Emitting pixmap signal")
-                self.model_signals.update_view1_display.emit(pixmap)
-                self.update_stats("view1", view1_model, infer_time)
-            else:
-                print("[View1] Pixmap is null")
+            except (EOFError, BrokenPipeError, OSError) as e:
+                print(f"[View1 Queue ERROR] {e}")
+                if self.shutdown_flag.is_set() or global_exit_flag:
+                    break
+                continue
+            except Exception as e:
+                print(f"[View1 ERROR] {e}")
+                continue
+                
+            try:
+                pixmap = convert_cv_to_qt(frame)
+                if not pixmap.isNull():
+                    # print("[View1] Emitting pixmap signal")
+                    self.model_signals.update_view1_display.emit(pixmap)
+                    self.update_stats("view1", view1_model, infer_time)
+                else:
+                    print("[View1] Pixmap is null")
+            except Exception as e:
+                print(f"[View1 Display ERROR] {e}")
                 
     def update_view1_display(self, pixmap):
         self.view1.setPixmap(pixmap)
@@ -808,8 +837,9 @@ class UnifiedViewer(QMainWindow):
         
     # View2 functions
     def display_view2_frames(self):
+        global global_exit_flag
         view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
-        while not self.shutdown_flag.is_set():
+        while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
                 # Handle different output formats based on model type
                 if view2_model.startswith("yolov3"):
@@ -820,197 +850,93 @@ class UnifiedViewer(QMainWindow):
                     # print(f"[View2] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
-            pixmap = convert_cv_to_qt(frame)
-            if not pixmap.isNull():
-                self.model_signals.update_view2_display.emit(pixmap)
-                self.update_stats("view2", view2_model, infer_time)
+            except (EOFError, BrokenPipeError, OSError) as e:
+                print(f"[View2 Queue ERROR] {e}")
+                if self.shutdown_flag.is_set() or global_exit_flag:
+                    break
+                continue
+            except Exception as e:
+                print(f"[View2 ERROR] {e}")
+                continue
+                
+            try:
+                pixmap = convert_cv_to_qt(frame)
+                if not pixmap.isNull():
+                    self.model_signals.update_view2_display.emit(pixmap)
+                    self.update_stats("view2", view2_model, infer_time)
+                else:
+                    print("[View2] Pixmap is null")
+            except Exception as e:
+                print(f"[View2 Display ERROR] {e}")
                 
     def update_view2_display(self, pixmap):
         self.view2.setPixmap(pixmap)
 
+    def signal_handler(self, sig, frame):
+        print("\n[SIGINT] Caught Ctrl+C, shutting down...")
+        # Immediately set shutdown flags to stop video generation
+        global global_exit_flag
+        self.shutdown_flag.set()
+        global_exit_flag = True
+        
+        # Set all shutdown events to stop processes
+        for name in ['view1_shutdown_event', 'view2_shutdown_event',
+                     'view3_shutdown_event', 'view4_shutdown_event',
+                     'video_shutdown_event']:
+            event = getattr(self, name, None)
+            if event:
+                event.set()
+                
+        # Exit immediately without cleaning up queues
+        print("[SIGINT] Forcing exit")
+        os._exit(0)
+    
     def closeEvent(self, event):
-        event.accept()  # 먼저 종료 요청 수락
-        # 백그라운드 종료 처리 시작
-        # Use non-daemon thread to ensure it completes before application exits
-        shutdown_thread = threading.Thread(target=self.shutdown_all)
-        shutdown_thread.start()
-        # Wait for a short time to ensure shutdown process has started
-        shutdown_thread.join(timeout=0.5)
+        event.accept()
+        # Immediately set shutdown flags to stop video generation
+        global global_exit_flag
+        self.shutdown_flag.set()
+        global_exit_flag = True
+        
+        # Set all shutdown events to stop processes
+        for name in ['view1_shutdown_event', 'view2_shutdown_event',
+                     'view3_shutdown_event', 'view4_shutdown_event',
+                     'video_shutdown_event']:
+            event = getattr(self, name, None)
+            if event:
+                event.set()
+                
+        # Call the shutdown method to clean up resources
+        self.shutdown_all()
 
     def shutdown_all(self):
-        import sys
-        import gc
-
-        print("[Shutdown] Cleaning up resources...")
+        # Save throughput data before shutting down
+        try:
+            self.save_throughput_data()
+        except Exception as e:
+            print(f"[Shutdown] Error saving throughput data: {e}")
+            
+        # Terminate all processes
+        process_names = ['view1_process', 'view2_process', 'view3_process', 'view4_process', 'video_reader_proc']
+        processes = [getattr(self, name, None) for name in process_names if hasattr(self, name) and getattr(self, name, None)]
         
-        # Save throughput data to JSON file
-        self.save_throughput_data()
-
-        # 1. Set shutdown flags
-        self.shutdown_flag.set()
-        time.sleep(0.2)
-
-        try:
-            if hasattr(self, 'view1_shutdown_event'):
-                self.view1_shutdown_event.set()
-            if hasattr(self, 'view2_shutdown_event'):
-                self.view2_shutdown_event.set()
-            if hasattr(self, 'view3_shutdown_event'):
-                self.view3_shutdown_event.set()
-            if hasattr(self, 'view4_shutdown_event'):
-                self.view4_shutdown_event.set()
-            if hasattr(self, 'video_shutdown_event'):
-                self.video_shutdown_event.set()
-        except Exception as e:
-            print(f"[Shutdown Event ERROR] {e}")
-
-        # 2. Attempt to join/terminate all processes
-        try:
-            processes = [
-                getattr(self, 'view1_process', None),
-                getattr(self, 'view2_process', None),
-                getattr(self, 'view3_process', None),
-                getattr(self, 'view4_process', None),
-                getattr(self, 'video_reader_proc', None)
-            ]
-            
-            # First attempt: join with timeout
-            for proc in processes:
-                if proc is not None and proc.is_alive():
-                    print(f"[Process] Waiting for {proc.name} to finish...")
-                    proc.join(timeout=2)
-            
-            # Second attempt: terminate processes that are still alive
-            for proc in processes:
-                if proc is not None and proc.is_alive():
-                    print(f"[Process] Force terminating {proc.name}...")
-                    proc.terminate()
-                    proc.join(timeout=1)
-            
-            # Final attempt: kill processes that still didn't terminate (SIGKILL)
-            for proc in processes:
-                if proc is not None and proc.is_alive():
-                    print(f"[Process] Force killing {proc.name}...")
-                    if hasattr(proc, 'kill'):
-                        proc.kill()
-                    else:
-                        import signal
-                        try:
-                            os.kill(proc.pid, signal.SIGKILL)
-                        except OSError as e:
-                            print(f"[Process Kill ERROR] {e}")
-                    proc.join(timeout=1)
-                    
-            # Check if any processes are still alive
-            alive_processes = [proc.name for proc in processes if proc is not None and proc.is_alive()]
-            if alive_processes:
-                print(f"[WARNING] Some processes are still alive: {', '.join(alive_processes)}")
-        except Exception as e:
-            print(f"[Process Join/Terminate ERROR] {e}")
-
-        # 3. Cleanup queues
-        try:
-            queues = [
-                self.video_frame_queue,  # Common queue
-                # View1 queues
-                self.view1_frame_queue,
-                self.view1_output_queue,
-                # View2 queues
-                self.view2_frame_queue,
-                self.view2_output_queue,
-                # View3 queues
-                self.view3_frame_queue,
-                self.view3_result_queue,
-                # View4 queues
-                self.view4_frame_queue,
-                self.view4_result_queue,
-            ]
-            
-            print("[Shutdown] Cleaning up queues...")
-            for q in queues:
+        for p in processes:
+            if p and p.is_alive():
                 try:
-                    # Close the queue to prevent further operations
-                    if hasattr(q, 'close'):
-                        q.close()
-                    
-                    # Empty the queue with a timeout to avoid blocking
-                    timeout = 0.1  # 100ms timeout for each get operation
-                    max_items = 100  # Safety limit to prevent infinite loops
-                    items_removed = 0
-                    
-                    while not q.empty() and items_removed < max_items:
-                        try:
-                            q.get_nowait()
-                            items_removed += 1
-                        except (queue.Empty, EOFError, BrokenPipeError):
-                            break
-                        except Exception as e:
-                            print(f"[Queue Get ERROR] {e}")
-                            break
-                            
-                    if items_removed >= max_items:
-                        print(f"[Queue Cleanup WARNING] Removed {items_removed} items, queue might not be fully emptied")
-                        
+                    p.terminate()
+                    p.join(timeout=0.5)
                 except Exception as e:
-                    print(f"[Queue Cleanup ERROR] {e}")
-                    continue
-                    
-        except Exception as e:
-            print(f"[Queue Cleanup ERROR] {e}")
+                    print(f"[Shutdown] Process termination error: {e}")
 
-        # 4. Cleanup sessions and attributes
-        try:
-            attr_list = [
-                'cap',
-                'view1_session',
-                'view2_session',
-                'view3_session',
-                'view4_session',
-                'view1_front_session',
-                'view1_back_session',
-                'view2_front_session',
-                'view2_back_session',
-            ]
-            for attr in attr_list:
-                if hasattr(self, attr):
-                    delattr(self, attr)
-        except Exception as e:
-            print(f"[Attribute Cleanup ERROR] {e}")
+        print("[Shutdown] Forcing exit")
+        os._exit(0)
 
-        # 5. Force garbage collection
-        print("[Shutdown] Running garbage collection...")
-        gc.collect()
-        
-        # 6. Check for any remaining threads
-        try:
-            active_threads = threading.enumerate()
-            if len(active_threads) > 1:  # More than just the main thread
-                print(f"[Shutdown] {len(active_threads)} threads still active:")
-                for thread in active_threads:
-                    if thread != threading.current_thread():
-                        print(f"  - {thread.name} (daemon: {thread.daemon})")
-        except Exception as e:
-            print(f"[Thread Enumeration ERROR] {e}")
-
-        # 7. Final shutdown
-        print("[Shutdown] Exiting application.")
-        
-        # Use os._exit as a last resort to ensure complete termination
-        # This is more forceful than sys.exit() and will terminate without
-        # running cleanup handlers
-        try:
-            # First try a clean exit
-            sys.exit(0)
-        except Exception as e:
-            print(f"[Sys Exit ERROR] {e}")
-            # If that fails, force exit
-            import os
-            os._exit(0)
 
     # View3 functions
     def display_view3_frames(self):
+        global global_exit_flag
         view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
-        while not self.shutdown_flag.is_set():
+        while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
                 # Handle different output formats based on model type
                 if view3_model.startswith("yolov3"):
@@ -1018,16 +944,28 @@ class UnifiedViewer(QMainWindow):
                     # print("[View3] Got frame from queue")
                 else:  # ResNet model
                     result, class_name, infer_time = self.view3_result_queue.get(timeout=1)
-                    print(f"[View3] Got frame from queue, class: {class_name}")
+                    # print(f"[View3] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
-            pixmap = convert_cv_to_qt(result)
-            if not pixmap.isNull():
-                # print("[View3] Emitting pixmap signal")
-                self.model_signals.update_view3_display.emit(pixmap)
-                self.update_stats("view3", view3_model, infer_time)
-            else:
-                print("[View3] Pixmap is null")
+            except (EOFError, BrokenPipeError, OSError) as e:
+                print(f"[View3 Queue ERROR] {e}")
+                if self.shutdown_flag.is_set() or global_exit_flag:
+                    break
+                continue
+            except Exception as e:
+                print(f"[View3 ERROR] {e}")
+                continue
+                
+            try:
+                pixmap = convert_cv_to_qt(result)
+                if not pixmap.isNull():
+                    # print("[View3] Emitting pixmap signal")
+                    self.model_signals.update_view3_display.emit(pixmap)
+                    self.update_stats("view3", view3_model, infer_time)
+                else:
+                    print("[View3] Pixmap is null")
+            except Exception as e:
+                print(f"[View3 Display ERROR] {e}")
 
     def update_view3_display(self, pixmap):
         self.view3.setPixmap(pixmap)
@@ -1035,8 +973,9 @@ class UnifiedViewer(QMainWindow):
 
     # View4 functions
     def display_view4_frames(self):
+        global global_exit_flag
         view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
-        while not self.shutdown_flag.is_set():
+        while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
                 # Handle different output formats based on model type
                 if view4_model.startswith("yolov3"):
@@ -1047,12 +986,24 @@ class UnifiedViewer(QMainWindow):
                     # print(f"[View4] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
-            pixmap = convert_cv_to_qt(result)
-            if not pixmap.isNull():
-                self.model_signals.update_view4_display.emit(pixmap)
-                self.update_stats("view4", view4_model, infer_time)
-            else:
-                print("[View4] Pixmap is null")
+            except (EOFError, BrokenPipeError, OSError) as e:
+                print(f"[View4 Queue ERROR] {e}")
+                if self.shutdown_flag.is_set() or global_exit_flag:
+                    break
+                continue
+            except Exception as e:
+                print(f"[View4 ERROR] {e}")
+                continue
+                
+            try:
+                pixmap = convert_cv_to_qt(result)
+                if not pixmap.isNull():
+                    self.model_signals.update_view4_display.emit(pixmap)
+                    self.update_stats("view4", view4_model, infer_time)
+                else:
+                    print("[View4] Pixmap is null")
+            except Exception as e:
+                print(f"[View4 Display ERROR] {e}")
 
     def update_view4_display(self, pixmap):
         self.view4.setPixmap(pixmap)
