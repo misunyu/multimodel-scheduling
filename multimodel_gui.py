@@ -14,7 +14,7 @@ import threading
 import json
 import yaml
 from datetime import datetime
-# from npu import initialize_driver, close_driver, send_receive_data_npu, resnet50_prepare_onnx_model, resnet50_preprocess, yolo_prepare_onnx_model, yolo_preprocess
+from npu import initialize_driver, close_driver, send_receive_data_npu, resnet50_prepare_onnx_model, resnet50_preprocess, yolo_prepare_onnx_model, yolo_preprocess
 from multiprocessing import Process, Queue, Event
 
 class ModelSignals(QObject):
@@ -308,12 +308,12 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event):
         while not shutdown_event.is_set():
             try:
                 frame = input_queue.get(timeout=1)
-                print(f"[YOLO CPU] Got frame from input queue")
+                # print(f"[YOLO CPU] Got frame from input queue")
             except queue.Empty:
                 continue
                 
             input_tensor, (w, h) = yolo_preprocess_local(frame)
-            print(f"[YOLO CPU] Preprocessed frame, shape: {input_tensor.shape}")
+            # print(f"[YOLO CPU] Preprocessed frame, shape: {input_tensor.shape}")
             
             try:
                 infer_start = time.time()
@@ -321,10 +321,10 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event):
                 infer_end = time.time()
                 
                 infer_time_ms = (infer_end - infer_start) * 1000.0
-                print(f"[YOLO CPU] Inference completed in {infer_time_ms:.2f}ms")
+                # print(f"[YOLO CPU] Inference completed in {infer_time_ms:.2f}ms")
                 
                 result = yolo_postprocess_cpu(output, frame, w, h)
-                print(f"[YOLO CPU] Postprocessing completed, putting result in output queue")
+                # print(f"[YOLO CPU] Postprocessing completed, putting result in output queue")
                 output_queue.put((result, infer_time_ms))
                 
             except Exception as e:
@@ -787,15 +787,15 @@ class UnifiedViewer(QMainWindow):
                 # Handle different output formats based on model type
                 if view1_model.startswith("yolov3"):
                     frame, infer_time = self.view1_output_queue.get(timeout=1)
-                    print("[View1] Got frame from queue")
+                    # print("[View1] Got frame from queue")
                 else:  # ResNet model
                     frame, class_name, infer_time = self.view1_output_queue.get(timeout=1)
-                    print(f"[View1] Got frame from queue, class: {class_name}")
+                    # print(f"[View1] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
             pixmap = convert_cv_to_qt(frame)
             if not pixmap.isNull():
-                print("[View1] Emitting pixmap signal")
+                # print("[View1] Emitting pixmap signal")
                 self.model_signals.update_view1_display.emit(pixmap)
                 self.update_stats("view1", view1_model, infer_time)
             else:
@@ -813,10 +813,10 @@ class UnifiedViewer(QMainWindow):
                 # Handle different output formats based on model type
                 if view2_model.startswith("yolov3"):
                     frame, infer_time = self.view2_output_queue.get(timeout=1)
-                    print("[View2] Got frame from queue")
+                    # print("[View2] Got frame from queue")
                 else:  # ResNet model
                     frame, class_name, infer_time = self.view2_output_queue.get(timeout=1)
-                    print(f"[View2] Got frame from queue, class: {class_name}")
+                    # print(f"[View2] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
             pixmap = convert_cv_to_qt(frame)
@@ -938,7 +938,7 @@ class UnifiedViewer(QMainWindow):
                 # Handle different output formats based on model type
                 if view3_model.startswith("yolov3"):
                     result, infer_time = self.view3_result_queue.get(timeout=1)
-                    print("[View3] Got frame from queue")
+                    # print("[View3] Got frame from queue")
                 else:  # ResNet model
                     result, class_name, infer_time = self.view3_result_queue.get(timeout=1)
                     print(f"[View3] Got frame from queue, class: {class_name}")
@@ -946,7 +946,7 @@ class UnifiedViewer(QMainWindow):
                 continue
             pixmap = convert_cv_to_qt(result)
             if not pixmap.isNull():
-                print("[View3] Emitting pixmap signal")
+                # print("[View3] Emitting pixmap signal")
                 self.model_signals.update_view3_display.emit(pixmap)
                 self.update_stats("view3", view3_model, infer_time)
             else:
@@ -964,10 +964,10 @@ class UnifiedViewer(QMainWindow):
                 # Handle different output formats based on model type
                 if view4_model.startswith("yolov3"):
                     result, infer_time = self.view4_result_queue.get(timeout=1)
-                    print("[View4] Got frame from queue")
+                    # print("[View4] Got frame from queue")
                 else:  # ResNet model
                     result, class_name, infer_time = self.view4_result_queue.get(timeout=1)
-                    print(f"[View4] Got frame from queue, class: {class_name}")
+                    # print(f"[View4] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
             pixmap = convert_cv_to_qt(result)
