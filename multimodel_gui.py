@@ -214,6 +214,25 @@ def yolo_postprocess_npu(output, original_img, img_width, img_height, confidence
     return original_img, drawn_boxes
 
 # Utility functions
+def create_x_image(width=640, height=480):
+    """Create an image with a black background and a white X across it."""
+    # Create a black image
+    img = np.zeros((height, width, 3), np.uint8)
+    
+    # Draw a white X
+    cv2.line(img, (0, 0), (width, height), (255, 255, 255), 5)
+    cv2.line(img, (0, height), (width, 0), (255, 255, 255), 5)
+    
+    # Add text
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    text = "No model specified"
+    text_size = cv2.getTextSize(text, font, 1, 2)[0]
+    text_x = (width - text_size[0]) // 2
+    text_y = (height + text_size[1]) // 2
+    cv2.putText(img, text, (text_x, text_y), font, 1, (255, 255, 255), 2)
+    
+    return img
+
 def convert_cv_to_qt(cv_img):
     if cv_img is None or cv_img.size == 0:
         return QPixmap()
@@ -461,6 +480,7 @@ class UnifiedViewer(QMainWindow):
 
         # Load model settings from YAML
         self.model_settings = {}
+        self.views_without_model = set()  # Track views without specified models
         try:
             # Load configuration from model_settings.yaml
             with open("model_settings.yaml", "r") as f:
@@ -483,11 +503,14 @@ class UnifiedViewer(QMainWindow):
                 if view in view_to_model_map:
                     self.model_settings[view] = view_to_model_map[view]
                 else:
-                    # Default if view not found in config
+                    # Mark this view as not having a specified model
+                    self.views_without_model.add(view)
+                    # Still add default settings for compatibility with existing code
                     self.model_settings[view] = {
                         "model": "yolov3_small" if view in ["view1", "view3"] else "resnet50_small",
                         "execution": "cpu"
                     }
+                    print(f"[UnifiedViewer] No model specified for {view} in model_settings.yaml")
                     
             print("[UnifiedViewer] Loaded model settings from model_settings.yaml")
         except Exception as e:
@@ -499,6 +522,7 @@ class UnifiedViewer(QMainWindow):
                 "view3": {"model": "yolov3_small", "execution": "cpu"},
                 "view4": {"model": "resnet50_small", "execution": "cpu"}
             }
+            # No views are marked as without model in case of error
 
         # UI objects
         self.view1 = self.findChild(QLabel, "view1")
@@ -799,6 +823,16 @@ class UnifiedViewer(QMainWindow):
     # View1 functions
     def display_view1_frames(self):
         global global_exit_flag
+        
+        # Check if view1 has a specified model
+        if "view1" in self.views_without_model:
+            # Display X image for view1
+            x_image = create_x_image()
+            pixmap = convert_cv_to_qt(x_image)
+            if not pixmap.isNull():
+                self.model_signals.update_view1_display.emit(pixmap)
+            return
+            
         view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
@@ -838,6 +872,16 @@ class UnifiedViewer(QMainWindow):
     # View2 functions
     def display_view2_frames(self):
         global global_exit_flag
+        
+        # Check if view2 has a specified model
+        if "view2" in self.views_without_model:
+            # Display X image for view2
+            x_image = create_x_image()
+            pixmap = convert_cv_to_qt(x_image)
+            if not pixmap.isNull():
+                self.model_signals.update_view2_display.emit(pixmap)
+            return
+            
         view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
@@ -871,6 +915,7 @@ class UnifiedViewer(QMainWindow):
                 
     def update_view2_display(self, pixmap):
         self.view2.setPixmap(pixmap)
+        self.view2.setScaledContents(True)  # Ensure the image is scaled to fit the label
 
     def signal_handler(self, sig, frame):
         print("\n[SIGINT] Caught Ctrl+C, shutting down...")
@@ -935,6 +980,16 @@ class UnifiedViewer(QMainWindow):
     # View3 functions
     def display_view3_frames(self):
         global global_exit_flag
+        
+        # Check if view3 has a specified model
+        if "view3" in self.views_without_model:
+            # Display X image for view3
+            x_image = create_x_image()
+            pixmap = convert_cv_to_qt(x_image)
+            if not pixmap.isNull():
+                self.model_signals.update_view3_display.emit(pixmap)
+            return
+            
         view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
@@ -974,6 +1029,16 @@ class UnifiedViewer(QMainWindow):
     # View4 functions
     def display_view4_frames(self):
         global global_exit_flag
+        
+        # Check if view4 has a specified model
+        if "view4" in self.views_without_model:
+            # Display X image for view4
+            x_image = create_x_image()
+            pixmap = convert_cv_to_qt(x_image)
+            if not pixmap.isNull():
+                self.model_signals.update_view4_display.emit(pixmap)
+            return
+            
         view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
@@ -1007,6 +1072,7 @@ class UnifiedViewer(QMainWindow):
 
     def update_view4_display(self, pixmap):
         self.view4.setPixmap(pixmap)
+        self.view4.setScaledContents(True)  # Ensure the image is scaled to fit the label
         
     # Statistics and monitoring functions
     def update_stats(self, view_name, model_name, current_infer_time):

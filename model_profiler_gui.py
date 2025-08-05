@@ -60,7 +60,8 @@ class ONNXProfiler(QMainWindow):
         self.folder_input = self.findChild(QLineEdit, "folder_input")
         self.browse_button = self.findChild(QPushButton, "browse_button")
         self.profile_button = self.findChild(QPushButton, "profile_button")
-        self.generate_button = self.findChild(QPushButton, "generate_button")
+        self.generate_static_button = self.findChild(QPushButton, "generate_static_button")
+        self.generate_all_button = self.findChild(QPushButton, "generate_all_button")
         self.model_tree_view = self.findChild(QTreeView, "model_tree_view")
         self.log_output = self.findChild(QPlainTextEdit, "log_output")
         self.total_table = self.findChild(QTableWidget, "total_table")
@@ -113,9 +114,12 @@ class ONNXProfiler(QMainWindow):
         self.browse_button.clicked.connect(self.browse_folder)
         self.profile_button.clicked.connect(self.run_profiling)
 
-        # self.generate_button.clicked.connect(self.highlight_deploy_results)
-        self.generate_button.clicked.connect(
+        self.generate_static_button.clicked.connect(
             lambda: self.highlight_deploy_results(self.profiled_times, self.profiled_models))
+            
+        # Connect the generate_all_button to generate_all_combinations function
+        self.generate_all_button.clicked.connect(
+            lambda: self.generate_all_combinations(self.profiled_models))
 
         self.set_tree_root(default_folder)
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
@@ -1044,6 +1048,113 @@ class ONNXProfiler(QMainWindow):
 
         self.save_schedule_to_yaml("mpopt_sched.yaml")
 
+    def generate_all_combinations(self, models):
+        """Generate all possible combinations of model assignments to devices."""
+        # Check if times or models is empty
+        if not models:
+            if self.log_output:
+                self.log_output.appendPlainText("[Warning] No models available for generating combinations.")
+            return
+        #
+        # # Get available devices
+        # device_candidates = ["CPU", "NPU1"]
+        # if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
+        #     device_candidates.append("NPU2")
+        #
+        # # Log start of generation
+        # if self.log_output:
+        #     self.log_output.appendPlainText("[Start] Generating all possible combinations...")
+        #
+        # # Generate all possible combinations
+        # all_combinations = []
+        # model_count = len(models)
+        #
+        # # Calculate total number of combinations
+        # total_combinations = len(device_candidates) ** model_count
+        #
+        # if self.log_output:
+        #     self.log_output.appendPlainText(f"[Info] Total possible combinations: {total_combinations}")
+        #
+        # # If there are too many combinations, limit the number
+        # if total_combinations > 1000:
+        #     if self.log_output:
+        #         self.log_output.appendPlainText("[Warning] Too many combinations. Limiting to best candidates.")
+        #
+        #     # Use the highlight_deploy_results function to get the best assignment
+        #     self.highlight_deploy_results(times, models)
+        #     return
+        #
+        # # Generate all combinations and evaluate them
+        # best_load = float('inf')
+        # best_assignment = None
+        
+        # Helper function to calculate load for a specific assignment
+        def calculate_load(assignment):
+            load = {"CPU": 0, "NPU1": 0, "NPU2": 0}
+            
+            for idx, device in enumerate(assignment):
+                model_idx = models[idx][0]  # (row_index, model_name)
+                cpu_t, npu1_t, npu2_t = times[idx]
+                
+                # Add to the load based on the device
+                if device == "CPU":
+                    load[device] += cpu_t
+                elif device == "NPU1":
+                    load[device] += npu1_t
+                elif device == "NPU2":
+                    load[device] += npu2_t
+                    
+            # Return the maximum load across all devices
+            return max(load.values())
+        
+        # Generate all possible assignments
+        from itertools import product
+        
+        # Create all possible combinations of device assignments
+        for assignment in product(device_candidates, repeat=model_count):
+            # Calculate the load for this assignment
+            max_load = calculate_load(assignment)
+            
+            # If this is better than our current best, update it
+            if max_load < best_load:
+                best_load = max_load
+                best_assignment = assignment
+        
+        # Apply the best assignment
+        if best_assignment:
+            self.assignment_results = [(models[idx][1], device) for idx, device in enumerate(best_assignment)]
+            
+            # Update the display with the assignment results
+            if hasattr(self, 'total_table') and self.total_table:
+                for row in range(self.total_table.rowCount()):
+                    if row >= len(self.assignment_results):
+                        break
+                    
+                    _, device = self.assignment_results[row]
+                    for col in range(self.total_table.columnCount()):
+                        item = self.total_table.item(row, col)
+                        if item:
+                            # Clear any existing background
+                            item.setBackground(QBrush())
+                            
+                            # Set background based on device
+                            if device == "CPU":
+                                item.setBackground(QBrush(QColor(204, 230, 255)))  # Light blue for CPU
+                            elif device == "NPU1":
+                                item.setBackground(QBrush(QColor(255, 255, 204)))  # Light yellow for NPU1
+                            elif device == "NPU2":
+                                item.setBackground(QBrush(QColor(255, 214, 153)))  # Light orange for NPU2
+            
+            # Save the best assignment to YAML
+            self.save_schedule_to_yaml("mpopt_sched.yaml")
+            
+            if self.log_output:
+                self.log_output.appendPlainText(f"[Info] Best assignment found with max load: {best_load:.2f}")
+                self.log_output.appendPlainText("[Info] Assignment saved to mpopt_sched.yaml")
+        else:
+            if self.log_output:
+                self.log_output.appendPlainText("[Warning] Could not find a valid assignment.")
+    
     def save_schedule_to_yaml(self, filename=None):
         """Save scheduling result with partition lists to a YAML file."""
         if not self.assignment_results:
