@@ -481,6 +481,7 @@ class UnifiedViewer(QMainWindow):
         # Load model settings from YAML
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
+        self.current_combination = "combination1"  # Default combination
         try:
             # Load configuration from model_settings.yaml
             with open("model_settings.yaml", "r") as f:
@@ -489,8 +490,8 @@ class UnifiedViewer(QMainWindow):
             # Create a mapping from views to model configurations based on the display field
             view_to_model_map = {}
             # Use combination1 configuration
-            if "combination1" in config:
-                for model_config_name, model_config in config["combination1"].items():
+            if self.current_combination in config:
+                for model_config_name, model_config in config[self.current_combination].items():
                     if "display" in model_config:
                         view_name = model_config["display"]
                         view_to_model_map[view_name] = {
@@ -1189,6 +1190,7 @@ class UnifiedViewer(QMainWindow):
             # Prepare throughput data
             throughput_data = {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "combination": self.current_combination,
                 "models": {
                     "view1": {
                         "model": view1_model,

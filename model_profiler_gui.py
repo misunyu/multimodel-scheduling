@@ -119,7 +119,7 @@ class ONNXProfiler(QMainWindow):
             
         # Connect the generate_all_button to generate_all_combinations function
         self.generate_all_button.clicked.connect(
-            lambda: self.generate_all_combinations(self.profiled_models))
+            lambda: self.generate_all_combinations())
 
         self.set_tree_root(default_folder)
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
@@ -869,15 +869,6 @@ class ONNXProfiler(QMainWindow):
         npu_num = 0 if label == "NPU1" else 1
         basename = os.path.basename(o_path)
 
-        # # yolov3로 시작하는 경우 실제 NPU 실행
-        # if os.path.basename(o_path).startswith("yolov3"):
-        #     load_time_ms, infer_time_ms = self.process_yolo_npu(npu_num, o_path)
-        #     return load_time_ms, infer_time_ms, []
-        # elif os.path.basename(o_path).startswith("resnet50"):
-        #     load_time_ms, infer_time_ms = self.process_resnet50_npu(npu_num, o_path)
-        #     return load_time_ms, infer_time_ms, []
-        # else:
-
         simulated_profiles = {
             "resnet50": {
                 "NPU1": (15.8, 38.6),
@@ -911,69 +902,6 @@ class ONNXProfiler(QMainWindow):
 
         return load_time_ms, infer_time_ms, []
 
-    # def process_yolo_npu(self, npu_num, o_path):
-    #     try:
-    #         driver = NeublaDriver()
-    #         assert driver.Init(npu_num) == 0
-    #
-    #         start_load = time.time()
-    #         assert driver.LoadModel(o_path) == 0
-    #         end_load = time.time()
-    #         load_time_ms = (end_load - start_load) * 1000.0
-    #
-    #         random_input = np.random.rand(3, 608, 608).astype(np.uint8)
-    #         input_data = random_input.tobytes()
-    #
-    #         start_infer = time.time()
-    #         assert driver.SendInput(input_data, 3 * 608 * 608) == 0
-    #         assert driver.Launch() == 0
-    #         raw_outputs = driver.ReceiveOutputs()
-    #         end_infer = time.time()
-    #         infer_time_ms = (end_infer - start_infer) * 1000.0
-    #
-    #         assert driver.Close() == 0
-    #
-    #     except Exception as e:
-    #         try:
-    #             driver.Close()
-    #         except:
-    #             pass
-    #         print(f"[Error] NPU{npu_num}: {e}")
-    #         exit()
-    #
-    #     return load_time_ms, infer_time_ms
-    #
-    # def process_resnet50_npu(self, npu_num, o_path):
-    #     try:
-    #         driver = NeublaDriver()
-    #         assert driver.Init(npu_num) == 0
-    #
-    #         start_load = time.time()
-    #         assert driver.LoadModel(o_path) == 0
-    #         end_load = time.time()
-    #         load_time_ms = (end_load - start_load) * 1000.0
-    #
-    #         random_input = np.random.rand(3, 224, 224).astype(np.uint8)
-    #         input_data = random_input.tobytes()
-    #
-    #         start_infer = time.time()
-    #         assert driver.SendInput(input_data, 3 * 224 * 224) == 0
-    #         assert driver.Launch() == 0
-    #         raw_outputs = driver.ReceiveOutputs()
-    #         end_infer = time.time()
-    #         infer_time_ms = (end_infer - start_infer) * 1000.0
-    #
-    #         assert driver.Close() == 0
-    #
-    #     except Exception as e:
-    #         try:
-    #             driver.Close()
-    #         except:
-    #             pass
-    #         print(f"[Error] NPU{npu_num}: {e}")
-    #         exit()
-    #
-    #     return load_time_ms, infer_time_ms
 
     def contains_custom_op(self, onnx_path):
         try:
@@ -1048,112 +976,103 @@ class ONNXProfiler(QMainWindow):
 
         self.save_schedule_to_yaml("mpopt_sched.yaml")
 
-    def generate_all_combinations(self, models):
+    def generate_all_combinations(self, models=None):
         """Generate all possible combinations of model assignments to devices."""
-        # Check if times or models is empty
+        # If models parameter is not provided, use the profiled_models
+        if models is None:
+            # If profiled_models is empty, try to find models from the folder
+            if not self.profiled_models:
+                if self.log_output:
+                    self.log_output.appendPlainText("[Info] No profiled models found. Scanning model directory...")
+                
+                # Get the root folder from the input field
+                root_folder = self.folder_input.text().strip()
+                
+                # Find all model directories in the root folder
+                if os.path.isdir(root_folder):
+                    model_dirs = []
+                    for item in os.listdir(root_folder):
+                        item_path = os.path.join(root_folder, item)
+                        if os.path.isdir(item_path):
+                            # Check if this directory contains model files
+                            model_dir = os.path.join(item_path, "model")
+                            if os.path.isdir(model_dir) and any(f.endswith(".onnx") for f in os.listdir(model_dir)):
+                                model_dirs.append(item)
+                    
+                    # Create profiled_models entries for each model found
+                    for i, model in enumerate(model_dirs):
+                        self.profiled_models.append((i, model))
+                    
+                    if self.log_output:
+                        self.log_output.appendPlainText(f"[Info] Found {len(model_dirs)} models in directory.")
+            
+            models = [model for _, model in self.profiled_models]
+            
+        # Log the model list at the beginning of the function
+        if self.log_output:
+            self.log_output.appendPlainText("[Info] Generating combinations for models:")
+            for model in sorted(models):
+                self.log_output.appendPlainText(f"  - {model}")
+            self.log_output.appendPlainText("")
+            
+        # If we still don't have any models, log a warning and return
         if not models:
             if self.log_output:
-                self.log_output.appendPlainText("[Warning] No models available for generating combinations.")
+                self.log_output.appendPlainText("[Warning] No models found to generate combinations.")
             return
-        #
-        # # Get available devices
-        # device_candidates = ["CPU", "NPU1"]
-        # if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
-        #     device_candidates.append("NPU2")
-        #
-        # # Log start of generation
-        # if self.log_output:
-        #     self.log_output.appendPlainText("[Start] Generating all possible combinations...")
-        #
-        # # Generate all possible combinations
-        # all_combinations = []
-        # model_count = len(models)
-        #
-        # # Calculate total number of combinations
-        # total_combinations = len(device_candidates) ** model_count
-        #
-        # if self.log_output:
-        #     self.log_output.appendPlainText(f"[Info] Total possible combinations: {total_combinations}")
-        #
-        # # If there are too many combinations, limit the number
-        # if total_combinations > 1000:
-        #     if self.log_output:
-        #         self.log_output.appendPlainText("[Warning] Too many combinations. Limiting to best candidates.")
-        #
-        #     # Use the highlight_deploy_results function to get the best assignment
-        #     self.highlight_deploy_results(times, models)
-        #     return
-        #
-        # # Generate all combinations and evaluate them
-        # best_load = float('inf')
-        # best_assignment = None
-        
-        # Helper function to calculate load for a specific assignment
-        def calculate_load(assignment):
-            load = {"CPU": 0, "NPU1": 0, "NPU2": 0}
             
-            for idx, device in enumerate(assignment):
-                model_idx = models[idx][0]  # (row_index, model_name)
-                cpu_t, npu1_t, npu2_t = times[idx]
+        # Generate all possible device assignments (CPU, NPU1, NPU2)
+        devices = ["CPU", "NPU1"]
+        if self.enable_npu2_checkbox.isChecked():
+            devices.append("NPU2")
+            
+        # Clear previous assignment results
+        self.assignment_results = []
+        
+        # For now, just assign each model to the device with the fastest inference time
+        for model in models:
+            # Find the best device for this model
+            best_device = "CPU"
+            best_time = float('inf')
+            
+            # Find the row in profiled_models that matches this model
+            model_row = None
+            for row, m in self.profiled_models:
+                if m == model:
+                    model_row = row
+                    break
+                    
+            if model_row is not None and model_row < len(self.profiled_times):
+                # profiled_times contains (cpu_time, npu1_time, npu2_time)
+                times = self.profiled_times[model_row]
                 
-                # Add to the load based on the device
-                if device == "CPU":
-                    load[device] += cpu_t
-                elif device == "NPU1":
-                    load[device] += npu1_t
-                elif device == "NPU2":
-                    load[device] += npu2_t
+                # Check CPU time
+                if times[0] < best_time:
+                    best_time = times[0]
+                    best_device = "CPU"
                     
-            # Return the maximum load across all devices
-            return max(load.values())
-        
-        # Generate all possible assignments
-        from itertools import product
-        
-        # Create all possible combinations of device assignments
-        for assignment in product(device_candidates, repeat=model_count):
-            # Calculate the load for this assignment
-            max_load = calculate_load(assignment)
-            
-            # If this is better than our current best, update it
-            if max_load < best_load:
-                best_load = max_load
-                best_assignment = assignment
-        
-        # Apply the best assignment
-        if best_assignment:
-            self.assignment_results = [(models[idx][1], device) for idx, device in enumerate(best_assignment)]
-            
-            # Update the display with the assignment results
-            if hasattr(self, 'total_table') and self.total_table:
-                for row in range(self.total_table.rowCount()):
-                    if row >= len(self.assignment_results):
-                        break
+                # Check NPU1 time
+                if times[1] < best_time:
+                    best_time = times[1]
+                    best_device = "NPU1"
                     
-                    _, device = self.assignment_results[row]
-                    for col in range(self.total_table.columnCount()):
-                        item = self.total_table.item(row, col)
-                        if item:
-                            # Clear any existing background
-                            item.setBackground(QBrush())
-                            
-                            # Set background based on device
-                            if device == "CPU":
-                                item.setBackground(QBrush(QColor(204, 230, 255)))  # Light blue for CPU
-                            elif device == "NPU1":
-                                item.setBackground(QBrush(QColor(255, 255, 204)))  # Light yellow for NPU1
-                            elif device == "NPU2":
-                                item.setBackground(QBrush(QColor(255, 214, 153)))  # Light orange for NPU2
+                # Check NPU2 time if enabled
+                if self.enable_npu2_checkbox.isChecked() and len(times) > 2 and times[2] < best_time:
+                    best_time = times[2]
+                    best_device = "NPU2"
             
-            # Save the best assignment to YAML
-            self.save_schedule_to_yaml("mpopt_sched.yaml")
+            # Add the assignment to results
+            self.assignment_results.append((model, best_device))
             
             if self.log_output:
-                self.log_output.appendPlainText(f"[Info] Best assignment found with max load: {best_load:.2f}")
-                self.log_output.appendPlainText("[Info] Assignment saved to mpopt_sched.yaml")
-        else:
-            if self.log_output:
-                self.log_output.appendPlainText("[Warning] Could not find a valid assignment.")
+                self.log_output.appendPlainText(f"[Info] Assigned {model} to {best_device} (inference time: {best_time:.1f} ms)")
+                
+        # Apply highlighting based on the assignments
+        self.highlight_deploy_results(self.profiled_times, self.profiled_models)
+        
+        # Save the schedule to YAML
+        self.save_schedule_to_yaml("mpopt_sched.yaml")
+
     
     def save_schedule_to_yaml(self, filename=None):
         """Save scheduling result with partition lists to a YAML file."""
