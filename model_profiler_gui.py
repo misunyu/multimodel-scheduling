@@ -130,6 +130,11 @@ class ONNXProfiler(QMainWindow):
         self.actionLoad_Test_Data = self.findChild(QAction, "actionLoad_Test_Data")
         if self.actionLoad_Test_Data:
             self.actionLoad_Test_Data.triggered.connect(self.load_sample_data)
+            
+        # Connect Save Sample Data menu action
+        self.actionSave_Sample_Data = self.findChild(QAction, "actionSave_Sample_Data")
+        if self.actionSave_Sample_Data:
+            self.actionSave_Sample_Data.triggered.connect(self.save_sample_data)
 
         self.load_sample_button = self.findChild(QPushButton, "load_sample_button")
         if self.load_sample_button:
@@ -380,7 +385,151 @@ class ONNXProfiler(QMainWindow):
                     if item:
                         item.setBackground(QBrush(QColor(230, 230, 230)))
 
+    def save_sample_data(self):
+        """Save the current profiling data to a JSON file."""
+        # Check if there's data to save
+        if (self.cpu_table.rowCount() == 0 and 
+            self.npu1_table.rowCount() == 0 and 
+            self.npu2_table.rowCount() == 0):
+            if self.log_output:
+                self.log_output.appendPlainText("[Warning] No profiling data to save.")
+            return
+        
+        # Extract data from tables
+        cpu_data = []
+        for row in range(self.cpu_table.rowCount()):
+            model_item = self.cpu_table.item(row, 0)
+            load_item = self.cpu_table.item(row, 1)
+            infer_item = self.cpu_table.item(row, 2)
+            
+            if model_item and load_item and infer_item:
+                model_path = model_item.text()
+                load_time = float(load_item.text())
+                infer_time = float(infer_item.text())
+                cpu_data.append((model_path, load_time, infer_time))
+        
+        npu1_data = []
+        for row in range(self.npu1_table.rowCount()):
+            model_item = self.npu1_table.item(row, 0)
+            load_item = self.npu1_table.item(row, 1)
+            infer_item = self.npu1_table.item(row, 2)
+            
+            if model_item and load_item and infer_item:
+                model_name = model_item.text()
+                load_time = float(load_item.text())
+                infer_time = float(infer_item.text())
+                npu1_data.append((model_name, load_time, infer_time))
+        
+        npu2_data = []
+        for row in range(self.npu2_table.rowCount()):
+            model_item = self.npu2_table.item(row, 0)
+            load_item = self.npu2_table.item(row, 1)
+            infer_item = self.npu2_table.item(row, 2)
+            
+            if model_item and load_item and infer_item:
+                model_name = model_item.text()
+                load_time = float(load_item.text())
+                infer_time = float(infer_item.text())
+                npu2_data.append((model_name, load_time, infer_time))
+        
+        # Create simulated_profiles from NPU data
+        simulated_profiles = {}
+        
+        # Process NPU1 data
+        for model_name, load_time, infer_time in npu1_data:
+            # Extract model key (e.g., "resnet50" from "resnet50_neubla_p1.o")
+            model_key = model_name.split('_')[0]
+            if model_key not in simulated_profiles:
+                simulated_profiles[model_key] = {}
+            simulated_profiles[model_key]["NPU1"] = (load_time, infer_time)
+        
+        # Process NPU2 data
+        for model_name, load_time, infer_time in npu2_data:
+            # Extract model key (e.g., "resnet50" from "resnet50_neubla_p1.o")
+            model_key = model_name.split('_')[0]
+            if model_key not in simulated_profiles:
+                simulated_profiles[model_key] = {}
+            simulated_profiles[model_key]["NPU2"] = (load_time, infer_time)
+        
+        # Create data structure to save
+        save_data = {
+            "simulated_profiles": simulated_profiles,
+            "cpu_data": cpu_data,
+            "npu1_data": npu1_data,
+            "npu2_data": npu2_data
+        }
+        
+        # Ask user for save location
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Sample Data", "", "JSON Files (*.json)"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        # Add .json extension if not present
+        if not file_path.endswith('.json'):
+            file_path += '.json'
+        
+        # Save to file
+        try:
+            with open(file_path, 'w') as f:
+                # Convert tuples to lists for JSON serialization
+                json_data = {
+                    "simulated_profiles": {
+                        model: {
+                            device: list(values) 
+                            for device, values in devices.items()
+                        } 
+                        for model, devices in simulated_profiles.items()
+                    },
+                    "cpu_data": [list(item) for item in cpu_data],
+                    "npu1_data": [list(item) for item in npu1_data],
+                    "npu2_data": [list(item) for item in npu2_data]
+                }
+                json.dump(json_data, f, indent=2)
+            
+            if self.log_output:
+                self.log_output.appendPlainText(f"[Info] Sample data saved to {file_path}")
+        
+        except Exception as e:
+            if self.log_output:
+                self.log_output.appendPlainText(f"[Error] Failed to save sample data: {str(e)}")
+    
     def load_sample_data(self):
+        # Check if user wants to load from file
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load Sample Data", "", "JSON Files (*.json)"
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                
+                # Convert lists back to tuples
+                simulated_profiles = {
+                    model: {
+                        device: tuple(values) 
+                        for device, values in devices.items()
+                    } 
+                    for model, devices in data["simulated_profiles"].items()
+                }
+                cpu_data = [tuple(item) for item in data["cpu_data"]]
+                npu1_data = [tuple(item) for item in data["npu1_data"]]
+                npu2_data = [tuple(item) for item in data["npu2_data"]]
+                
+                # Process the loaded data
+                self._process_sample_data(simulated_profiles, cpu_data, npu1_data, npu2_data)
+                
+                if self.log_output:
+                    self.log_output.appendPlainText(f"[Info] Sample data loaded from {file_path}")
+                return
+            except Exception as e:
+                if self.log_output:
+                    self.log_output.appendPlainText(f"[Error] Failed to load sample data: {str(e)}")
+        
+        # If no file was selected or loading failed, use default data
         # 시뮬레이션 데이터 정의
         simulated_profiles = {
             "resnet50": {
@@ -424,7 +573,15 @@ class ONNXProfiler(QMainWindow):
             ("yolov3_big_neubla_p1.o", *simulated_profiles["yolov3_big"]["NPU2"]),
             ("yolov3_small_neubla_p1.o", *simulated_profiles["yolov3_small"]["NPU2"]),
         ]
-
+        
+        # Process the default data
+        self._process_sample_data(simulated_profiles, cpu_data, npu1_data, npu2_data)
+        
+        if self.log_output:
+            self.log_output.appendPlainText("[Info] 테스트 데이터가 로드되었습니다.")
+            
+    def _process_sample_data(self, simulated_profiles, cpu_data, npu1_data, npu2_data):
+        """Process sample data and update the UI tables."""
         def fill_table(table, data):
             table.clear()
             table.setColumnCount(3)
@@ -609,9 +766,6 @@ class ONNXProfiler(QMainWindow):
                 item = self.total_table.item(total_row, col)
                 if item:
                     item.setBackground(QBrush(QColor(230, 230, 230)))
-
-        if self.log_output:
-            self.log_output.appendPlainText("[Info] 테스트 데이터가 로드되었습니다.")
 
     # === Table Management ===
     def init_table(self, table):

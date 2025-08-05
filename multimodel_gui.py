@@ -238,7 +238,7 @@ def get_cpu_metrics(interval=0):
     }
 
 # NPU processing functions
-def run_resnet_npu_process(image_dir, output_queue, shutdown_event):
+def run_resnet_npu_process(image_dir, output_queue, shutdown_event, npu_id=1):
     try:
         image_files = [os.path.join(image_dir, f)
                       for f in os.listdir(image_dir)
@@ -258,7 +258,7 @@ def run_resnet_npu_process(image_dir, output_queue, shutdown_event):
         zp_out = params['/0/fc/Gemm_output_0_zero_point']
         weight_q = params['0.fc.weight_quantized'].T.astype(np.int32)
 
-        driver = initialize_driver(1, "./models/resnet50/npu_code/resnet50_neubla_p1.o")
+        driver = initialize_driver(npu_id, "./models/resnet50_small/npu_code/resnet50_small_neubla_p1.o")
 
         index = 0
         while not shutdown_event.is_set():
@@ -337,12 +337,12 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event):
 def run_resnet_cpu_process(image_dir, output_queue, shutdown_event):
     try:
         # Load the ResNet model
-        session = ort.InferenceSession("models/resnet50/model/resnet50.onnx")
+        session = ort.InferenceSession("models/resnet50_small/model/resnet50_small.onnx")
         
         # Get list of image files
         image_files = [os.path.join(image_dir, f)
                       for f in os.listdir(image_dir)
-                      if f.lower().endswith(('jpg', 'jpeg', 'png'))]
+                      if f.lower().endswith(('jpg', 'jpeg', 'pngrun_resnet_cpu_process'))]
         if not image_files:
             print("[ResNet CPU] No images found")
             return
@@ -379,13 +379,13 @@ def run_resnet_cpu_process(image_dir, output_queue, shutdown_event):
     except Exception as e:
         print(f"[ResNet CPU Process ERROR] {e}")
 
-def run_yolo_npu_process(input_queue, output_queue, shutdown_event):
+def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0):
     try:
         front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
             "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
         )
 
-        driver = initialize_driver(0, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+        driver = initialize_driver(npu_id, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
         frame_delay = 1.0 / 30.0
 
         while not shutdown_event.is_set():
@@ -459,17 +459,25 @@ class UnifiedViewer(QMainWindow):
             with open("model_settings.yaml", "r") as f:
                 config = yaml.safe_load(f)
                 
-            # Extract view settings from model_settings.yaml
+            # Create a mapping from views to model configurations based on the display field
+            view_to_model_map = {}
+            if "combinations" in config:
+                for model_config_name, model_config in config["combinations"].items():
+                    if "display" in model_config:
+                        view_name = model_config["display"]
+                        view_to_model_map[view_name] = {
+                            "model": model_config.get("model", ""),
+                            "execution": model_config.get("execution", "cpu")
+                        }
+            
+            # Assign model configurations to views
             for view in ["view1", "view2", "view3", "view4"]:
-                if view in config:
-                    self.model_settings[view] = {
-                        "model": config[view]["model"],
-                        "execution": config[view]["execution"]
-                    }
+                if view in view_to_model_map:
+                    self.model_settings[view] = view_to_model_map[view]
                 else:
                     # Default if view not found in config
                     self.model_settings[view] = {
-                        "model": "yolov3_small" if view in ["view1", "view3"] else "resnet50",
+                        "model": "yolov3_small" if view in ["view1", "view3"] else "resnet50_small",
                         "execution": "cpu"
                     }
                     
@@ -479,9 +487,9 @@ class UnifiedViewer(QMainWindow):
             # Set default settings if file loading fails
             self.model_settings = {
                 "view1": {"model": "yolov3_small", "execution": "cpu"},
-                "view2": {"model": "resnet50", "execution": "cpu"},
+                "view2": {"model": "resnet50_small", "execution": "cpu"},
                 "view3": {"model": "yolov3_small", "execution": "cpu"},
-                "view4": {"model": "resnet50", "execution": "cpu"}
+                "view4": {"model": "resnet50_small", "execution": "cpu"}
             }
 
         # UI objects
@@ -514,6 +522,7 @@ class UnifiedViewer(QMainWindow):
         self.view1_shutdown_event = Event()
         
         # View2 queues and events
+        self.view2_frame_queue = Queue(maxsize=10)  # Added for YOLO models
         self.view2_output_queue = Queue(maxsize=5)
         self.view2_shutdown_event = Event()
         
@@ -523,6 +532,7 @@ class UnifiedViewer(QMainWindow):
         self.view3_shutdown_event = Event()
         
         # View4 queues and events
+        self.view4_frame_queue = Queue(maxsize=10)  # Added for YOLO models
         self.view4_result_queue = Queue(maxsize=5)
         self.view4_shutdown_event = Event()
 
@@ -561,68 +571,155 @@ class UnifiedViewer(QMainWindow):
         )
         self.video_reader_proc.start()
 
-        # View1 process (YOLO)
+        # Initialize a dictionary to track which views are running YOLO models (need video frames)
+        self.yolo_views = set()
+        
+        # View1 process
+        view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
         view1_execution = self.model_settings.get("view1", {}).get("execution", "cpu")
-        if view1_execution == "npu":
-            print("[UnifiedViewer] Starting View1 with YOLO NPU")
-            self.view1_process = Process(
-                target=run_yolo_npu_process,
-                args=(self.view1_frame_queue, self.view1_output_queue, self.view1_shutdown_event),
-            )
+        
+        if view1_model.startswith("yolov3"):
+            # YOLO model for View1
+            self.yolo_views.add("view1")
+            if view1_execution == "npu0" or view1_execution == "npu1":
+                npu_id = 0 if view1_execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting View1 with {view1_model} NPU{npu_id}")
+                self.view1_process = Process(
+                    target=run_yolo_npu_process,
+                    args=(self.view1_frame_queue, self.view1_output_queue, self.view1_shutdown_event, npu_id),
+                )
+            else:
+                print(f"[UnifiedViewer] Starting View1 with {view1_model} CPU")
+                self.view1_process = Process(
+                    target=run_yolo_cpu_process,
+                    args=(self.view1_frame_queue, self.view1_output_queue, self.view1_shutdown_event),
+                )
         else:
-            print("[UnifiedViewer] Starting View1 with YOLO CPU")
-            self.view1_process = Process(
-                target=run_yolo_cpu_process,
-                args=(self.view1_frame_queue, self.view1_output_queue, self.view1_shutdown_event),
-            )
+            # ResNet model for View1
+            if view1_execution == "npu0" or view1_execution == "npu1":
+                npu_id = 0 if view1_execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting View1 with {view1_model} NPU{npu_id}")
+                self.view1_process = Process(
+                    target=run_resnet_npu_process,
+                    args=("./imagenet-sample-images", self.view1_output_queue, self.view1_shutdown_event, npu_id),
+                )
+            else:
+                print(f"[UnifiedViewer] Starting View1 with {view1_model} CPU")
+                self.view1_process = Process(
+                    target=run_resnet_cpu_process,
+                    args=("./imagenet-sample-images", self.view1_output_queue, self.view1_shutdown_event),
+                )
         self.view1_process.start()
 
-        # View2 process (ResNet)
+        # View2 process
+        view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
         view2_execution = self.model_settings.get("view2", {}).get("execution", "cpu")
-        if view2_execution == "npu":
-            print("[UnifiedViewer] Starting View2 with ResNet NPU")
-            self.view2_process = Process(
-                target=run_resnet_npu_process,
-                args=("./imagenet-sample-images", self.view2_output_queue, self.view2_shutdown_event),
-            )
+        
+        if view2_model.startswith("yolov3"):
+            # YOLO model for View2
+            self.yolo_views.add("view2")
+            if view2_execution == "npu0" or view2_execution == "npu1":
+                npu_id = 0 if view2_execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting View2 with {view2_model} NPU{npu_id}")
+                self.view2_process = Process(
+                    target=run_yolo_npu_process,
+                    args=(self.view2_frame_queue, self.view2_output_queue, self.view2_shutdown_event, npu_id),
+                )
+            else:
+                print(f"[UnifiedViewer] Starting View2 with {view2_model} CPU")
+                self.view2_process = Process(
+                    target=run_yolo_cpu_process,
+                    args=(self.view2_frame_queue, self.view2_output_queue, self.view2_shutdown_event),
+                )
         else:
-            print("[UnifiedViewer] Starting View2 with ResNet CPU")
-            self.view2_process = Process(
-                target=run_resnet_cpu_process,
-                args=("./imagenet-sample-images", self.view2_output_queue, self.view2_shutdown_event),
-            )
+            # ResNet model for View2
+            if view2_execution == "npu0" or view2_execution == "npu1":
+                npu_id = 0 if view2_execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting View2 with {view2_model} NPU{npu_id}")
+                self.view2_process = Process(
+                    target=run_resnet_npu_process,
+                    args=("./imagenet-sample-images", self.view2_output_queue, self.view2_shutdown_event, npu_id),
+                )
+            else:
+                print(f"[UnifiedViewer] Starting View2 with {view2_model} CPU")
+                self.view2_process = Process(
+                    target=run_resnet_cpu_process,
+                    args=("./imagenet-sample-images", self.view2_output_queue, self.view2_shutdown_event),
+                )
         self.view2_process.start()
 
-        # View3 process (YOLO)
+        # View3 process
+        view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
         view3_execution = self.model_settings.get("view3", {}).get("execution", "cpu")
-        if view3_execution == "npu":
-            print("[UnifiedViewer] Starting View3 with YOLO NPU")
-            self.view3_process = Process(
-                target=run_yolo_npu_process,
-                args=(self.view3_frame_queue, self.view3_result_queue, self.view3_shutdown_event),
-            )
+        
+        if view3_model.startswith("yolov3"):
+            # YOLO model for View3
+            self.yolo_views.add("view3")
+            if view3_execution == "npu0" or view3_execution == "npu1":
+                npu_id = 0 if view3_execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting View3 with {view3_model} NPU{npu_id}")
+                self.view3_process = Process(
+                    target=run_yolo_npu_process,
+                    args=(self.view3_frame_queue, self.view3_result_queue, self.view3_shutdown_event, npu_id),
+                )
+            else:
+                print(f"[UnifiedViewer] Starting View3 with {view3_model} CPU")
+                self.view3_process = Process(
+                    target=run_yolo_cpu_process,
+                    args=(self.view3_frame_queue, self.view3_result_queue, self.view3_shutdown_event),
+                )
         else:
-            print("[UnifiedViewer] Starting View3 with YOLO CPU")
-            self.view3_process = Process(
-                target=run_yolo_cpu_process,
-                args=(self.view3_frame_queue, self.view3_result_queue, self.view3_shutdown_event),
-            )
+            # ResNet model for View3
+            if view3_execution == "npu0" or view3_execution == "npu1":
+                npu_id = 0 if view3_execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting View3 with {view3_model} NPU{npu_id}")
+                self.view3_process = Process(
+                    target=run_resnet_npu_process,
+                    args=("./imagenet-sample-images", self.view3_result_queue, self.view3_shutdown_event, npu_id),
+                )
+            else:
+                print(f"[UnifiedViewer] Starting View3 with {view3_model} CPU")
+                self.view3_process = Process(
+                    target=run_resnet_cpu_process,
+                    args=("./imagenet-sample-images", self.view3_result_queue, self.view3_shutdown_event),
+                )
         self.view3_process.start()
 
-        # View4 process (ResNet)
+        # View4 process
+        view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
         view4_execution = self.model_settings.get("view4", {}).get("execution", "cpu")
-        if view4_execution == "npu":
-            print("[UnifiedViewer] Starting View4 with ResNet NPU")
-            self.view4_process = Process(
-                target=run_resnet_npu_process,
-                args=("./imagenet-sample-images", self.view4_result_queue, self.view4_shutdown_event),
-            )
+        
+        if view4_model.startswith("yolov3"):
+            # YOLO model for View4
+            self.yolo_views.add("view4")
+            if view4_execution == "npu0" or view4_execution == "npu1":
+                npu_id = 0 if view4_execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting View4 with {view4_model} NPU{npu_id}")
+                self.view4_process = Process(
+                    target=run_yolo_npu_process,
+                    args=(self.view4_frame_queue, self.view4_result_queue, self.view4_shutdown_event, npu_id),
+                )
+            else:
+                print(f"[UnifiedViewer] Starting View4 with {view4_model} CPU")
+                self.view4_process = Process(
+                    target=run_yolo_cpu_process,
+                    args=(self.view4_frame_queue, self.view4_result_queue, self.view4_shutdown_event),
+                )
         else:
-            print("[UnifiedViewer] Starting View4 with ResNet CPU")
-            self.view4_process = Process(
-                target=run_resnet_cpu_process,
-                args=("./imagenet-sample-images", self.view4_result_queue, self.view4_shutdown_event),
-            )
+            # ResNet model for View4
+            if view4_execution == "npu0" or view4_execution == "npu1":
+                npu_id = 0 if view4_execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting View4 with {view4_model} NPU{npu_id}")
+                self.view4_process = Process(
+                    target=run_resnet_npu_process,
+                    args=("./imagenet-sample-images", self.view4_result_queue, self.view4_shutdown_event, npu_id),
+                )
+            else:
+                print(f"[UnifiedViewer] Starting View4 with {view4_model} CPU")
+                self.view4_process = Process(
+                    target=run_resnet_cpu_process,
+                    args=("./imagenet-sample-images", self.view4_result_queue, self.view4_shutdown_event),
+                )
         self.view4_process.start()
 
         # Start threads
@@ -659,51 +756,76 @@ class UnifiedViewer(QMainWindow):
 
         frame_delay = 1.0 / fps
 
+        # Map view names to their frame queues
+        view_frame_queues = {
+            "view1": self.view1_frame_queue,
+            "view2": self.view2_frame_queue,
+            "view3": self.view3_frame_queue,
+            "view4": self.view4_frame_queue
+        }
+
         while not self.shutdown_flag.is_set():
             try:
                 frame = self.video_frame_queue.get(timeout=1)
-                if not self.view3_frame_queue.full():
-                    self.view3_frame_queue.put(frame.copy())
-                if not self.view1_frame_queue.full():
-                    self.view1_frame_queue.put(frame.copy())
+                
+                # Feed frames to all views that are running YOLO models
+                for view_name in self.yolo_views:
+                    if view_name in view_frame_queues:
+                        queue = view_frame_queues[view_name]
+                        if not queue.full():
+                            queue.put(frame.copy())
+                
                 time.sleep(frame_delay)
             except queue.Empty:
                 continue
 
     # View1 functions
     def display_view1_frames(self):
+        view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
         while not self.shutdown_flag.is_set():
             try:
-                frame, infer_time = self.view1_output_queue.get(timeout=1)
-                print("[View1] Got frame from queue")
+                # Handle different output formats based on model type
+                if view1_model.startswith("yolov3"):
+                    frame, infer_time = self.view1_output_queue.get(timeout=1)
+                    print("[View1] Got frame from queue")
+                else:  # ResNet model
+                    frame, class_name, infer_time = self.view1_output_queue.get(timeout=1)
+                    print(f"[View1] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
             pixmap = convert_cv_to_qt(frame)
             if not pixmap.isNull():
                 print("[View1] Emitting pixmap signal")
                 self.model_signals.update_view1_display.emit(pixmap)
-                self.update_stats("yolov3_small", infer_time)
+                self.update_stats("view1", view1_model, infer_time)
             else:
                 print("[View1] Pixmap is null")
                 
     def update_view1_display(self, pixmap):
-        self.view1.setPixmap(pixmap)  # view1 was previously yolo_label
+        self.view1.setPixmap(pixmap)
         self.view1.setScaledContents(True)  # Ensure the image is scaled to fit the label
         
     # View2 functions
     def display_view2_frames(self):
+        view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
         while not self.shutdown_flag.is_set():
             try:
-                frame, class_name, infer_time = self.view2_output_queue.get(timeout=1)
+                # Handle different output formats based on model type
+                if view2_model.startswith("yolov3"):
+                    frame, infer_time = self.view2_output_queue.get(timeout=1)
+                    print("[View2] Got frame from queue")
+                else:  # ResNet model
+                    frame, class_name, infer_time = self.view2_output_queue.get(timeout=1)
+                    print(f"[View2] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
             pixmap = convert_cv_to_qt(frame)
             if not pixmap.isNull():
                 self.model_signals.update_view2_display.emit(pixmap)
-                self.update_stats("resnet50_cpu", infer_time)
+                self.update_stats("view2", view2_model, infer_time)
                 
     def update_view2_display(self, pixmap):
-        self.view2.setPixmap(pixmap)  # view2 was previously resnet_label
+        self.view2.setPixmap(pixmap)
 
     def closeEvent(self, event):
         event.accept()  # 먼저 종료 요청 수락
@@ -763,12 +885,14 @@ class UnifiedViewer(QMainWindow):
                 # View1 queues
                 self.view1_frame_queue,
                 self.view1_output_queue,
-                # View2 queue
+                # View2 queues
+                self.view2_frame_queue,
                 self.view2_output_queue,
                 # View3 queues
                 self.view3_frame_queue,
                 self.view3_result_queue,
-                # View4 queue
+                # View4 queues
+                self.view4_frame_queue,
                 self.view4_result_queue,
             ]
             for q in queues:
@@ -808,71 +932,84 @@ class UnifiedViewer(QMainWindow):
 
     # View3 functions
     def display_view3_frames(self):
+        view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
         while not self.shutdown_flag.is_set():
             try:
-                result, infer_time = self.view3_result_queue.get(timeout=1)
-                print("[View3] Got frame from queue")
+                # Handle different output formats based on model type
+                if view3_model.startswith("yolov3"):
+                    result, infer_time = self.view3_result_queue.get(timeout=1)
+                    print("[View3] Got frame from queue")
+                else:  # ResNet model
+                    result, class_name, infer_time = self.view3_result_queue.get(timeout=1)
+                    print(f"[View3] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
             pixmap = convert_cv_to_qt(result)
             if not pixmap.isNull():
                 print("[View3] Emitting pixmap signal")
                 self.model_signals.update_view3_display.emit(pixmap)
-                self.update_stats("yolov3_small", infer_time)
+                self.update_stats("view3", view3_model, infer_time)
             else:
                 print("[View3] Pixmap is null")
 
     def update_view3_display(self, pixmap):
-        self.view3.setPixmap(pixmap)  # view3 was previously view1
+        self.view3.setPixmap(pixmap)
         self.view3.setScaledContents(True)  # Ensure the image is scaled to fit the label
 
     # View4 functions
     def display_view4_frames(self):
+        view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
         while not self.shutdown_flag.is_set():
             try:
-                frame, class_name, infer_time = self.view4_result_queue.get(timeout=1)
+                # Handle different output formats based on model type
+                if view4_model.startswith("yolov3"):
+                    result, infer_time = self.view4_result_queue.get(timeout=1)
+                    print("[View4] Got frame from queue")
+                else:  # ResNet model
+                    result, class_name, infer_time = self.view4_result_queue.get(timeout=1)
+                    print(f"[View4] Got frame from queue, class: {class_name}")
             except queue.Empty:
                 continue
-            pixmap = convert_cv_to_qt(frame)
+            pixmap = convert_cv_to_qt(result)
             if not pixmap.isNull():
                 self.model_signals.update_view4_display.emit(pixmap)
-                self.update_stats("resnet50_cpu", infer_time)
+                self.update_stats("view4", view4_model, infer_time)
+            else:
+                print("[View4] Pixmap is null")
 
     def update_view4_display(self, pixmap):
-        self.view4.setPixmap(pixmap)  # view4 was previously view2
+        self.view4.setPixmap(pixmap)
         
     # Statistics and monitoring functions
-    def update_stats(self, model_name, current_infer_time):
-        if model_name == "yolov3_small":
+    def update_stats(self, view_name, model_name, current_infer_time):
+        # Update statistics based on view name
+        if view_name == "view1":
             self.view1_total_infer_time += current_infer_time
             self.view1_infer_count += 1
             self.view1_avg_infer_time = self.view1_total_infer_time / self.view1_infer_count
             self.view1_avg_fps = 1000.0 / self.view1_avg_infer_time if self.view1_avg_infer_time > 0 else 0.0
-        elif model_name == "resnet50_cpu":
+            avg_fps = self.view1_avg_fps
+        elif view_name == "view2":
             self.view2_total_infer_time += current_infer_time
             self.view2_infer_count += 1
             self.view2_avg_infer_time = self.view2_total_infer_time / self.view2_infer_count
             self.view2_avg_fps = 1000.0 / self.view2_avg_infer_time if self.view2_avg_infer_time > 0 else 0.0
-        elif model_name == "yolov3_small" and self.view1_infer_count > 0:
+            avg_fps = self.view2_avg_fps
+        elif view_name == "view3":
             self.view3_total_infer_time += current_infer_time
             self.view3_infer_count += 1
             self.view3_avg_infer_time = self.view3_total_infer_time / self.view3_infer_count
             self.view3_avg_fps = 1000.0 / self.view3_avg_infer_time if self.view3_avg_infer_time > 0 else 0.0
-        elif model_name == "resnet50_cpu" and self.view2_infer_count > 0:
+            avg_fps = self.view3_avg_fps
+        elif view_name == "view4":
             self.view4_total_infer_time += current_infer_time
             self.view4_infer_count += 1
             self.view4_avg_infer_time = self.view4_total_infer_time / self.view4_infer_count
             self.view4_avg_fps = 1000.0 / self.view4_avg_infer_time if self.view4_avg_infer_time > 0 else 0.0
-
-        avg_fps = 0.0
-        if model_name == "yolov3_small" and self.view1_infer_count > 0:
-            avg_fps = self.view3_avg_fps
-        elif model_name == "yolov3_small":
-            avg_fps = self.view1_avg_fps
-        elif model_name == "resnet50_cpu" and self.view2_infer_count > 0:
             avg_fps = self.view4_avg_fps
-        elif model_name == "resnet50_cpu":
-            avg_fps = self.view2_avg_fps
+        else:
+            # Default case if view name is not recognized
+            avg_fps = 0.0
             
         async_log(model_name, current_infer_time, avg_fps)
 
@@ -887,24 +1024,31 @@ class UnifiedViewer(QMainWindow):
         total_fps = (self.view1_avg_fps + self.view2_avg_fps + self.view3_avg_fps + self.view4_avg_fps)
         total_avg_fps = (self.view1_avg_fps + self.view2_avg_fps + self.view3_avg_fps + self.view4_avg_fps)/4
         
-        # Get execution mode for each view
+        # Get model and execution mode for each view
+        view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
         view1_mode = self.model_settings.get("view1", {}).get("execution", "cpu").upper()
+        
+        view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
         view2_mode = self.model_settings.get("view2", {}).get("execution", "cpu").upper()
+        
+        view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
         view3_mode = self.model_settings.get("view3", {}).get("execution", "cpu").upper()
+        
+        view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
         view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
         
         self.model_performance_label.setText(
             f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
             f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>"
-            f"<b>View1 (YOLO {view1_mode})</b> Avg FPS: {self.view1_avg_fps:.1f} "
+            f"<b>View1 ({view1_model} {view1_mode})</b> Avg FPS: {self.view1_avg_fps:.1f} "
             f"(<span style='color: gray;'>{self.view1_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: purple;'>View2 (ResNet {view2_mode})</span></b> Avg FPS: "
+            f"<b><span style='color: purple;'>View2 ({view2_model} {view2_mode})</span></b> Avg FPS: "
             f"<span style='color: purple;'>{self.view2_avg_fps:.1f}</span> "
             f"(<span style='color: purple;'>{self.view2_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: green;'>View3 (YOLO {view3_mode})</span></b> Avg FPS: "
+            f"<b><span style='color: green;'>View3 ({view3_model} {view3_mode})</span></b> Avg FPS: "
             f"<span style='color: green;'>{self.view3_avg_fps:.1f}</span> "
             f"(<span style='color: green;'>{self.view3_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: blue;'>View4 (ResNet {view4_mode})</span></b> Avg FPS: "
+            f"<b><span style='color: blue;'>View4 ({view4_model} {view4_mode})</span></b> Avg FPS: "
             f"<span style='color: blue;'>{self.view4_avg_fps:.1f}</span> "
             f"(<span style='color: blue;'>{self.view4_avg_infer_time:.1f} ms</span>)"
         )
@@ -931,10 +1075,17 @@ class UnifiedViewer(QMainWindow):
         Save the current throughput of each model and the total throughput to result_throughput.json
         """
         try:
-            # Get execution mode for each view
+            # Get model and execution mode for each view
+            view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
             view1_mode = self.model_settings.get("view1", {}).get("execution", "cpu").upper()
+            
+            view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
             view2_mode = self.model_settings.get("view2", {}).get("execution", "cpu").upper()
+            
+            view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
             view3_mode = self.model_settings.get("view3", {}).get("execution", "cpu").upper()
+            
+            view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
             view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
             
             # Calculate total throughput
@@ -946,28 +1097,28 @@ class UnifiedViewer(QMainWindow):
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "models": {
                     "view1": {
-                        "model": "yolov3_small",
+                        "model": view1_model,
                         "execution": view1_mode,
                         "throughput_fps": round(self.view1_avg_fps, 2),
                         "avg_inference_time_ms": round(self.view1_avg_infer_time, 2),
                         "inference_count": self.view1_infer_count
                     },
                     "view2": {
-                        "model": "resnet50",
+                        "model": view2_model,
                         "execution": view2_mode,
                         "throughput_fps": round(self.view2_avg_fps, 2),
                         "avg_inference_time_ms": round(self.view2_avg_infer_time, 2),
                         "inference_count": self.view2_infer_count
                     },
                     "view3": {
-                        "model": "yolov3_small",
+                        "model": view3_model,
                         "execution": view3_mode,
                         "throughput_fps": round(self.view3_avg_fps, 2),
                         "avg_inference_time_ms": round(self.view3_avg_infer_time, 2),
                         "inference_count": self.view3_infer_count
                     },
                     "view4": {
-                        "model": "resnet50",
+                        "model": view4_model,
                         "execution": view4_mode,
                         "throughput_fps": round(self.view4_avg_fps, 2),
                         "avg_inference_time_ms": round(self.view4_avg_infer_time, 2),
