@@ -14,7 +14,7 @@ import threading
 import json
 import yaml
 from datetime import datetime
-from npu import initialize_driver, close_driver, send_receive_data_npu, resnet50_prepare_onnx_model, resnet50_preprocess, yolo_prepare_onnx_model, yolo_preprocess
+# from npu import initialize_driver, close_driver, send_receive_data_npu, resnet50_prepare_onnx_model, resnet50_preprocess, yolo_prepare_onnx_model, yolo_preprocess
 from multiprocessing import Process, Queue, Event
 
 class ModelSignals(QObject):
@@ -463,7 +463,7 @@ class UnifiedViewer(QMainWindow):
             view_to_model_map = {}
             # Use combination1 configuration
             if "combination1" in config:
-                for model_config_name, model_config in config["combination2"].items():
+                for model_config_name, model_config in config["combination1"].items():
                     if "display" in model_config:
                         view_name = model_config["display"]
                         view_to_model_map[view_name] = {
@@ -831,7 +831,11 @@ class UnifiedViewer(QMainWindow):
     def closeEvent(self, event):
         event.accept()  # 먼저 종료 요청 수락
         # 백그라운드 종료 처리 시작
-        threading.Thread(target=self.shutdown_all, daemon=True).start()
+        # Use non-daemon thread to ensure it completes before application exits
+        shutdown_thread = threading.Thread(target=self.shutdown_all)
+        shutdown_thread.start()
+        # Wait for a short time to ensure shutdown process has started
+        shutdown_thread.join(timeout=0.5)
 
     def shutdown_all(self):
         import sys
@@ -869,13 +873,38 @@ class UnifiedViewer(QMainWindow):
                 getattr(self, 'view4_process', None),
                 getattr(self, 'video_reader_proc', None)
             ]
+            
+            # First attempt: join with timeout
             for proc in processes:
                 if proc is not None and proc.is_alive():
+                    print(f"[Process] Waiting for {proc.name} to finish...")
                     proc.join(timeout=2)
-                    if proc.is_alive():
-                        print(f"[Process] Force terminating {proc.name}...")
-                        proc.terminate()
-                        proc.join()
+            
+            # Second attempt: terminate processes that are still alive
+            for proc in processes:
+                if proc is not None and proc.is_alive():
+                    print(f"[Process] Force terminating {proc.name}...")
+                    proc.terminate()
+                    proc.join(timeout=1)
+            
+            # Final attempt: kill processes that still didn't terminate (SIGKILL)
+            for proc in processes:
+                if proc is not None and proc.is_alive():
+                    print(f"[Process] Force killing {proc.name}...")
+                    if hasattr(proc, 'kill'):
+                        proc.kill()
+                    else:
+                        import signal
+                        try:
+                            os.kill(proc.pid, signal.SIGKILL)
+                        except OSError as e:
+                            print(f"[Process Kill ERROR] {e}")
+                    proc.join(timeout=1)
+                    
+            # Check if any processes are still alive
+            alive_processes = [proc.name for proc in processes if proc is not None and proc.is_alive()]
+            if alive_processes:
+                print(f"[WARNING] Some processes are still alive: {', '.join(alive_processes)}")
         except Exception as e:
             print(f"[Process Join/Terminate ERROR] {e}")
 
@@ -896,12 +925,36 @@ class UnifiedViewer(QMainWindow):
                 self.view4_frame_queue,
                 self.view4_result_queue,
             ]
+            
+            print("[Shutdown] Cleaning up queues...")
             for q in queues:
-                while not q.empty():
-                    try:
-                        q.get_nowait()
-                    except:
-                        break
+                try:
+                    # Close the queue to prevent further operations
+                    if hasattr(q, 'close'):
+                        q.close()
+                    
+                    # Empty the queue with a timeout to avoid blocking
+                    timeout = 0.1  # 100ms timeout for each get operation
+                    max_items = 100  # Safety limit to prevent infinite loops
+                    items_removed = 0
+                    
+                    while not q.empty() and items_removed < max_items:
+                        try:
+                            q.get_nowait()
+                            items_removed += 1
+                        except (queue.Empty, EOFError, BrokenPipeError):
+                            break
+                        except Exception as e:
+                            print(f"[Queue Get ERROR] {e}")
+                            break
+                            
+                    if items_removed >= max_items:
+                        print(f"[Queue Cleanup WARNING] Removed {items_removed} items, queue might not be fully emptied")
+                        
+                except Exception as e:
+                    print(f"[Queue Cleanup ERROR] {e}")
+                    continue
+                    
         except Exception as e:
             print(f"[Queue Cleanup ERROR] {e}")
 
@@ -925,11 +978,34 @@ class UnifiedViewer(QMainWindow):
             print(f"[Attribute Cleanup ERROR] {e}")
 
         # 5. Force garbage collection
+        print("[Shutdown] Running garbage collection...")
         gc.collect()
+        
+        # 6. Check for any remaining threads
+        try:
+            active_threads = threading.enumerate()
+            if len(active_threads) > 1:  # More than just the main thread
+                print(f"[Shutdown] {len(active_threads)} threads still active:")
+                for thread in active_threads:
+                    if thread != threading.current_thread():
+                        print(f"  - {thread.name} (daemon: {thread.daemon})")
+        except Exception as e:
+            print(f"[Thread Enumeration ERROR] {e}")
 
-        # 6. Final shutdown
+        # 7. Final shutdown
         print("[Shutdown] Exiting application.")
-        sys.exit(0)
+        
+        # Use os._exit as a last resort to ensure complete termination
+        # This is more forceful than sys.exit() and will terminate without
+        # running cleanup handlers
+        try:
+            # First try a clean exit
+            sys.exit(0)
+        except Exception as e:
+            print(f"[Sys Exit ERROR] {e}")
+            # If that fails, force exit
+            import os
+            os._exit(0)
 
     # View3 functions
     def display_view3_frames(self):
