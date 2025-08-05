@@ -461,8 +461,9 @@ class UnifiedViewer(QMainWindow):
                 
             # Create a mapping from views to model configurations based on the display field
             view_to_model_map = {}
-            if "combinations" in config:
-                for model_config_name, model_config in config["combinations"].items():
+            # Use combination1 configuration
+            if "combination1" in config:
+                for model_config_name, model_config in config["combination2"].items():
                     if "display" in model_config:
                         view_name = model_config["display"]
                         view_to_model_map[view_name] = {
