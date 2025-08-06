@@ -10,6 +10,7 @@ import yaml
 
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtWidgets import QAbstractItemView
 from PyQt5.QtWidgets import (
     QMainWindow, QLineEdit, QPushButton,
     QFileDialog, QTreeView, QPlainTextEdit,
@@ -105,6 +106,7 @@ class ONNXProfiler(QMainWindow):
         self.model_tree_view.setColumnWidth(1, 60)
         self.model_tree_view.setColumnHidden(2, True)
         self.model_tree_view.setColumnHidden(3, True)
+        self.model_tree_view.setSelectionMode(QAbstractItemView.MultiSelection)
 
         default_folder = os.path.join(os.getcwd(), "models")
         if not os.path.isdir(default_folder):
@@ -197,14 +199,47 @@ class ONNXProfiler(QMainWindow):
 
         onnx_files = []
         o_files = []
-
-        for dirpath, _, filenames in os.walk(root_folder):
-            for f in filenames:
-                full_path = os.path.join(dirpath, f)
-                if f.endswith(".onnx"):
-                    onnx_files.append(full_path)
-                elif f.endswith(".o"):
-                    o_files.append(full_path)
+        
+        # Get selected items from the model_tree_view
+        selected_indices = self.model_tree_view.selectedIndexes()
+        selected_paths = []
+        
+        # If no selection, log a message and return
+        if not selected_indices:
+            if self.log_output:
+                self.log_output.appendPlainText("[Warning] No items selected in the model tree. Please select folders or files to profile.\n")
+                return
+        
+        # Get file paths from selected indices (only column 0 to avoid duplicates)
+        for index in selected_indices:
+            if index.column() == 0:  # Only process column 0 to avoid duplicates
+                file_path = self.fs_model.filePath(index)
+                selected_paths.append(file_path)
+                
+                # Log selected items
+                if self.log_output:
+                    rel_path = os.path.relpath(file_path, root_folder)
+                    self.log_output.appendPlainText(f"[Selected] {rel_path}")
+        
+        self.log_output.appendPlainText("")  # Add empty line for readability
+        
+        # Process selected paths
+        for path in selected_paths:
+            if os.path.isdir(path):
+                # If it's a directory, walk through it
+                for dirpath, _, filenames in os.walk(path):
+                    for f in filenames:
+                        full_path = os.path.join(dirpath, f)
+                        if f.endswith(".onnx"):
+                            onnx_files.append(full_path)
+                        elif f.endswith(".o"):
+                            o_files.append(full_path)
+            elif os.path.isfile(path):
+                # If it's a file, check its extension
+                if path.endswith(".onnx"):
+                    onnx_files.append(path)
+                elif path.endswith(".o"):
+                    o_files.append(path)
 
         valid_model_onnx = {}
 
@@ -923,12 +958,63 @@ class ONNXProfiler(QMainWindow):
             if self.log_output:
                 self.log_output.appendPlainText("[Warning] No profiling data available for deployment.")
             return
+            
+        # Get selected items from the model_tree_view
+        selected_indices = self.model_tree_view.selectedIndexes()
+        selected_paths = []
+        selected_models = set()
+        
+        # If no selection, log a message and return
+        if not selected_indices:
+            if self.log_output:
+                self.log_output.appendPlainText("[Warning] No items selected in the model tree. Please select folders or files for deployment.\n")
+                return
+        
+        # Get file paths from selected indices (only column 0 to avoid duplicates)
+        root_folder = self.folder_input.text().strip()
+        for index in selected_indices:
+            if index.column() == 0:  # Only process column 0 to avoid duplicates
+                file_path = self.fs_model.filePath(index)
+                selected_paths.append(file_path)
+        
+        # Extract model names from selected paths
+        for path in selected_paths:
+            if os.path.isdir(path):
+                # If it's a directory, check if it's a model directory or contains model directories
+                if os.path.basename(os.path.dirname(path)) == "model":
+                    # If parent directory is "model", get the grandparent directory name
+                    selected_models.add(os.path.basename(os.path.dirname(os.path.dirname(path))))
+                elif os.path.basename(path) == "model":
+                    # If directory is "model", get the parent directory name
+                    selected_models.add(os.path.basename(os.path.dirname(path)))
+                else:
+                    # Check if this directory contains a model subdirectory
+                    model_dir = os.path.join(path, "model")
+                    if os.path.isdir(model_dir):
+                        selected_models.add(os.path.basename(path))
+                    else:
+                        # Check all subdirectories
+                        for item in os.listdir(path):
+                            item_path = os.path.join(path, item)
+                            if os.path.isdir(item_path):
+                                model_dir = os.path.join(item_path, "model")
+                                if os.path.isdir(model_dir):
+                                    selected_models.add(item)
+            elif os.path.isfile(path):
+                # If it's a file, extract the model name from the path
+                parts = os.path.relpath(path, root_folder).split(os.sep)
+                if len(parts) >= 1:
+                    selected_models.add(parts[0])
 
         load = {"CPU": 0, "NPU1": 0, "NPU2": 0}
         assignments = []
 
         for idx, (cpu_t, npu1_t, npu2_t) in enumerate(times):
             model_name = models[idx][1]  # (row_index, model_name)
+            
+            # Skip models that are not selected
+            if selected_models and model_name not in selected_models:
+                continue
 
             # Default frequency value for the model
             freq = 1
@@ -978,35 +1064,69 @@ class ONNXProfiler(QMainWindow):
 
     def generate_all_combinations(self, models=None):
         """Generate all possible combinations of model assignments to devices."""
-        # If models parameter is not provided, use the profiled_models
+        # If models parameter is not provided, use the selected models from model_tree_view
         if models is None:
-            # If profiled_models is empty, try to find models from the folder
+            # Get selected items from the model_tree_view
+            selected_indices = self.model_tree_view.selectedIndexes()
+            selected_paths = []
+            
+            # If no selection, log a message and return
+            if not selected_indices:
+                if self.log_output:
+                    self.log_output.appendPlainText("[Warning] No items selected in the model tree. Please select folders or files to generate combinations.\n")
+                    return
+            
+            # Get file paths from selected indices (only column 0 to avoid duplicates)
+            root_folder = self.folder_input.text().strip()
+            for index in selected_indices:
+                if index.column() == 0:  # Only process column 0 to avoid duplicates
+                    file_path = self.fs_model.filePath(index)
+                    selected_paths.append(file_path)
+            
+            # Extract model names from selected paths
+            model_dirs = set()
+            for path in selected_paths:
+                if os.path.isdir(path):
+                    # If it's a directory, check if it's a model directory or contains model directories
+                    if os.path.basename(os.path.dirname(path)) == "model":
+                        # If parent directory is "model", get the grandparent directory name
+                        model_dirs.add(os.path.basename(os.path.dirname(os.path.dirname(path))))
+                    elif os.path.basename(path) == "model":
+                        # If directory is "model", get the parent directory name
+                        model_dirs.add(os.path.basename(os.path.dirname(path)))
+                    else:
+                        # Check if this directory contains a model subdirectory
+                        model_dir = os.path.join(path, "model")
+                        if os.path.isdir(model_dir):
+                            model_dirs.add(os.path.basename(path))
+                        else:
+                            # Check all subdirectories
+                            for item in os.listdir(path):
+                                item_path = os.path.join(path, item)
+                                if os.path.isdir(item_path):
+                                    model_dir = os.path.join(item_path, "model")
+                                    if os.path.isdir(model_dir):
+                                        model_dirs.add(item)
+                elif os.path.isfile(path):
+                    # If it's a file, extract the model name from the path
+                    parts = os.path.relpath(path, root_folder).split(os.sep)
+                    if len(parts) >= 1:
+                        model_dirs.add(parts[0])
+            
+            # Use profiled_models if available, otherwise create new entries
             if not self.profiled_models:
                 if self.log_output:
-                    self.log_output.appendPlainText("[Info] No profiled models found. Scanning model directory...")
+                    self.log_output.appendPlainText("[Info] No profiled models found. Using selected models.")
                 
-                # Get the root folder from the input field
-                root_folder = self.folder_input.text().strip()
+                # Create profiled_models entries for each model found
+                for i, model in enumerate(model_dirs):
+                    self.profiled_models.append((i, model))
                 
-                # Find all model directories in the root folder
-                if os.path.isdir(root_folder):
-                    model_dirs = []
-                    for item in os.listdir(root_folder):
-                        item_path = os.path.join(root_folder, item)
-                        if os.path.isdir(item_path):
-                            # Check if this directory contains model files
-                            model_dir = os.path.join(item_path, "model")
-                            if os.path.isdir(model_dir) and any(f.endswith(".onnx") for f in os.listdir(model_dir)):
-                                model_dirs.append(item)
-                    
-                    # Create profiled_models entries for each model found
-                    for i, model in enumerate(model_dirs):
-                        self.profiled_models.append((i, model))
-                    
-                    if self.log_output:
-                        self.log_output.appendPlainText(f"[Info] Found {len(model_dirs)} models in directory.")
+                if self.log_output:
+                    self.log_output.appendPlainText(f"[Info] Found {len(model_dirs)} models in selection.")
             
-            models = [model for _, model in self.profiled_models]
+            # Filter profiled_models to only include selected models
+            models = [model for _, model in self.profiled_models if model in model_dirs]
             
         # Log the model list at the beginning of the function
         if self.log_output:
