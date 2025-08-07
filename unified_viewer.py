@@ -25,13 +25,20 @@ from model_processors import (
 class UnifiedViewer(QMainWindow):
     """Main viewer class for the multimodel scheduling application."""
     
-    def __init__(self):
-        """Initialize the UnifiedViewer."""
+    def __init__(self, schedule_file='model_schedules.yaml'):
+        """Initialize the UnifiedViewer.
+        
+        Args:
+            schedule_file (str): Path to the model scheduling information file.
+        """
         super().__init__()
-        uic.loadUi("multimodel_display_layout.ui", self)
+        uic.loadUi("schedule_executor_display_layout.ui", self)
         
         # Set up signal handler for SIGINT (Ctrl+C)
         signal.signal(signal.SIGINT, self.signal_handler)
+
+        # Store the schedule file path
+        self.schedule_file = schedule_file
 
         # Initialize model settings and views
         self.initialize_model_settings()
@@ -49,11 +56,11 @@ class UnifiedViewer(QMainWindow):
         """Initialize model settings from YAML configuration."""
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
-        self.current_combination = "combination1"  # Default combination
+        self.current_combination = "combination_1"  # Default combination
         
         try:
-            # Load configuration from model_settings.yaml
-            with open("model_settings.yaml", "r") as f:
+            # Load configuration from the specified schedule file
+            with open(self.schedule_file, "r") as f:
                 config = yaml.safe_load(f)
                 
             # Create a mapping from views to model configurations based on the display field
@@ -80,11 +87,11 @@ class UnifiedViewer(QMainWindow):
                         "model": "yolov3_small" if view in ["view1", "view3"] else "resnet50_small",
                         "execution": "cpu"
                     }
-                    print(f"[UnifiedViewer] No model specified for {view} in model_settings.yaml")
+                    print(f"[UnifiedViewer] No model specified for {view} in {self.schedule_file}")
                     
-            print("[UnifiedViewer] Loaded model settings from model_settings.yaml")
+            print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file}")
         except Exception as e:
-            print(f"[UnifiedViewer ERROR] Failed to load model_settings.yaml: {e}")
+            print(f"[UnifiedViewer ERROR] Failed to load {self.schedule_file}: {e}")
             # Set default settings if file loading fails
             self.model_settings = {
                 "view1": {"model": "yolov3_small", "execution": "cpu"},
@@ -519,49 +526,78 @@ class UnifiedViewer(QMainWindow):
             view4_avg_infer_time = self.view4_handler.avg_infer_time
             view4_infer_count = self.view4_handler.infer_count
             
-            # Calculate total throughput
-            total_fps = (view1_avg_fps + view2_avg_fps + view3_avg_fps + view4_avg_fps)
-            total_avg_fps = total_fps / 4 if total_fps > 0 else 0.0
+            # Identify views with allocated models (inference_count > 0)
+            active_views = []
+            active_fps_values = []
             
-            # Prepare throughput data
+            if view1_infer_count > 0:
+                active_views.append("view1")
+                active_fps_values.append(view1_avg_fps)
+            
+            if view2_infer_count > 0:
+                active_views.append("view2")
+                active_fps_values.append(view2_avg_fps)
+            
+            if view3_infer_count > 0:
+                active_views.append("view3")
+                active_fps_values.append(view3_avg_fps)
+            
+            if view4_infer_count > 0:
+                active_views.append("view4")
+                active_fps_values.append(view4_avg_fps)
+            
+            # Calculate total throughput only for active views
+            total_fps = sum(active_fps_values)
+            active_view_count = len(active_views)
+            total_avg_fps = total_fps / active_view_count if active_view_count > 0 else 0.0
+            
+            # Prepare throughput data with only active views
             throughput_data = {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "combination": self.current_combination,
-                "models": {
-                    "view1": {
-                        "model": view1_model,
-                        "execution": view1_mode,
-                        "throughput_fps": round(view1_avg_fps, 2),
-                        "avg_inference_time_ms": round(view1_avg_infer_time, 2),
-                        "inference_count": view1_infer_count
-                    },
-                    "view2": {
-                        "model": view2_model,
-                        "execution": view2_mode,
-                        "throughput_fps": round(view2_avg_fps, 2),
-                        "avg_inference_time_ms": round(view2_avg_infer_time, 2),
-                        "inference_count": view2_infer_count
-                    },
-                    "view3": {
-                        "model": view3_model,
-                        "execution": view3_mode,
-                        "throughput_fps": round(view3_avg_fps, 2),
-                        "avg_inference_time_ms": round(view3_avg_infer_time, 2),
-                        "inference_count": view3_infer_count
-                    },
-                    "view4": {
-                        "model": view4_model,
-                        "execution": view4_mode,
-                        "throughput_fps": round(view4_avg_fps, 2),
-                        "avg_inference_time_ms": round(view4_avg_infer_time, 2),
-                        "inference_count": view4_infer_count
-                    }
-                },
+                "models": {},
                 "total": {
                     "total_throughput_fps": round(total_fps, 2),
                     "avg_throughput_fps": round(total_avg_fps, 2)
                 }
             }
+            
+            # Add only active views to the models dictionary
+            if "view1" in active_views:
+                throughput_data["models"]["view1"] = {
+                    "model": view1_model,
+                    "execution": view1_mode,
+                    "throughput_fps": round(view1_avg_fps, 2),
+                    "avg_inference_time_ms": round(view1_avg_infer_time, 2),
+                    "inference_count": view1_infer_count
+                }
+            
+            if "view2" in active_views:
+                throughput_data["models"]["view2"] = {
+                    "model": view2_model,
+                    "execution": view2_mode,
+                    "throughput_fps": round(view2_avg_fps, 2),
+                    "avg_inference_time_ms": round(view2_avg_infer_time, 2),
+                    "inference_count": view2_infer_count
+                }
+            
+            if "view3" in active_views:
+                throughput_data["models"]["view3"] = {
+                    "model": view3_model,
+                    "execution": view3_mode,
+                    "throughput_fps": round(view3_avg_fps, 2),
+                    "avg_inference_time_ms": round(view3_avg_infer_time, 2),
+                    "inference_count": view3_infer_count
+                }
+            
+            if "view4" in active_views:
+                throughput_data["models"]["view4"] = {
+                    "model": view4_model,
+                    "execution": view4_mode,
+                    "throughput_fps": round(view4_avg_fps, 2),
+                    "avg_inference_time_ms": round(view4_avg_infer_time, 2),
+                    "inference_count": view4_infer_count
+                }
             
             # Save to JSON file
             with open("result_throughput.json", "w", encoding="utf-8") as f:

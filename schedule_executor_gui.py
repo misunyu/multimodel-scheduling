@@ -1,5 +1,5 @@
 """
-Multimodel GUI application - Main file (legacy version)
+Schedule Executor GUI application - Main file (legacy version)
 
 This file is kept for backward compatibility.
 For the modularized version, see:
@@ -12,13 +12,20 @@ For the modularized version, see:
 """
 
 import sys
+import argparse
 from PyQt5.QtWidgets import QApplication
 from unified_viewer import UnifiedViewer
 
 def main():
     """Main function to start the application."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Schedule Executor GUI application')
+    parser.add_argument('--schedule', '-s', type=str, default='model_schedules.yaml',
+                        help='Path to the model scheduling information file (default: model_schedules.yaml)')
+    args = parser.parse_args()
+    
     app = QApplication(sys.argv)
-    viewer = UnifiedViewer()
+    viewer = UnifiedViewer(schedule_file=args.schedule)
     viewer.show()
     sys.exit(app.exec_())
 

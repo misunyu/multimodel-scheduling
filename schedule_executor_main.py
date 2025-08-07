@@ -1,8 +1,8 @@
-# multimodel_main.py
+# schedule_executor_main.py
 import sys
 import os
 from PyQt5.QtWidgets import QApplication
-from multimodel_gui import UnifiedViewer
+from schedule_executor_gui import UnifiedViewer
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

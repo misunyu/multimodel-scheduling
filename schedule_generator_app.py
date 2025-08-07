@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QHeaderView, QLabel, QAbstractItemView
 )
 
-from model_profiler import (
+from schedule_generator import (
     ModelProfiler, DataProcessor, UIComponents, FileManager
 )
 
@@ -20,12 +20,18 @@ class ONNXProfilerApp(QMainWindow):
     Integrates the various components for model profiling.
     """
     
-    def __init__(self):
-        """Initialize the application."""
+    def __init__(self, target_device_file=None):
+        """
+        Initialize the application.
+        
+        Args:
+            target_device_file (str, optional): Path to the target device information file.
+                                               Defaults to None, which will use "target_device.yaml".
+        """
         super().__init__()
         
         # Load UI from file
-        uic.loadUi("onnx_profiler_display.ui", self)
+        uic.loadUi("schedule_generator_display.ui", self)
         
         # Initialize profiled_times and profiled_models attributes
         self.profiled_times = []
@@ -47,7 +53,7 @@ class ONNXProfilerApp(QMainWindow):
         self.setup_file_system_model()
         
         # Default device settings file
-        self.device_settings_file = "target_device.yaml"
+        self.device_settings_file = target_device_file if target_device_file else "target_device.yaml"
         
         # Load device settings from file
         self.device_settings = self.file_manager.load_device_settings(self.device_settings_file)
@@ -415,6 +421,8 @@ class ONNXProfilerApp(QMainWindow):
     
     def generate_all_combinations(self, models=None):
         """Generate all possible model-to-device combinations."""
+        import yaml
+        
         root_folder = self.folder_input.text().strip()
         if not os.path.isdir(root_folder):
             return
@@ -440,38 +448,123 @@ class ONNXProfilerApp(QMainWindow):
                 if model_name not in models:
                     models.append(model_name)
 
-        if  models is None:
+        if models is None or len(models) == 0:
             self.log_message("[Warning] No models selected for assignment.")
             return
+            
+        # Limit to maximum 4 models as specified
+        if len(models) > 4:
+            self.log_message(f"[Warning] More than 4 models selected. Using only the first 4.")
+            models = models[:4]
+            
+        # Load device information from target device file
+        try:
+            with open(self.device_settings_file, "r") as f:
+                device_config = yaml.safe_load(f)
+                
+            # Extract device information
+            cpu_count = device_config.get("devices", {}).get("cpu", {}).get("count", 1)
+            npu_count = device_config.get("devices", {}).get("npu", {}).get("count", 0)
+            npu_ids = device_config.get("devices", {}).get("npu", {}).get("ids", [])
+            
+            self.log_message(f"[Info] Found {cpu_count} CPU(s) and {npu_count} NPU(s) with IDs {npu_ids}")
+        except Exception as e:
+            self.log_message(f"[Error] Failed to load {self.device_settings_file}: {e}")
+            return
+            
+        # Generate all possible combinations
+        combinations = []
         
-        # Collect inference times
-        cpu_infer = {}
-        npu1_infer = {}
-        npu2_infer = {}
+        # Helper function to generate combinations recursively
+        def generate_combinations(model_idx, current_assignment, available_npus):
+            # Base case: all models have been assigned
+            if model_idx >= len(models):
+                combinations.append(current_assignment.copy())
+                return
+                
+            model = models[model_idx]
+            
+            # Option 1: Assign to CPU (always possible since CPU can run multiple models)
+            current_assignment[model] = "cpu"
+            generate_combinations(model_idx + 1, current_assignment, available_npus)
+            
+            # Option 2: Assign to available NPUs (one model per NPU)
+            for npu_id in available_npus:
+                current_assignment[model] = f"npu{npu_id}"
+                # Remove this NPU from available NPUs for recursive calls
+                new_available = available_npus.copy()
+                new_available.remove(npu_id)
+                generate_combinations(model_idx + 1, current_assignment, new_available)
+                
+        # Start the recursive generation
+        generate_combinations(0, {}, set(npu_ids))
         
-        for row in range(self.total_table.rowCount() - 1):  # Skip total row
-            model = self.total_table.item(row, 0).text()
-            cpu_infer[model] = float(self.total_table.item(row, 1).text())
-            npu1_infer[model] = float(self.total_table.item(row, 3).text())
-            npu2_infer[model] = float(self.total_table.item(row, 5).text())
+        # Update assignment_results for display in the UI
+        # Only include unique model-device pairs from the first combination
+        self.assignment_results = []
+        if combinations:
+            # Use the first combination for display
+            for model, device in combinations[0].items():
+                self.assignment_results.append((model, device))
+            
+            # Log the number of total combinations
+            self.log_message(f"[Info] Generated {len(combinations)} possible combinations")
         
-        # Assign models to devices
-        self.assignment_results = self.data_processor.assign_models_to_devices(
-            models, cpu_infer, npu1_infer, npu2_infer
-        )
+        # Create the model_schedules.yaml content
+        schedules = {}
         
-        # Highlight results
-        self.ui_components.highlight_deploy_results(
-            self.total_table, self.profiled_times, self.profiled_models
-        )
+        for i, combination in enumerate(combinations):
+            combination_name = f"combination_{i+1}"
+            schedules[combination_name] = {}
+            
+            for j, (model, device) in enumerate(combination.items()):
+                # Create a unique ID for this model-device pair
+                model_id = f"{model}_{device}"
+                
+                # Add the model configuration
+                schedules[combination_name][model_id] = {
+                    "model": model,
+                    "execution": device,
+                    "display": f"view{j+1}"  # Assign views in order
+                }
         
+        # Write to model_schedules.yaml
+        try:
+            with open("model_schedules.yaml", "w") as f:
+                # Add header comments
+                f.write("# model_schedules.yaml\n")
+                f.write("# Auto-generated configuration for model execution on CPU or NPU\n\n")
+                
+                # Add target device file information
+                f.write(f"# Target device file: {self.device_settings_file}\n")
+                f.write("# Available devices:\n")
+                f.write(f"# - CPU: {cpu_count}\n")
+                if npu_count > 0:
+                    f.write(f"# - NPU: {npu_count} (IDs: {', '.join(map(str, npu_ids))})\n")
+                f.write("\n")
+                
+                # Add available models comment
+                f.write("# Available models:\n")
+                for model in models:
+                    f.write(f"# - {model}\n")
+                f.write("\n")
+                
+                # Add combinations
+                f.write("# Model-execution configurations with unique IDs\n")
+                
+                # Custom YAML dumping to add blank lines between combinations
+                f.write(yaml.dump(schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
+                
+            self.log_message(f"[Success] Generated {len(combinations)} combinations in model_schedules.yaml")
+        except Exception as e:
+            self.log_message(f"[Error] Failed to write model_schedules.yaml: {e}")
+            
         # Log assignments
         self.log_message("\n[Model Assignments]")
         for model, device in self.assignment_results:
             self.log_message(f"{model}: {device}")
         
-        # Save to YAML
-        self.file_manager.save_schedule_to_yaml(self.assignment_results)
+
     
     def show_partition_assignment_dialog(self):
         """Show dialog with partition assignments."""

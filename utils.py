@@ -2,7 +2,6 @@
 Utility functions for the multimodel scheduling application.
 """
 import os
-import time
 import json
 import threading
 import psutil

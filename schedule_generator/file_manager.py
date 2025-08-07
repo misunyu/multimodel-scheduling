@@ -214,46 +214,7 @@ class FileManager:
         else:
             self.log(f"[Info] Found {len(models)} models: {', '.join(models)}")
     
-    def save_schedule_to_yaml(self, assignments, filename=None):
-        """
-        Save model-to-device assignments to a YAML file.
-        
-        Args:
-            assignments: List of (model_name, device) tuples
-            filename: Output filename (optional)
-            
-        Returns:
-            Path to the saved file
-        """
-        if not assignments:
-            self.log("[Warning] No assignments to save.")
-            return None
-        
-        # Prepare data structure
-        schedule_data = {
-            "models": {}
-        }
-        
-        # Add each model assignment
-        for model_name, device in assignments:
-            schedule_data["models"][model_name] = {
-                "primary_device": device
-            }
-        
-        # Determine output filename
-        if not filename:
-            filename = "mpopt_sched.yaml"
-        
-        # Save to file
-        try:
-            with open(filename, 'w') as f:
-                yaml.dump(schedule_data, f, default_flow_style=False)
-            self.log(f"[Info] Schedule saved to {filename}")
-            return filename
-        except Exception as e:
-            self.log(f"[Error] Failed to save schedule: {str(e)}")
-            return None
-    
+
     def load_device_settings(self, device_settings_file):
         """
         Load device settings from a YAML file.
