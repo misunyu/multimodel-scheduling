@@ -1,0 +1,532 @@
+import os
+import sys
+from PyQt5 import uic
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtWidgets import (
+    QMainWindow, QApplication, QFileDialog, QDialog,
+    QTreeView, QPlainTextEdit, QTableWidget, QAction,
+    QFileSystemModel, QCheckBox, QTabWidget, QWidget,
+    QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
+    QHeaderView, QLabel, QAbstractItemView
+)
+
+from model_profiler import (
+    ModelProfiler, DataProcessor, UIComponents, FileManager
+)
+
+class ONNXProfilerApp(QMainWindow):
+    """
+    Main application class for the ONNX Profiler GUI.
+    Integrates the various components for model profiling.
+    """
+    
+    def __init__(self):
+        """Initialize the application."""
+        super().__init__()
+        
+        # Load UI from file
+        uic.loadUi("onnx_profiler_display.ui", self)
+        
+        # Initialize profiled_times and profiled_models attributes
+        self.profiled_times = []
+        self.profiled_models = []
+        
+        # Initialize component modules
+        self.profiler = ModelProfiler(log_callback=self.log_message)
+        self.data_processor = DataProcessor(log_callback=self.log_message)
+        self.ui_components = UIComponents(log_callback=self.log_message)
+        self.file_manager = FileManager(log_callback=self.log_message)
+        
+        # Find UI elements
+        self.setup_ui_elements()
+        
+        # Connect signals
+        self.connect_signals()
+        
+        # Set up file system model
+        self.setup_file_system_model()
+        
+        # Default device settings file
+        self.device_settings_file = "target_device.yaml"
+        
+        # Load device settings from file
+        self.device_settings = self.file_manager.load_device_settings(self.device_settings_file)
+        
+        # Assignment results storage
+        self.assignment_results = []
+        
+        # Flag to prevent multiple simultaneous profiling runs
+        self._profiling_in_progress = False
+    
+    def setup_ui_elements(self):
+        """Find and set up UI elements."""
+        # Find main UI elements
+        self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
+        self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")
+        self.npu2_tab = self.findChild(QWidget, "npu2_tab")
+        
+        # Set up main layout
+        main_layout = self.findChild(QHBoxLayout, "mainLayout")
+        if main_layout:
+            main_layout.setStretch(0, 3)
+            main_layout.setStretch(1, 7)
+        
+        # Find input and control elements
+        self.folder_input = self.findChild(QLineEdit, "folder_input")
+        self.browse_button = self.findChild(QPushButton, "browse_button")
+        self.profile_button = self.findChild(QPushButton, "profile_button")
+        self.generate_static_button = self.findChild(QPushButton, "generate_static_button")
+        self.generate_all_button = self.findChild(QPushButton, "generate_all_button")
+        self.model_tree_view = self.findChild(QTreeView, "model_tree_view")
+        self.log_output = self.findChild(QPlainTextEdit, "log_output")
+        self.total_table = self.findChild(QTableWidget, "total_table")
+        
+        # Find table elements
+        self.cpu_table = self.findChild(QTableWidget, "cpu_table")
+        self.npu1_table = self.findChild(QTableWidget, "npu1_table")
+        self.npu2_table = self.findChild(QTableWidget, "npu2_table")
+        
+        # Set up NPU2 visibility
+        self.npu2_table.setVisible(self.enable_npu2_checkbox.isChecked())
+        
+        # Set up table headers
+        for table in [self.cpu_table, self.npu1_table, self.npu2_table]:
+            header = table.horizontalHeader()
+            header.setStretchLastSection(True)
+            header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        
+        # Create and add legend label
+        self.legend_label = QLabel()
+        self.legend_label.setText(
+            "<span style='background-color:#cce6ff;'>&nbsp;&nbsp;&nbsp;</span> CPU &nbsp;&nbsp;"
+            "<span style='background-color:#ffffcc;'>&nbsp;&nbsp;&nbsp;</span> use NPU1 &nbsp;&nbsp;"
+            "<span style='background-color:#ffd699;'>&nbsp;&nbsp;&nbsp;</span> use NPU2"
+        )
+        self.legend_label.setStyleSheet("font-size: 12px; padding: 2px;")
+        
+        right_layout = self.findChild(QVBoxLayout, "rightLayout")
+        if right_layout:
+            index = right_layout.indexOf(self.log_output)
+            if index != -1:
+                right_layout.insertWidget(index, self.legend_label)
+        
+        # Find additional buttons
+        self.show_assignment_button = self.findChild(QPushButton, "show_assignment_button")
+        self.load_sample_button = self.findChild(QPushButton, "load_sample_button")
+        
+        # Find menu actions
+        self.actionLoad_Test_Data = self.findChild(QAction, "actionLoad_Test_Data")
+        self.actionSave_Sample_Data = self.findChild(QAction, "actionSave_Sample_Data")
+        self.actionSettings = self.findChild(QAction, "actionSettings")
+    
+    def connect_signals(self):
+        """Connect UI signals to slots."""
+        # Connect NPU2 checkbox
+        def update_npu2_tab_enabled():
+            index = self.result_tabs.indexOf(self.npu2_tab)
+            if index != -1:
+                self.result_tabs.setTabEnabled(index, self.enable_npu2_checkbox.isChecked())
+        
+        self.enable_npu2_checkbox.stateChanged.connect(update_npu2_tab_enabled)
+        self.enable_npu2_checkbox.stateChanged.connect(
+            lambda: self.npu2_table.setVisible(self.enable_npu2_checkbox.isChecked())
+        )
+        update_npu2_tab_enabled()
+        
+        # Connect buttons
+        self.browse_button.clicked.connect(self.browse_folder)
+        self.profile_button.clicked.connect(self.run_profiling)
+        self.generate_static_button.clicked.connect(
+            lambda: self.ui_components.highlight_deploy_results(
+                self.total_table, self.profiled_times, self.profiled_models
+            )
+        )
+        self.generate_all_button.clicked.connect(self.generate_all_combinations)
+        
+        # Connect additional buttons
+        if self.show_assignment_button:
+            self.show_assignment_button.clicked.connect(self.show_partition_assignment_dialog)
+        
+        if self.load_sample_button:
+            self.load_sample_button.clicked.connect(self.load_sample_data)
+        
+        # Connect menu actions
+        if self.actionLoad_Test_Data:
+            self.actionLoad_Test_Data.triggered.connect(self.load_sample_data)
+        
+        if self.actionSave_Sample_Data:
+            self.actionSave_Sample_Data.triggered.connect(self.save_sample_data)
+        
+        if self.actionSettings:
+            self.actionSettings.triggered.connect(self.show_settings_dialog)
+    
+    def setup_file_system_model(self):
+        """Set up the file system model for the tree view."""
+        self.fs_model = QFileSystemModel()
+        self.fs_model.setReadOnly(True)
+        self.fs_model.setNameFilters(["*.onnx", "*.o"])
+        self.fs_model.setNameFilterDisables(False)
+        self.model_tree_view.setModel(self.fs_model)
+        self.model_tree_view.setMinimumWidth(320)
+        self.model_tree_view.header().setStretchLastSection(True)
+        self.model_tree_view.header().setDefaultSectionSize(300)
+        self.model_tree_view.setColumnWidth(1, 60)
+        self.model_tree_view.setColumnHidden(2, True)
+        self.model_tree_view.setColumnHidden(3, True)
+        self.model_tree_view.setSelectionMode(QAbstractItemView.MultiSelection)
+        
+        # Set default folder
+        default_folder = os.path.join(os.getcwd(), "models")
+        if not os.path.isdir(default_folder):
+            default_folder = os.getcwd()
+        
+        self.folder_input.setText(default_folder)
+        self.set_tree_root(default_folder)
+        QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
+    
+    def log_message(self, message):
+        """Log a message to the output text area."""
+        if self.log_output:
+            self.log_output.appendPlainText(message)
+            QApplication.processEvents()
+    
+    def browse_folder(self):
+        """Browse for a folder to profile."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
+        if folder:
+            self.folder_input.setText(folder)
+            self.set_tree_root(folder)
+            QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(folder))
+    
+    def set_tree_root(self, folder):
+        """Set the root folder for the tree view."""
+        self.fs_model.setRootPath(folder)
+        index = self.fs_model.index(folder)
+        self.model_tree_view.setRootIndex(index)
+    
+    def expand_parents_of_onnx_files(self, root_folder):
+        """Expand tree view items that contain ONNX or O files."""
+        for dirpath, _, filenames in os.walk(root_folder):
+            for f in filenames:
+                if f.endswith(".onnx") or f.endswith(".o"):
+                    file_path = os.path.join(dirpath, f)
+                    index = self.fs_model.index(file_path)
+                    parent = index.parent()
+                    while parent.isValid():
+                        self.model_tree_view.expand(parent)
+                        parent = parent.parent()
+    
+    def run_profiling(self):
+        """Run profiling on selected models."""
+        # Prevent multiple simultaneous executions
+        if self._profiling_in_progress:
+            return
+        
+        self._profiling_in_progress = True
+        self.profile_button.setEnabled(False)  # Disable button during profiling
+        
+        try:
+            root_folder = self.folder_input.text().strip()
+            if not os.path.isdir(root_folder):
+                return
+            
+            # Initialize UI for profiling
+            self._initialize_profiling_ui()
+            
+            # Get selected paths
+            selected_paths = self.file_manager.get_selected_paths(
+                self.model_tree_view, self.fs_model, root_folder
+            )
+            
+            if not selected_paths:
+                return
+            
+            # Collect model files
+            onnx_files, o_files = self.file_manager.collect_model_files(selected_paths)
+            
+            # Profile ONNX models
+            valid_model_onnx = self._profile_onnx_models(onnx_files, root_folder)
+            
+            # Profile O models
+            self._profile_o_models(o_files, root_folder)
+            
+            # Process profiling results
+            if self.total_table:
+                self._process_profiling_results(valid_model_onnx, root_folder)
+        
+        except Exception as e:
+            self.log_message(f"[Error] Profiling failed: {str(e)}\n")
+        finally:
+            # Re-enable button and reset progress flag
+            self._profiling_in_progress = False
+            self.profile_button.setEnabled(True)
+            self.log_message("[Complete] Profiling finished.\n")
+    
+    def _initialize_profiling_ui(self):
+        """Initialize UI for profiling."""
+        if self.log_output:
+            self.log_output.clear()
+            self.log_message("[Start] Profiling models...\n")
+        
+        # Clear previous results
+        self.ui_components.init_table(self.cpu_table)
+        self.ui_components.init_table(self.npu1_table)
+        self.ui_components.init_table(self.npu2_table)
+        
+        # Clear profiled data
+        self.profiled_times = []
+        self.profiled_models = []
+    
+    def _profile_onnx_models(self, onnx_files, root_folder):
+        """Profile ONNX models and update CPU table."""
+        valid_model_onnx = {}
+        
+        for path in onnx_files:
+            try:
+                if self.profiler.contains_custom_op(path):
+                    self.log_message(f"[Skip] {path} contains custom ops\n")
+                    continue
+                
+                load_ms, infer_ms, _ = self.profiler.profile_model_cpu(path)
+                rel_path = os.path.relpath(path, root_folder)
+                self.ui_components.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms)
+                
+                self.log_message(f"[CPU] {rel_path}")
+                self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+                
+                parts = rel_path.split(os.sep)
+                if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
+                    model_key = parts[0]
+                    if model_key not in valid_model_onnx:
+                        valid_model_onnx[model_key] = [0.0, 0.0]
+                    valid_model_onnx[model_key][0] += load_ms
+                    valid_model_onnx[model_key][1] += infer_ms
+            
+            except Exception as e:
+                self.log_message(f"[Error] Skipping {path}: {str(e)}\n")
+        
+        return valid_model_onnx
+    
+    def _profile_o_models(self, o_files, root_folder):
+        """Profile O models and update NPU tables."""
+        for path in o_files:
+            name = os.path.relpath(path, root_folder)
+            load_npu1, infer_npu1, _ = self.profiler.profile_model_npu(path, "NPU1")
+            self.ui_components.insert_result_row(self.npu1_table, name, load_npu1, infer_npu1)
+            
+            self.log_message(f"[NPU1] {name}")
+            self.log_message(f"       Load: {load_npu1:.1f} ms, Inference: {infer_npu1:.1f} ms\n")
+            
+            if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
+                load_npu2, infer_npu2, _ = self.profiler.profile_model_npu(path, "NPU2")
+                self.ui_components.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
+                
+                self.log_message(f"[NPU2] {name}")
+                self.log_message(f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
+    
+    def _process_profiling_results(self, valid_model_onnx, root_folder):
+        """Process profiling results and update total table."""
+        # Initialize total table
+        self.ui_components.initialize_total_table(self.total_table)
+        
+        # Process results using data processor
+        all_models, cpu_infer_per_partition, npu1_load, npu1_infer, npu2_load, npu2_infer = \
+            self.data_processor.process_profiling_results(
+                valid_model_onnx, self.cpu_table, self.npu1_table, self.npu2_table
+            )
+        
+        # Prepare profiled_times and profiled_models for highlight_deploy_results
+        self.profiled_times = []
+        self.profiled_models = []
+        
+        # Populate total table
+        self.ui_components.populate_total_table(
+            self.total_table, all_models, valid_model_onnx, 
+            npu1_load, npu1_infer, npu2_load, npu2_infer, 
+            cpu_infer_per_partition
+        )
+        
+        # Calculate and display totals
+        if self.total_table.rowCount() > 0:
+            self._calculate_and_display_totals()
+    
+    def _calculate_and_display_totals(self):
+        """Calculate and display total values in the total table."""
+        # Calculate totals
+        cpu_infer_total = 0.0
+        npu1_load_total = 0.0
+        npu1_infer_total = 0.0
+        npu2_load_total = 0.0
+        npu2_infer_total = 0.0
+        
+        for row in range(self.total_table.rowCount()):
+            try:
+                cpu_infer_total += float(self.total_table.item(row, 1).text())
+                npu1_load_total += float(self.total_table.item(row, 2).text())
+                npu1_infer_total += float(self.total_table.item(row, 3).text())
+                npu2_load_total += float(self.total_table.item(row, 4).text())
+                npu2_infer_total += float(self.total_table.item(row, 5).text())
+            except:
+                pass
+        
+        # Add total row
+        self.ui_components.add_total_row(
+            self.total_table, cpu_infer_total, npu1_load_total, 
+            npu1_infer_total, npu2_load_total, npu2_infer_total
+        )
+    
+    def generate_all_combinations(self, models=None):
+        """Generate all possible model-to-device combinations."""
+        root_folder = self.folder_input.text().strip()
+        if not os.path.isdir(root_folder):
+            return
+
+        # Get selected paths (same as run_profiling)
+        selected_paths = self.file_manager.get_selected_paths(
+            self.model_tree_view, self.fs_model, root_folder
+        )
+
+        if not selected_paths:
+            return
+
+        # Collect model files (same as run_profiling)
+        onnx_files, o_files = self.file_manager.collect_model_files(selected_paths)
+
+        # Extract model names from paths
+        models = []
+        for path in onnx_files + o_files:
+            rel_path = os.path.relpath(path, root_folder)
+            parts = rel_path.split(os.sep)
+            if len(parts) >= 1:
+                model_name = parts[0]
+                if model_name not in models:
+                    models.append(model_name)
+
+        if  models is None:
+            self.log_message("[Warning] No models selected for assignment.")
+            return
+        
+        # Collect inference times
+        cpu_infer = {}
+        npu1_infer = {}
+        npu2_infer = {}
+        
+        for row in range(self.total_table.rowCount() - 1):  # Skip total row
+            model = self.total_table.item(row, 0).text()
+            cpu_infer[model] = float(self.total_table.item(row, 1).text())
+            npu1_infer[model] = float(self.total_table.item(row, 3).text())
+            npu2_infer[model] = float(self.total_table.item(row, 5).text())
+        
+        # Assign models to devices
+        self.assignment_results = self.data_processor.assign_models_to_devices(
+            models, cpu_infer, npu1_infer, npu2_infer
+        )
+        
+        # Highlight results
+        self.ui_components.highlight_deploy_results(
+            self.total_table, self.profiled_times, self.profiled_models
+        )
+        
+        # Log assignments
+        self.log_message("\n[Model Assignments]")
+        for model, device in self.assignment_results:
+            self.log_message(f"{model}: {device}")
+        
+        # Save to YAML
+        self.file_manager.save_schedule_to_yaml(self.assignment_results)
+    
+    def show_partition_assignment_dialog(self):
+        """Show dialog with partition assignments."""
+        if not self.assignment_results:
+            self.log_message("[Warning] No assignments available. Run profiling first.")
+            return
+        
+        dialog = self.ui_components.show_partition_assignment_dialog(self, self.assignment_results)
+        dialog.exec_()
+    
+    def save_sample_data(self):
+        """Save current profiling data as a sample."""
+        self.file_manager.save_sample_data(
+            self.cpu_table, self.npu1_table, self.npu2_table, self.total_table
+        )
+    
+    def load_sample_data(self):
+        """Load sample profiling data."""
+        # Clear existing data
+        self.ui_components.init_table(self.cpu_table)
+        self.ui_components.init_table(self.npu1_table)
+        self.ui_components.init_table(self.npu2_table)
+        
+        # Load sample data
+        sample_data = self.file_manager.load_sample_data()
+        if not sample_data:
+            return
+        
+        # Fill tables with sample data
+        for item in sample_data.get("cpu_data", []):
+            self.ui_components.insert_result_row(
+                self.cpu_table, item["model"], item["load"], item["infer"]
+            )
+        
+        for item in sample_data.get("npu1_data", []):
+            self.ui_components.insert_result_row(
+                self.npu1_table, item["model"], item["load"], item["infer"]
+            )
+        
+        for item in sample_data.get("npu2_data", []):
+            self.ui_components.insert_result_row(
+                self.npu2_table, item["model"], item["load"], item["infer"]
+            )
+        
+        # Process total table
+        self.ui_components.initialize_total_table(self.total_table)
+        
+        # Extract model data from sample
+        valid_model_onnx = {}
+        for item in sample_data.get("total_data", []):
+            model = item["model"]
+            cpu_infer = item["cpu_infer"]
+            valid_model_onnx[model] = [0.0, cpu_infer]  # Dummy load time, real infer time
+        
+        # Process results
+        all_models = set(item["model"] for item in sample_data.get("total_data", []))
+        
+        # Extract NPU data
+        npu1_load = {item["model"]: item["npu1_load"] for item in sample_data.get("total_data", [])}
+        npu1_infer = {item["model"]: item["npu1_infer"] for item in sample_data.get("total_data", [])}
+        npu2_load = {item["model"]: item["npu2_load"] for item in sample_data.get("total_data", [])}
+        npu2_infer = {item["model"]: item["npu2_infer"] for item in sample_data.get("total_data", [])}
+        
+        # Populate total table
+        self.ui_components.populate_total_table(
+            self.total_table, all_models, valid_model_onnx,
+            npu1_load, npu1_infer, npu2_load, npu2_infer, {}
+        )
+        
+        # Calculate and display totals
+        self._calculate_and_display_totals()
+        
+        self.log_message("[Info] Sample data loaded successfully.")
+    
+    def show_settings_dialog(self):
+        """Show settings dialog."""
+        dialog, self.device_settings_file = self.ui_components.show_settings_dialog(
+            self, self.device_settings_file, self.load_device_settings
+        )
+        dialog.exec_()
+    
+    def load_device_settings(self):
+        """Load device settings from file."""
+        self.device_settings = self.file_manager.load_device_settings(self.device_settings_file)
+
+
+def main():
+    """Main entry point for the application."""
+    app = QApplication(sys.argv)
+    window = ONNXProfilerApp()
+    window.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()

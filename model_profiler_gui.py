@@ -182,6 +182,7 @@ class ONNXProfiler(QMainWindow):
                         parent = parent.parent()
 
     def run_profiling(self):
+        """Run profiling on selected models."""
         # Prevent multiple simultaneous executions
         if hasattr(self, '_profiling_in_progress') and self._profiling_in_progress:
             return
@@ -194,259 +195,18 @@ class ONNXProfiler(QMainWindow):
             if not os.path.isdir(root_folder):
                 return
 
-            if self.log_output:
-                self.log_output.clear()
-                self.log_output.appendPlainText("[Start] Profiling models...\n")
-                QApplication.processEvents()
-
-            # Clear previous results
-            self.init_table(self.cpu_table)
-            self.init_table(self.npu1_table)
-            self.init_table(self.npu2_table)
-
-            # Clear profiled data
-            self.profiled_times = []
-            self.profiled_models = []
-
-            onnx_files = []
-            o_files = []
-
-            # Get selected items from the model_tree_view
-            selected_indices = self.model_tree_view.selectedIndexes()
-            selected_paths = []
-
-            # If no selection, log a message and return
-            if not selected_indices:
-                if self.log_output:
-                    self.log_output.appendPlainText(
-                        "[Warning] No items selected in the model tree. Please select folders or files to profile.\n")
+            self._initialize_profiling_ui()
+            selected_paths = self._get_selected_paths(root_folder)
+            
+            if not selected_paths:
                 return
-
-            # Get file paths from selected indices (only column 0 to avoid duplicates)
-            for index in selected_indices:
-                if index.column() == 0:  # Only process column 0 to avoid duplicates
-                    file_path = self.fs_model.filePath(index)
-                    selected_paths.append(file_path)
-
-                    # Log selected items
-                    if self.log_output:
-                        rel_path = os.path.relpath(file_path, root_folder)
-                        self.log_output.appendPlainText(f"[Selected] {rel_path}")
-
-            self.log_output.appendPlainText("")  # Add empty line for readability
-
-            # Process selected paths
-            for path in selected_paths:
-                if os.path.isdir(path):
-                    # If it's a directory, walk through it
-                    for dirpath, _, filenames in os.walk(path):
-                        for f in filenames:
-                            full_path = os.path.join(dirpath, f)
-                            if f.endswith(".onnx"):
-                                onnx_files.append(full_path)
-                            elif f.endswith(".o"):
-                                o_files.append(full_path)
-                elif os.path.isfile(path):
-                    # If it's a file, check its extension
-                    if path.endswith(".onnx"):
-                        onnx_files.append(path)
-                    elif path.endswith(".o"):
-                        o_files.append(path)
-
-            valid_model_onnx = {}
-
-            for path in onnx_files:
-                try:
-                    if self.contains_custom_op(path):
-                        self.log_output.appendPlainText(f"[Skip] {path} contains custom ops\n")
-                        continue
-
-                    load_ms, infer_ms, _ = self.profile_model_cpu(path)
-                    rel_path = os.path.relpath(path, root_folder)
-                    self.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms)
-
-                    self.log_output.appendPlainText(f"[CPU] {rel_path}")
-                    self.log_output.appendPlainText(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
-
-                    parts = rel_path.split(os.sep)
-                    if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
-                        model_key = parts[0]
-                        if model_key not in valid_model_onnx:
-                            valid_model_onnx[model_key] = [0.0, 0.0]
-                        valid_model_onnx[model_key][0] += load_ms
-                        valid_model_onnx[model_key][1] += infer_ms
-
-                except Exception as e:
-                    self.log_output.appendPlainText(f"[Error] Skipping {path}: {str(e)}\n")
-
-            for path in o_files:
-                name = os.path.relpath(path, root_folder)
-                load_npu1, infer_npu1, _ = self.profile_model_npu(path, "NPU1")
-                self.insert_result_row(self.npu1_table, name, load_npu1, infer_npu1)
-
-                self.log_output.appendPlainText(f"[NPU1] {name}")
-                self.log_output.appendPlainText(f"       Load: {load_npu1:.1f} ms, Inference: {infer_npu1:.1f} ms\n")
-
-                if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
-                    load_npu2, infer_npu2, _ = self.profile_model_npu(path, "NPU2")
-                    self.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
-
-                    self.log_output.appendPlainText(f"[NPU2] {name}")
-                    self.log_output.appendPlainText(
-                        f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
-
+                
+            onnx_files, o_files = self._collect_model_files(selected_paths)
+            valid_model_onnx = self._profile_onnx_models(onnx_files, root_folder)
+            self._profile_o_models(o_files, root_folder)
+            
             if self.total_table:
-                self.total_table.clear()
-                self.total_table.setColumnCount(6)
-                self.total_table.setHorizontalHeaderLabels([
-                    "Model",
-                    "CPU Inf. (ms)",
-                    "NPU1 Load (ms)",
-                    "NPU1 + CPU Inf. (ms)",
-                    "NPU2 Load (ms)",
-                    "NPU2 + CPU Inf. (ms)"
-                ])
-                self.total_table.setRowCount(0)
-
-                header = self.total_table.horizontalHeader()
-                header.setStretchLastSection(True)
-                for i in range(6):
-                    header.setSectionResizeMode(i, QHeaderView.Stretch)
-
-                def collect_values(table, col_index):
-                    values = {}
-                    for row in range(table.rowCount()):
-                        name_item = table.item(row, 0)
-                        if not name_item:
-                            continue
-                        model_name = name_item.text().split(os.sep)[0]
-                        try:
-                            val = float(table.item(row, col_index).text())
-                            values.setdefault(model_name, []).append(val)
-                        except:
-                            continue
-                    return {k: np.mean(v) for k, v in values.items()}
-
-                cpu_infer_per_partition = {}
-                for row in range(self.cpu_table.rowCount()):
-                    path_item = self.cpu_table.item(row, 0)
-                    infer_item = self.cpu_table.item(row, 2)
-                    if not path_item or not infer_item:
-                        continue
-                    rel_path = path_item.text()
-                    infer_time = float(infer_item.text())
-                    model_key = rel_path.split(os.sep)[0]
-                    part_name = os.path.basename(rel_path)
-                    if "_p0" in part_name or "_p2" in part_name:
-                        cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
-
-                npu1_load = collect_values(self.npu1_table, 1)
-                npu1_infer = collect_values(self.npu1_table, 2)
-                npu2_load = collect_values(self.npu2_table, 1)
-                npu2_infer = collect_values(self.npu2_table, 2)
-
-                all_models = set(valid_model_onnx.keys()).union(
-                    npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
-                )
-
-                # Prepare profiled_times and profiled_models for highlight_deploy_results
-                self.profiled_times = []
-                self.profiled_models = []
-
-                for model in sorted(all_models):
-                    cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
-
-                    load1 = npu1_load.get(model, 0.0)
-                    infer1_base = npu1_infer.get(model, 0.0)
-                    extra_cpu_infer = sum(cpu_infer_per_partition.get(model, []))  # ✅ 추가
-                    infer1 = infer1_base + extra_cpu_infer  # ✅ 합산
-
-                    load2 = npu2_load.get(model, 0.0)
-                    infer2_base = npu2_infer.get(model, 0.0)
-                    infer2 = infer2_base + extra_cpu_infer
-
-                    row = self.total_table.rowCount()
-                    self.total_table.insertRow(row)
-                    self.total_table.setItem(row, 0, QTableWidgetItem(model))
-                    self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
-                    self.total_table.setItem(row, 2, QTableWidgetItem(f"{load1:.1f}"))
-                    self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))  # ✅ 수정
-                    self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
-                    self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
-
-                    # Store profiling data for highlight_deploy_results
-                    self.profiled_times.append((cpu_infer, infer1, infer2))
-                    self.profiled_models.append((row, model))
-
-                # Calculate and display total values
-                if self.total_table and self.total_table.rowCount() > 0:
-                    # Initialize totals
-                    cpu_infer_total = 0.0
-                    npu1_load_total = 0.0
-                    npu1_infer_total = 0.0
-                    npu2_load_total = 0.0
-                    npu2_infer_total = 0.0
-
-                    # Calculate totals
-                    for row in range(self.total_table.rowCount()):
-                        try:
-                            cpu_infer_item = self.total_table.item(row, 1)
-                            npu1_load_item = self.total_table.item(row, 2)
-                            npu1_infer_item = self.total_table.item(row, 3)
-                            npu2_load_item = self.total_table.item(row, 4)
-                            npu2_infer_item = self.total_table.item(row, 5)
-
-                            if cpu_infer_item:
-                                cpu_infer_total += float(cpu_infer_item.text())
-                            if npu1_load_item:
-                                npu1_load_total += float(npu1_load_item.text())
-                            if npu1_infer_item:
-                                npu1_infer_total += float(npu1_infer_item.text())
-                            if npu2_load_item:
-                                npu2_load_total += float(npu2_load_item.text())
-                            if npu2_infer_item:
-                                npu2_infer_total += float(npu2_infer_item.text())
-                        except Exception as e:
-                            if self.log_output:
-                                self.log_output.appendPlainText(f"[Warning] Error calculating totals: {e}")
-
-                    # Add total row
-                    total_row = self.total_table.rowCount()
-                    self.total_table.insertRow(total_row)
-
-                    # Set total values with bold font
-                    bold_font = QFont()
-                    bold_font.setBold(True)
-
-                    total_item = QTableWidgetItem("Total")
-                    total_item.setFont(bold_font)
-                    self.total_table.setItem(total_row, 0, total_item)
-
-                    cpu_infer_total_item = QTableWidgetItem(f"{cpu_infer_total:.1f}")
-                    cpu_infer_total_item.setFont(bold_font)
-                    self.total_table.setItem(total_row, 1, cpu_infer_total_item)
-
-                    npu1_load_total_item = QTableWidgetItem(f"{npu1_load_total:.1f}")
-                    npu1_load_total_item.setFont(bold_font)
-                    self.total_table.setItem(total_row, 2, npu1_load_total_item)
-
-                    npu1_infer_total_item = QTableWidgetItem(f"{npu1_infer_total:.1f}")
-                    npu1_infer_total_item.setFont(bold_font)
-                    self.total_table.setItem(total_row, 3, npu1_infer_total_item)
-
-                    npu2_load_total_item = QTableWidgetItem(f"{npu2_load_total:.1f}")
-                    npu2_load_total_item.setFont(bold_font)
-                    self.total_table.setItem(total_row, 4, npu2_load_total_item)
-
-                    npu2_infer_total_item = QTableWidgetItem(f"{npu2_infer_total:.1f}")
-                    npu2_infer_total_item.setFont(bold_font)
-                    self.total_table.setItem(total_row, 5, npu2_infer_total_item)
-
-                    # Set background color for the total row
-                    for col in range(self.total_table.columnCount()):
-                        item = self.total_table.item(total_row, col)
-                        if item:
-                            item.setBackground(QBrush(QColor(230, 230, 230)))
+                self._process_profiling_results(valid_model_onnx, root_folder)
 
         except Exception as e:
             if self.log_output:
@@ -457,6 +217,306 @@ class ONNXProfiler(QMainWindow):
             self.profile_button.setEnabled(True)
             if self.log_output:
                 self.log_output.appendPlainText("[Complete] Profiling finished.\n")
+                
+    def _initialize_profiling_ui(self):
+        """Initialize UI for profiling."""
+        if self.log_output:
+            self.log_output.clear()
+            self.log_output.appendPlainText("[Start] Profiling models...\n")
+            QApplication.processEvents()
+
+        # Clear previous results
+        self.init_table(self.cpu_table)
+        self.init_table(self.npu1_table)
+        self.init_table(self.npu2_table)
+
+        # Clear profiled data
+        self.profiled_times = []
+        self.profiled_models = []
+        
+    def _get_selected_paths(self, root_folder):
+        """Get selected paths from the model tree view."""
+        selected_indices = self.model_tree_view.selectedIndexes()
+        selected_paths = []
+
+        # If no selection, log a message and return
+        if not selected_indices:
+            if self.log_output:
+                self.log_output.appendPlainText(
+                    "[Warning] No items selected in the model tree. Please select folders or files to profile.\n")
+            return []
+
+        # Get file paths from selected indices (only column 0 to avoid duplicates)
+        for index in selected_indices:
+            if index.column() == 0:  # Only process column 0 to avoid duplicates
+                file_path = self.fs_model.filePath(index)
+                selected_paths.append(file_path)
+
+                # Log selected items
+                if self.log_output:
+                    rel_path = os.path.relpath(file_path, root_folder)
+                    self.log_output.appendPlainText(f"[Selected] {rel_path}")
+
+        self.log_output.appendPlainText("")  # Add empty line for readability
+        return selected_paths
+        
+    def _collect_model_files(self, selected_paths):
+        """Collect ONNX and O files from selected paths."""
+        onnx_files = []
+        o_files = []
+
+        for path in selected_paths:
+            if os.path.isdir(path):
+                # If it's a directory, walk through it
+                for dirpath, _, filenames in os.walk(path):
+                    for f in filenames:
+                        full_path = os.path.join(dirpath, f)
+                        if f.endswith(".onnx"):
+                            onnx_files.append(full_path)
+                        elif f.endswith(".o"):
+                            o_files.append(full_path)
+            elif os.path.isfile(path):
+                # If it's a file, check its extension
+                if path.endswith(".onnx"):
+                    onnx_files.append(path)
+                elif path.endswith(".o"):
+                    o_files.append(path)
+                    
+        return onnx_files, o_files
+        
+    def _profile_onnx_models(self, onnx_files, root_folder):
+        """Profile ONNX models and update CPU table."""
+        valid_model_onnx = {}
+
+        for path in onnx_files:
+            try:
+                if self.contains_custom_op(path):
+                    self.log_output.appendPlainText(f"[Skip] {path} contains custom ops\n")
+                    continue
+
+                load_ms, infer_ms, _ = self.profile_model_cpu(path)
+                rel_path = os.path.relpath(path, root_folder)
+                self.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms)
+
+                self.log_output.appendPlainText(f"[CPU] {rel_path}")
+                self.log_output.appendPlainText(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+
+                parts = rel_path.split(os.sep)
+                if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
+                    model_key = parts[0]
+                    if model_key not in valid_model_onnx:
+                        valid_model_onnx[model_key] = [0.0, 0.0]
+                    valid_model_onnx[model_key][0] += load_ms
+                    valid_model_onnx[model_key][1] += infer_ms
+
+            except Exception as e:
+                self.log_output.appendPlainText(f"[Error] Skipping {path}: {str(e)}\n")
+                
+        return valid_model_onnx
+        
+    def _profile_o_models(self, o_files, root_folder):
+        """Profile O models and update NPU tables."""
+        for path in o_files:
+            name = os.path.relpath(path, root_folder)
+            load_npu1, infer_npu1, _ = self.profile_model_npu(path, "NPU1")
+            self.insert_result_row(self.npu1_table, name, load_npu1, infer_npu1)
+
+            self.log_output.appendPlainText(f"[NPU1] {name}")
+            self.log_output.appendPlainText(f"       Load: {load_npu1:.1f} ms, Inference: {infer_npu1:.1f} ms\n")
+
+            if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
+                load_npu2, infer_npu2, _ = self.profile_model_npu(path, "NPU2")
+                self.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
+
+                self.log_output.appendPlainText(f"[NPU2] {name}")
+                self.log_output.appendPlainText(
+                    f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
+                    
+    def _process_profiling_results(self, valid_model_onnx, root_folder):
+        """Process profiling results and update total table."""
+        self._initialize_total_table()
+        
+        # Collect values from tables
+        cpu_infer_per_partition = self._collect_cpu_infer_per_partition()
+        npu1_load, npu1_infer, npu2_load, npu2_infer = self._collect_npu_values()
+        
+        all_models = set(valid_model_onnx.keys()).union(
+            npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
+        )
+        
+        # Prepare profiled_times and profiled_models for highlight_deploy_results
+        self.profiled_times = []
+        self.profiled_models = []
+        
+        # Populate total table
+        self._populate_total_table(all_models, valid_model_onnx, npu1_load, npu1_infer, 
+                                  npu2_load, npu2_infer, cpu_infer_per_partition)
+        
+        # Calculate and display total values
+        if self.total_table.rowCount() > 0:
+            self._calculate_and_display_totals()
+            
+    def _initialize_total_table(self):
+        """Initialize the total table."""
+        self.total_table.clear()
+        self.total_table.setColumnCount(6)
+        self.total_table.setHorizontalHeaderLabels([
+            "Model",
+            "CPU Inf. (ms)",
+            "NPU1 Load (ms)",
+            "NPU1 + CPU Inf. (ms)",
+            "NPU2 Load (ms)",
+            "NPU2 + CPU Inf. (ms)"
+        ])
+        self.total_table.setRowCount(0)
+
+        header = self.total_table.horizontalHeader()
+        header.setStretchLastSection(True)
+        for i in range(6):
+            header.setSectionResizeMode(i, QHeaderView.Stretch)
+            
+    def _collect_values(self, table, col_index):
+        """Collect values from a table column."""
+        values = {}
+        for row in range(table.rowCount()):
+            name_item = table.item(row, 0)
+            if not name_item:
+                continue
+            model_name = name_item.text().split(os.sep)[0]
+            try:
+                val = float(table.item(row, col_index).text())
+                values.setdefault(model_name, []).append(val)
+            except:
+                continue
+        return {k: np.mean(v) for k, v in values.items()}
+        
+    def _collect_cpu_infer_per_partition(self):
+        """Collect CPU inference times per partition."""
+        cpu_infer_per_partition = {}
+        for row in range(self.cpu_table.rowCount()):
+            path_item = self.cpu_table.item(row, 0)
+            infer_item = self.cpu_table.item(row, 2)
+            if not path_item or not infer_item:
+                continue
+            rel_path = path_item.text()
+            infer_time = float(infer_item.text())
+            model_key = rel_path.split(os.sep)[0]
+            part_name = os.path.basename(rel_path)
+            if "_p0" in part_name or "_p2" in part_name:
+                cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
+        return cpu_infer_per_partition
+        
+    def _collect_npu_values(self):
+        """Collect NPU load and inference times."""
+        npu1_load = self._collect_values(self.npu1_table, 1)
+        npu1_infer = self._collect_values(self.npu1_table, 2)
+        npu2_load = self._collect_values(self.npu2_table, 1)
+        npu2_infer = self._collect_values(self.npu2_table, 2)
+        return npu1_load, npu1_infer, npu2_load, npu2_infer
+        
+    def _populate_total_table(self, all_models, valid_model_onnx, npu1_load, npu1_infer, 
+                             npu2_load, npu2_infer, cpu_infer_per_partition):
+        """Populate the total table with model data."""
+        for model in sorted(all_models):
+            cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
+
+            load1 = npu1_load.get(model, 0.0)
+            infer1_base = npu1_infer.get(model, 0.0)
+            extra_cpu_infer = sum(cpu_infer_per_partition.get(model, []))
+            infer1 = infer1_base + extra_cpu_infer
+
+            load2 = npu2_load.get(model, 0.0)
+            infer2_base = npu2_infer.get(model, 0.0)
+            infer2 = infer2_base + extra_cpu_infer
+
+            row = self.total_table.rowCount()
+            self.total_table.insertRow(row)
+            self.total_table.setItem(row, 0, QTableWidgetItem(model))
+            self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
+            self.total_table.setItem(row, 2, QTableWidgetItem(f"{load1:.1f}"))
+            self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))
+            self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
+            self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
+
+            # Store profiling data for highlight_deploy_results
+            self.profiled_times.append((cpu_infer, infer1, infer2))
+            self.profiled_models.append((row, model))
+            
+    def _calculate_and_display_totals(self):
+        """Calculate and display total values in the total table."""
+        # Initialize totals
+        cpu_infer_total = 0.0
+        npu1_load_total = 0.0
+        npu1_infer_total = 0.0
+        npu2_load_total = 0.0
+        npu2_infer_total = 0.0
+
+        # Calculate totals
+        for row in range(self.total_table.rowCount()):
+            try:
+                cpu_infer_item = self.total_table.item(row, 1)
+                npu1_load_item = self.total_table.item(row, 2)
+                npu1_infer_item = self.total_table.item(row, 3)
+                npu2_load_item = self.total_table.item(row, 4)
+                npu2_infer_item = self.total_table.item(row, 5)
+
+                if cpu_infer_item:
+                    cpu_infer_total += float(cpu_infer_item.text())
+                if npu1_load_item:
+                    npu1_load_total += float(npu1_load_item.text())
+                if npu1_infer_item:
+                    npu1_infer_total += float(npu1_infer_item.text())
+                if npu2_load_item:
+                    npu2_load_total += float(npu2_load_item.text())
+                if npu2_infer_item:
+                    npu2_infer_total += float(npu2_infer_item.text())
+            except Exception as e:
+                if self.log_output:
+                    self.log_output.appendPlainText(f"[Warning] Error calculating totals: {e}")
+
+        # Add total row
+        self._add_total_row(cpu_infer_total, npu1_load_total, npu1_infer_total, 
+                           npu2_load_total, npu2_infer_total)
+                           
+    def _add_total_row(self, cpu_infer_total, npu1_load_total, npu1_infer_total, 
+                      npu2_load_total, npu2_infer_total):
+        """Add a total row to the total table."""
+        total_row = self.total_table.rowCount()
+        self.total_table.insertRow(total_row)
+
+        # Set total values with bold font
+        bold_font = QFont()
+        bold_font.setBold(True)
+
+        total_item = QTableWidgetItem("Total")
+        total_item.setFont(bold_font)
+        self.total_table.setItem(total_row, 0, total_item)
+
+        cpu_infer_total_item = QTableWidgetItem(f"{cpu_infer_total:.1f}")
+        cpu_infer_total_item.setFont(bold_font)
+        self.total_table.setItem(total_row, 1, cpu_infer_total_item)
+
+        npu1_load_total_item = QTableWidgetItem(f"{npu1_load_total:.1f}")
+        npu1_load_total_item.setFont(bold_font)
+        self.total_table.setItem(total_row, 2, npu1_load_total_item)
+
+        npu1_infer_total_item = QTableWidgetItem(f"{npu1_infer_total:.1f}")
+        npu1_infer_total_item.setFont(bold_font)
+        self.total_table.setItem(total_row, 3, npu1_infer_total_item)
+
+        npu2_load_total_item = QTableWidgetItem(f"{npu2_load_total:.1f}")
+        npu2_load_total_item.setFont(bold_font)
+        self.total_table.setItem(total_row, 4, npu2_load_total_item)
+
+        npu2_infer_total_item = QTableWidgetItem(f"{npu2_infer_total:.1f}")
+        npu2_infer_total_item.setFont(bold_font)
+        self.total_table.setItem(total_row, 5, npu2_infer_total_item)
+
+        # Set background color for the total row
+        for col in range(self.total_table.columnCount()):
+            item = self.total_table.item(total_row, col)
+            if item:
+                item.setBackground(QBrush(QColor(230, 230, 230)))
 
     def save_sample_data(self):
         """Save the current profiling data to a JSON file."""
@@ -655,191 +715,171 @@ class ONNXProfiler(QMainWindow):
 
     def _process_sample_data(self, simulated_profiles, cpu_data, npu1_data, npu2_data):
         """Process sample data and update the UI tables."""
-
-        def fill_table(table, data):
-            table.clear()
-            table.setColumnCount(3)
-            table.setHorizontalHeaderLabels(["Model", "Load (ms)", "Inf. (ms)"])
-            table.setRowCount(len(data))
-            for row, (model, load, inf) in enumerate(data):
-                table.setItem(row, 0, QTableWidgetItem(model))
-                table.setItem(row, 1, QTableWidgetItem(f"{load:.1f}"))
-                table.setItem(row, 2, QTableWidgetItem(f"{inf:.1f}"))
-
-            header = table.horizontalHeader()
-            header.setStretchLastSection(True)
-            header.setSectionResizeMode(QHeaderView.ResizeToContents)
-
-        fill_table(self.cpu_table, cpu_data)
-        fill_table(self.npu1_table, npu1_data)
-        if self.enable_npu2_checkbox.isChecked():
-            fill_table(self.npu2_table, npu2_data)
-
-        # Initialize total_table
+        # Fill individual tables
+        self._fill_sample_tables(cpu_data, npu1_data, npu2_data)
+        
         if self.total_table:
-            self.total_table.clear()
-            self.total_table.setColumnCount(6)
-            self.total_table.setHorizontalHeaderLabels([
-                "Model",
-                "CPU Inf. (ms)",
-                "NPU1 Load (ms)",
-                "NPU1 + CPU Inf. (ms)",
-                "NPU2 Load (ms)",
-                "NPU2 + CPU Inf. (ms)"
-            ])
-            self.total_table.setRowCount(0)
+            # Process data and populate total table
+            self._process_sample_total_table(simulated_profiles, cpu_data, npu1_data, npu2_data)
+            
+            # Apply highlighting
+            self.highlight_deploy_results(self.profiled_times, self.profiled_models)
+            
+            # Calculate and display total values
+            if self.total_table.rowCount() > 0:
+                self._calculate_sample_totals()
+                
+    def _fill_sample_tables(self, cpu_data, npu1_data, npu2_data):
+        """Fill individual tables with sample data."""
+        self._fill_table(self.cpu_table, cpu_data)
+        self._fill_table(self.npu1_table, npu1_data)
+        if self.enable_npu2_checkbox.isChecked():
+            self._fill_table(self.npu2_table, npu2_data)
+            
+    def _fill_table(self, table, data):
+        """Fill a table with the provided data."""
+        table.clear()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Model", "Load (ms)", "Inf. (ms)"])
+        table.setRowCount(len(data))
+        for row, (model, load, inf) in enumerate(data):
+            table.setItem(row, 0, QTableWidgetItem(model))
+            table.setItem(row, 1, QTableWidgetItem(f"{load:.1f}"))
+            table.setItem(row, 2, QTableWidgetItem(f"{inf:.1f}"))
 
-            header = self.total_table.horizontalHeader()
-            header.setStretchLastSection(True)
-            for i in range(6):
-                header.setSectionResizeMode(i, QHeaderView.Stretch)
+        header = table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        
+    def _process_sample_total_table(self, simulated_profiles, cpu_data, npu1_data, npu2_data):
+        """Process sample data and populate the total table."""
+        self._initialize_total_table()
+        
+        # Process data
+        valid_model_onnx, cpu_infer_per_partition = self._process_sample_cpu_data(cpu_data)
+        npu1_load, npu1_infer, npu2_load, npu2_infer = self._process_sample_npu_data(
+            simulated_profiles, npu1_data, npu2_data)
+        
+        # Combine all models
+        all_models = set(valid_model_onnx.keys()).union(
+            npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
+        )
+        
+        # Prepare profiled_times and profiled_models for highlight_deploy_results
+        self.profiled_times = []
+        self.profiled_models = []
+        
+        # Populate total table
+        self._populate_sample_total_table(all_models, valid_model_onnx, npu1_load, npu1_infer,
+                                         npu2_load, npu2_infer, cpu_infer_per_partition)
+        
+    def _process_sample_cpu_data(self, cpu_data):
+        """Process CPU sample data."""
+        valid_model_onnx = {}
+        cpu_infer_per_partition = {}
+        
+        for model_path, _, infer_time in cpu_data:
+            parts = model_path.split(os.sep)
+            if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
+                model_key = parts[0]
+                if model_key not in valid_model_onnx:
+                    valid_model_onnx[model_key] = [0.0, 0.0]
+                valid_model_onnx[model_key][1] = infer_time  # CPU inference time
 
-            # Populate total_table with data from CPU and NPU tables
-            valid_model_onnx = {}
-            cpu_infer_per_partition = {}
+            model_key = model_path.split(os.sep)[0]
+            part_name = os.path.basename(model_path)
+            if "_p0" in part_name or "_p2" in part_name:
+                cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
+                
+        return valid_model_onnx, cpu_infer_per_partition
+        
+    def _process_sample_npu_data(self, simulated_profiles, npu1_data, npu2_data):
+        """Process NPU sample data."""
+        npu1_load = {}
+        npu1_infer = {}
+        npu2_load = {}
+        npu2_infer = {}
+        
+        # Map NPU file names to model folder names
+        npu_file_to_model = {}
+        for model_name in simulated_profiles.keys():
+            npu_file_to_model[f"{model_name}_neubla_p1.o"] = model_name
+            
+        for model_path, load_time, infer_time in npu1_data:
+            model_key = npu_file_to_model.get(model_path, model_path.split("_")[0])
+            npu1_load[model_key] = load_time
+            npu1_infer[model_key] = infer_time
+            
+        for model_path, load_time, infer_time in npu2_data:
+            model_key = npu_file_to_model.get(model_path, model_path.split("_")[0])
+            npu2_load[model_key] = load_time
+            npu2_infer[model_key] = infer_time
+            
+        return npu1_load, npu1_infer, npu2_load, npu2_infer
+        
+    def _populate_sample_total_table(self, all_models, valid_model_onnx, npu1_load, npu1_infer,
+                                    npu2_load, npu2_infer, cpu_infer_per_partition):
+        """Populate the total table with sample data."""
+        for model in sorted(all_models):
+            cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
 
-            # Process CPU data
-            for model_path, _, infer_time in cpu_data:
-                parts = model_path.split(os.sep)
-                if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
-                    model_key = parts[0]
-                    if model_key not in valid_model_onnx:
-                        valid_model_onnx[model_key] = [0.0, 0.0]
-                    valid_model_onnx[model_key][1] = infer_time  # CPU inference time
+            load1 = npu1_load.get(model, 0.0)
+            infer1_base = npu1_infer.get(model, 0.0)
+            extra_cpu_infer = sum(cpu_infer_per_partition.get(model, []))
+            infer1 = infer1_base + extra_cpu_infer
 
-                model_key = model_path.split(os.sep)[0]
-                part_name = os.path.basename(model_path)
-                if "_p0" in part_name or "_p2" in part_name:
-                    cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
+            load2 = npu2_load.get(model, 0.0)
+            infer2_base = npu2_infer.get(model, 0.0)
+            infer2 = infer2_base + extra_cpu_infer
 
-            # Process NPU data
-            npu1_load = {}
-            npu1_infer = {}
-            npu2_load = {}
-            npu2_infer = {}
+            row = self.total_table.rowCount()
+            self.total_table.insertRow(row)
+            self.total_table.setItem(row, 0, QTableWidgetItem(model))
+            self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
+            self.total_table.setItem(row, 2, QTableWidgetItem(f"{load1:.1f}"))
+            self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))
+            self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
+            self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
 
-            # Map NPU file names to model folder names
-            npu_file_to_model = {}
-            for model_name in simulated_profiles.keys():
-                npu_file_to_model[f"{model_name}_neubla_p1.o"] = model_name
+            # Store profiling data for highlight_deploy_results
+            self.profiled_times.append((cpu_infer, infer1, infer2))
+            self.profiled_models.append((row, model))
+            
+    def _calculate_sample_totals(self):
+        """Calculate and display total values for sample data."""
+        # Initialize totals
+        cpu_infer_total = 0.0
+        npu1_load_total = 0.0
+        npu1_infer_total = 0.0
+        npu2_load_total = 0.0
+        npu2_infer_total = 0.0
 
-            for model_path, load_time, infer_time in npu1_data:
-                model_key = npu_file_to_model.get(model_path, model_path.split("_")[0])
-                npu1_load[model_key] = load_time
-                npu1_infer[model_key] = infer_time
+        # Calculate totals
+        for row in range(self.total_table.rowCount()):
+            try:
+                cpu_infer_item = self.total_table.item(row, 1)
+                npu1_load_item = self.total_table.item(row, 2)
+                npu1_infer_item = self.total_table.item(row, 3)
+                npu2_load_item = self.total_table.item(row, 4)
+                npu2_infer_item = self.total_table.item(row, 5)
 
-            for model_path, load_time, infer_time in npu2_data:
-                model_key = npu_file_to_model.get(model_path, model_path.split("_")[0])
-                npu2_load[model_key] = load_time
-                npu2_infer[model_key] = infer_time
+                if cpu_infer_item:
+                    cpu_infer_total += float(cpu_infer_item.text())
+                if npu1_load_item:
+                    npu1_load_total += float(npu1_load_item.text())
+                if npu1_infer_item:
+                    npu1_infer_total += float(npu1_infer_item.text())
+                if npu2_load_item:
+                    npu2_load_total += float(npu2_load_item.text())
+                if npu2_infer_item:
+                    npu2_infer_total += float(npu2_infer_item.text())
+            except Exception as e:
+                if self.log_output:
+                    self.log_output.appendPlainText(f"[Warning] Error calculating totals: {e}")
 
-            # Combine all models
-            all_models = set(valid_model_onnx.keys()).union(
-                npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
-            )
-
-            # Prepare profiled_times and profiled_models for highlight_deploy_results
-            self.profiled_times = []
-            self.profiled_models = []
-
-            # Add rows to total_table
-            for model in sorted(all_models):
-                cpu_infer = valid_model_onnx.get(model, [0.0, 0.0])[1]
-
-                load1 = npu1_load.get(model, 0.0)
-                infer1_base = npu1_infer.get(model, 0.0)
-                extra_cpu_infer = sum(cpu_infer_per_partition.get(model, []))
-                infer1 = infer1_base + extra_cpu_infer
-
-                load2 = npu2_load.get(model, 0.0)
-                infer2_base = npu2_infer.get(model, 0.0)
-                infer2 = infer2_base + extra_cpu_infer
-
-                row = self.total_table.rowCount()
-                self.total_table.insertRow(row)
-                self.total_table.setItem(row, 0, QTableWidgetItem(model))
-                self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
-                self.total_table.setItem(row, 2, QTableWidgetItem(f"{load1:.1f}"))
-                self.total_table.setItem(row, 3, QTableWidgetItem(f"{infer1:.1f}"))
-                self.total_table.setItem(row, 4, QTableWidgetItem(f"{load2:.1f}"))
-                self.total_table.setItem(row, 5, QTableWidgetItem(f"{infer2:.1f}"))
-
-                # Store profiling data for highlight_deploy_results
-                self.profiled_times.append((cpu_infer, infer1, infer2))
-                self.profiled_models.append((row, model))
-
-        # Apply highlighting
-        self.highlight_deploy_results(self.profiled_times, self.profiled_models)
-
-        # Calculate and display total values
-        if self.total_table and self.total_table.rowCount() > 0:
-            # Initialize totals
-            cpu_infer_total = 0.0
-            npu1_load_total = 0.0
-            npu1_infer_total = 0.0
-            npu2_load_total = 0.0
-            npu2_infer_total = 0.0
-
-            # Calculate totals
-            for row in range(self.total_table.rowCount()):
-                try:
-                    cpu_infer_item = self.total_table.item(row, 1)
-                    npu1_load_item = self.total_table.item(row, 2)
-                    npu1_infer_item = self.total_table.item(row, 3)
-                    npu2_load_item = self.total_table.item(row, 4)
-                    npu2_infer_item = self.total_table.item(row, 5)
-
-                    if cpu_infer_item:
-                        cpu_infer_total += float(cpu_infer_item.text())
-                    if npu1_load_item:
-                        npu1_load_total += float(npu1_load_item.text())
-                    if npu1_infer_item:
-                        npu1_infer_total += float(npu1_infer_item.text())
-                    if npu2_load_item:
-                        npu2_load_total += float(npu2_load_item.text())
-                    if npu2_infer_item:
-                        npu2_infer_total += float(npu2_infer_item.text())
-                except Exception as e:
-                    if self.log_output:
-                        self.log_output.appendPlainText(f"[Warning] Error calculating totals: {e}")
-
-            # Add total row
-            total_row = self.total_table.rowCount()
-            self.total_table.insertRow(total_row)
-
-            # Set total values with bold font
-            bold_font = QFont()
-            bold_font.setBold(True)
-
-            total_item = QTableWidgetItem("Total")
-            total_item.setFont(bold_font)
-            self.total_table.setItem(total_row, 0, total_item)
-
-            cpu_infer_total_item = QTableWidgetItem(f"{cpu_infer_total:.1f}")
-            cpu_infer_total_item.setFont(bold_font)
-            self.total_table.setItem(total_row, 1, cpu_infer_total_item)
-
-            npu1_load_total_item = QTableWidgetItem(f"{npu1_load_total:.1f}")
-            npu1_load_total_item.setFont(bold_font)
-            self.total_table.setItem(total_row, 2, npu1_load_total_item)
-
-            npu1_infer_total_item = QTableWidgetItem(f"{npu1_infer_total:.1f}")
-            npu1_infer_total_item.setFont(bold_font)
-            self.total_table.setItem(total_row, 3, npu1_infer_total_item)
-
-            npu2_load_total_item = QTableWidgetItem(f"{npu2_load_total:.1f}")
-            npu2_load_total_item.setFont(bold_font)
-            self.total_table.setItem(total_row, 4, npu2_load_total_item)
-
-            npu2_infer_total_item = QTableWidgetItem(f"{npu2_infer_total:.1f}")
-            npu2_infer_total_item.setFont(bold_font)
-            self.total_table.setItem(total_row, 5, npu2_infer_total_item)
-
-            # Set background color for the total row
-            for col in range(self.total_table.columnCount()):
-                item = self.total_table.item(total_row, col)
-                if item:
-                    item.setBackground(QBrush(QColor(230, 230, 230)))
+        # Add total row
+        self._add_total_row(cpu_infer_total, npu1_load_total, npu1_infer_total,
+                           npu2_load_total, npu2_infer_total)
 
     # === Table Management ===
     def init_table(self, table):
@@ -1148,75 +1188,12 @@ class ONNXProfiler(QMainWindow):
         """Generate all possible combinations of model assignments to devices."""
         # If models parameter is not provided, use the selected models from model_tree_view
         if models is None:
-            # Get selected items from the model_tree_view
-            selected_indices = self.model_tree_view.selectedIndexes()
-            selected_paths = []
+            models = self._get_models_from_selection()
+            if not models:
+                return
 
-            # If no selection, log a message and return
-            if not selected_indices:
-                if self.log_output:
-                    self.log_output.appendPlainText(
-                        "[Warning] No items selected in the model tree. Please select folders or files to generate combinations.\n")
-                    return
-
-            # Get file paths from selected indices (only column 0 to avoid duplicates)
-            root_folder = self.folder_input.text().strip()
-            for index in selected_indices:
-                if index.column() == 0:  # Only process column 0 to avoid duplicates
-                    file_path = self.fs_model.filePath(index)
-                    selected_paths.append(file_path)
-
-            # Extract model names from selected paths
-            model_dirs = set()
-            for path in selected_paths:
-                if os.path.isdir(path):
-                    # If it's a directory, check if it's a model directory or contains model directories
-                    if os.path.basename(os.path.dirname(path)) == "model":
-                        # If parent directory is "model", get the grandparent directory name
-                        model_dirs.add(os.path.basename(os.path.dirname(os.path.dirname(path))))
-                    elif os.path.basename(path) == "model":
-                        # If directory is "model", get the parent directory name
-                        model_dirs.add(os.path.basename(os.path.dirname(path)))
-                    else:
-                        # Check if this directory contains a model subdirectory
-                        model_dir = os.path.join(path, "model")
-                        if os.path.isdir(model_dir):
-                            model_dirs.add(os.path.basename(path))
-                        else:
-                            # Check all subdirectories
-                            for item in os.listdir(path):
-                                item_path = os.path.join(path, item)
-                                if os.path.isdir(item_path):
-                                    model_dir = os.path.join(item_path, "model")
-                                    if os.path.isdir(model_dir):
-                                        model_dirs.add(item)
-                elif os.path.isfile(path):
-                    # If it's a file, extract the model name from the path
-                    parts = os.path.relpath(path, root_folder).split(os.sep)
-                    if len(parts) >= 1:
-                        model_dirs.add(parts[0])
-
-            # Use profiled_models if available, otherwise create new entries
-            if not self.profiled_models:
-                if self.log_output:
-                    self.log_output.appendPlainText("[Info] No profiled models found. Using selected models.")
-
-                # Create profiled_models entries for each model found
-                for i, model in enumerate(model_dirs):
-                    self.profiled_models.append((i, model))
-
-                if self.log_output:
-                    self.log_output.appendPlainText(f"[Info] Found {len(model_dirs)} models in selection.")
-
-            # Filter profiled_models to only include selected models
-            models = [model for _, model in self.profiled_models if model in model_dirs]
-
-        # Log the model list at the beginning of the function
-        if self.log_output:
-            self.log_output.appendPlainText("[Info] Generating combinations for models:")
-            for model in sorted(models):
-                self.log_output.appendPlainText(f"  - {model}")
-            self.log_output.appendPlainText("")
+        # Log the model list
+        self._log_model_list(models)
 
         # If we still don't have any models, log a warning and return
         if not models:
@@ -1224,6 +1201,110 @@ class ONNXProfiler(QMainWindow):
                 self.log_output.appendPlainText("[Warning] No models found to generate combinations.")
             return
 
+        # Assign models to devices and save results
+        self._assign_models_to_devices(models)
+        
+        # Apply highlighting based on the assignments
+        self.highlight_deploy_results(self.profiled_times, self.profiled_models)
+
+        # Save the schedule to YAML
+        self.save_schedule_to_yaml("mpopt_sched.yaml")
+        
+    def _get_models_from_selection(self):
+        """Get models from the selected items in the model tree view."""
+        # Get selected items from the model_tree_view
+        selected_indices = self.model_tree_view.selectedIndexes()
+        selected_paths = []
+
+        # If no selection, log a message and return
+        if not selected_indices:
+            if self.log_output:
+                self.log_output.appendPlainText(
+                    "[Warning] No items selected in the model tree. Please select folders or files to generate combinations.\n")
+            return []
+
+        # Get file paths from selected indices (only column 0 to avoid duplicates)
+        root_folder = self.folder_input.text().strip()
+        selected_paths = self._get_selected_file_paths(selected_indices)
+        
+        # Extract model names from selected paths
+        model_dirs = self._extract_model_names(selected_paths, root_folder)
+        
+        # Use profiled_models if available, otherwise create new entries
+        return self._prepare_model_list(model_dirs)
+        
+    def _get_selected_file_paths(self, selected_indices):
+        """Get file paths from selected indices."""
+        selected_paths = []
+        for index in selected_indices:
+            if index.column() == 0:  # Only process column 0 to avoid duplicates
+                file_path = self.fs_model.filePath(index)
+                selected_paths.append(file_path)
+        return selected_paths
+        
+    def _extract_model_names(self, selected_paths, root_folder):
+        """Extract model names from selected paths."""
+        model_dirs = set()
+        for path in selected_paths:
+            if os.path.isdir(path):
+                self._extract_model_from_directory(path, model_dirs)
+            elif os.path.isfile(path):
+                # If it's a file, extract the model name from the path
+                parts = os.path.relpath(path, root_folder).split(os.sep)
+                if len(parts) >= 1:
+                    model_dirs.add(parts[0])
+        return model_dirs
+        
+    def _extract_model_from_directory(self, path, model_dirs):
+        """Extract model name from a directory path."""
+        # If it's a directory, check if it's a model directory or contains model directories
+        if os.path.basename(os.path.dirname(path)) == "model":
+            # If parent directory is "model", get the grandparent directory name
+            model_dirs.add(os.path.basename(os.path.dirname(os.path.dirname(path))))
+        elif os.path.basename(path) == "model":
+            # If directory is "model", get the parent directory name
+            model_dirs.add(os.path.basename(os.path.dirname(path)))
+        else:
+            # Check if this directory contains a model subdirectory
+            model_dir = os.path.join(path, "model")
+            if os.path.isdir(model_dir):
+                model_dirs.add(os.path.basename(path))
+            else:
+                # Check all subdirectories
+                for item in os.listdir(path):
+                    item_path = os.path.join(path, item)
+                    if os.path.isdir(item_path):
+                        model_dir = os.path.join(item_path, "model")
+                        if os.path.isdir(model_dir):
+                            model_dirs.add(item)
+                            
+    def _prepare_model_list(self, model_dirs):
+        """Prepare the final model list from model directories."""
+        # Use profiled_models if available, otherwise create new entries
+        if not self.profiled_models:
+            if self.log_output:
+                self.log_output.appendPlainText("[Info] No profiled models found. Using selected models.")
+
+            # Create profiled_models entries for each model found
+            for i, model in enumerate(model_dirs):
+                self.profiled_models.append((i, model))
+
+            if self.log_output:
+                self.log_output.appendPlainText(f"[Info] Found {len(model_dirs)} models in selection.")
+
+        # Filter profiled_models to only include selected models
+        return [model for _, model in self.profiled_models if model in model_dirs]
+        
+    def _log_model_list(self, models):
+        """Log the list of models to be processed."""
+        if self.log_output:
+            self.log_output.appendPlainText("[Info] Generating combinations for models:")
+            for model in sorted(models):
+                self.log_output.appendPlainText(f"  - {model}")
+            self.log_output.appendPlainText("")
+            
+    def _assign_models_to_devices(self, models):
+        """Assign each model to the best device based on inference time."""
         # Generate all possible device assignments (CPU, NPU1, NPU2)
         devices = ["CPU", "NPU1"]
         if self.enable_npu2_checkbox.isChecked():
@@ -1234,48 +1315,47 @@ class ONNXProfiler(QMainWindow):
 
         # For now, just assign each model to the device with the fastest inference time
         for model in models:
-            # Find the best device for this model
-            best_device = "CPU"
-            best_time = float('inf')
-
-            # Find the row in profiled_models that matches this model
-            model_row = None
-            for row, m in self.profiled_models:
-                if m == model:
-                    model_row = row
-                    break
-
-            if model_row is not None and model_row < len(self.profiled_times):
-                # profiled_times contains (cpu_time, npu1_time, npu2_time)
-                times = self.profiled_times[model_row]
-
-                # Check CPU time
-                if times[0] < best_time:
-                    best_time = times[0]
-                    best_device = "CPU"
-
-                # Check NPU1 time
-                if times[1] < best_time:
-                    best_time = times[1]
-                    best_device = "NPU1"
-
-                # Check NPU2 time if enabled
-                if self.enable_npu2_checkbox.isChecked() and len(times) > 2 and times[2] < best_time:
-                    best_time = times[2]
-                    best_device = "NPU2"
-
+            best_device, best_time = self._find_best_device_for_model(model)
+            
             # Add the assignment to results
             self.assignment_results.append((model, best_device))
 
             if self.log_output:
                 self.log_output.appendPlainText(
                     f"[Info] Assigned {model} to {best_device} (inference time: {best_time:.1f} ms)")
+                    
+    def _find_best_device_for_model(self, model):
+        """Find the best device for a model based on inference time."""
+        best_device = "CPU"
+        best_time = float('inf')
 
-        # Apply highlighting based on the assignments
-        self.highlight_deploy_results(self.profiled_times, self.profiled_models)
+        # Find the row in profiled_models that matches this model
+        model_row = None
+        for row, m in self.profiled_models:
+            if m == model:
+                model_row = row
+                break
 
-        # Save the schedule to YAML
-        self.save_schedule_to_yaml("mpopt_sched.yaml")
+        if model_row is not None and model_row < len(self.profiled_times):
+            # profiled_times contains (cpu_time, npu1_time, npu2_time)
+            times = self.profiled_times[model_row]
+
+            # Check CPU time
+            if times[0] < best_time:
+                best_time = times[0]
+                best_device = "CPU"
+
+            # Check NPU1 time
+            if times[1] < best_time:
+                best_time = times[1]
+                best_device = "NPU1"
+
+            # Check NPU2 time if enabled
+            if self.enable_npu2_checkbox.isChecked() and len(times) > 2 and times[2] < best_time:
+                best_time = times[2]
+                best_device = "NPU2"
+                
+        return best_device, best_time
 
     def save_schedule_to_yaml(self, filename=None):
         """Save scheduling result with partition lists to a YAML file."""
