@@ -175,6 +175,9 @@ class ONNXProfilerApp(QMainWindow):
         self.model_tree_view.setColumnHidden(3, True)
         self.model_tree_view.setSelectionMode(QAbstractItemView.MultiSelection)
         
+        # Connect selection changed signal
+        self.model_tree_view.selectionModel().selectionChanged.connect(self.handle_tree_selection_changed)
+        
         # Set default folder
         default_folder = os.path.join(os.getcwd(), "models")
         if not os.path.isdir(default_folder):
@@ -197,6 +200,41 @@ class ONNXProfilerApp(QMainWindow):
             self.folder_input.setText(folder)
             self.set_tree_root(folder)
             QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(folder))
+    
+    def handle_tree_selection_changed(self, selected, deselected):
+        """
+        Handle selection changes in the tree view.
+        Only top-level folders (model names) can be toggled.
+        Subfolders and their Size tabs are automatically deselected.
+        
+        Args:
+            selected: QItemSelection of newly selected items
+            deselected: QItemSelection of newly deselected items
+        """
+        # Process only if there are selected items
+        if not selected.indexes():
+            return
+            
+        # Get the root path and index
+        root_path = self.folder_input.text().strip()
+        root_index = self.fs_model.index(root_path)
+        
+        # Process each newly selected item
+        for index in selected.indexes():
+            # Get the row index regardless of column
+            row_index = self.fs_model.index(self.fs_model.filePath(index), 0)
+            
+            # Check if this is a top-level folder (direct child of root)
+            parent = row_index.parent()
+            if parent == root_index:
+                # This is a top-level folder, allow it to remain selected
+                continue
+            else:
+                # This is a subfolder or its Size tab, deselect it
+                self.model_tree_view.selectionModel().select(
+                    index, 
+                    self.model_tree_view.selectionModel().Deselect
+                )
     
     def set_tree_root(self, folder):
         """Set the root folder for the tree view."""
