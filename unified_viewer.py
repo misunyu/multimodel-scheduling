@@ -25,13 +25,52 @@ from model_processors import (
 class InfoWindow(QWidget):
     """Independent window for displaying system and model information."""
     
-    def __init__(self):
+    def __init__(self, parent=None):
         """Initialize the InfoWindow."""
         super().__init__()
         # Load UI from file instead of creating components programmatically
         uic.loadUi("info_window.ui", self)
         # Set window to stay on top to ensure visibility
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        
+        # Store parent reference for callbacks
+        self.parent = parent
+        
+        # Add black borders to all labels
+        border_style = "border: 1px solid black;"
+        self.schedule_name_label.setStyleSheet(border_style)
+        self.model_performance_label.setStyleSheet(border_style)
+        self.cpu_info_label.setStyleSheet(border_style)
+        self.npu_info_label.setStyleSheet(border_style)
+        
+        # Initialize the start button
+        self.start_button.clicked.connect(self.on_start_button_clicked)
+        
+        # Default execution duration is 60 seconds
+        self.duration_edit.setText("6")
+        
+    def on_start_button_clicked(self):
+        """Handle the start button click event."""
+        try:
+            duration = int(self.duration_edit.text())
+            if duration <= 0:
+                print("Duration must be a positive number")
+                return
+            
+            # Call the parent's start_execution method if available
+            if self.parent and hasattr(self.parent, 'start_execution'):
+                self.parent.start_execution(duration)
+            else:
+                print(f"Starting execution with duration: {duration} seconds")
+        except ValueError:
+            print("Please enter a valid number for duration")
+    
+    def get_execution_duration(self):
+        """Get the execution duration from the input field."""
+        try:
+            return int(self.duration_edit.text())
+        except ValueError:
+            return 60  # Default value if input is invalid
     
     def update_model_performance(self, text):
         """Update the model performance label."""
@@ -44,6 +83,10 @@ class InfoWindow(QWidget):
     def update_npu_info(self, text):
         """Update the NPU info label."""
         self.npu_info_label.setText(text)
+        
+    def update_schedule_name(self, text):
+        """Update the schedule name label."""
+        self.schedule_name_label.setText(text)
 
 class UnifiedViewer(QMainWindow):
     """Main viewer class for the multimodel scheduling application."""
@@ -64,15 +107,15 @@ class UnifiedViewer(QMainWindow):
         self.schedule_file = schedule_file
         
         # Create and show the info window
-        self.info_window = InfoWindow()
+        self.info_window = InfoWindow(parent=self)
         self.info_window.show()
 
         # Initialize model settings and views
         self.initialize_model_settings()
         self.initialize_ui_components()
         self.initialize_state_variables()
-        self.initialize_processes()
-        self.initialize_threads()
+        # Don't start processes and threads automatically
+        # They will be started when the Start Execution button is clicked
         
         # CPU/NPU monitoring
         self.cpu_timer = QTimer()
@@ -83,7 +126,10 @@ class UnifiedViewer(QMainWindow):
         """Initialize model settings from YAML configuration."""
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
-        self.current_combination = "combination_1"  # Default combination
+        self.current_combination = "combination1"  # Default combination
+        
+        # Update the schedule name label
+        self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
         
         try:
             # Load configuration from the specified schedule file
@@ -92,7 +138,14 @@ class UnifiedViewer(QMainWindow):
                 
             # Create a mapping from views to model configurations based on the display field
             view_to_model_map = {}
-            # Use combination1 configuration
+            
+            # Find the first available combination if the default is not available
+            if self.current_combination not in config and config:
+                self.current_combination = next(iter(config))
+                # Update the schedule name label with the actual combination being used
+                self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
+                
+            # Use the selected combination configuration
             if self.current_combination in config:
                 for model_config_name, model_config in config[self.current_combination].items():
                     if "display" in model_config:
@@ -427,13 +480,46 @@ class UnifiedViewer(QMainWindow):
         self.shutdown_all()
     
     def shutdown_all(self):
-        """Clean up resources and shut down."""
-        # Save throughput data before shutting down
-        try:
-            self.save_throughput_data()
-        except Exception as e:
-            print(f"[Shutdown] Error saving throughput data: {e}")
+        """Clean up resources and shut down the application."""
+        # First stop all model execution
+        self.stop_execution()
             
+        print("[Shutdown] Forcing exit")
+        os._exit(0)
+    
+    # Monitoring and statistics methods
+    def start_execution(self, duration):
+        """
+        Start execution with a specified duration.
+        
+        Args:
+            duration (int): Duration in seconds for the execution to run.
+        """
+        print(f"Starting execution with duration: {duration} seconds")
+        
+        # Initialize and start processes if they're not already running
+        if not hasattr(self, 'video_reader_proc') or not self.video_reader_proc.is_alive():
+            self.initialize_processes()
+            self.initialize_threads()
+            
+        # Schedule stopping execution after the specified duration
+        QTimer.singleShot(duration * 1000, self.timed_shutdown)
+    
+    def timed_shutdown(self):
+        """Stop execution after the scheduled duration without closing the application."""
+        print("Execution duration completed, stopping model execution...")
+        self.stop_execution()
+        
+    def stop_execution(self):
+        """Stop model execution without closing the application."""
+        # Set shutdown events to signal processes to stop
+        for name in ['view1_shutdown_event', 'view2_shutdown_event',
+                     'view3_shutdown_event', 'view4_shutdown_event',
+                     'video_shutdown_event']:
+            event = getattr(self, name, None)
+            if event:
+                event.set()
+                
         # Terminate all processes
         process_names = ['view1_process', 'view2_process', 'view3_process', 'view4_process', 'video_reader_proc']
         processes = [getattr(self, name, None) for name in process_names if hasattr(self, name) and getattr(self, name, None)]
@@ -444,12 +530,16 @@ class UnifiedViewer(QMainWindow):
                     p.terminate()
                     p.join(timeout=0.5)
                 except Exception as e:
-                    print(f"[Shutdown] Process termination error: {e}")
-
-        print("[Shutdown] Forcing exit")
-        os._exit(0)
-    
-    # Monitoring and statistics methods
+                    print(f"[Stop Execution] Process termination error: {e}")
+                    
+        # Save throughput data
+        try:
+            self.save_throughput_data()
+        except Exception as e:
+            print(f"[Stop Execution] Error saving throughput data: {e}")
+            
+        print("[Stop Execution] Model execution stopped, window remains open with last results")
+        
     def update_cpu_npu_usage(self):
         """Update CPU and NPU usage information."""
         current = get_cpu_metrics(interval=0)
@@ -458,18 +548,18 @@ class UnifiedViewer(QMainWindow):
         delta_int = current["Interrupts"] - prev["Interrupts"]
         load1, load5, load15 = current["Load_Average"]
         
-        # Get performance statistics from view handlers
-        view1_avg_fps = self.view1_handler.avg_fps
-        view1_avg_infer_time = self.view1_handler.avg_infer_time
+        # Get performance statistics from view handlers if they exist
+        view1_avg_fps = getattr(self, 'view1_handler', None).avg_fps if hasattr(self, 'view1_handler') else 0.0
+        view1_avg_infer_time = getattr(self, 'view1_handler', None).avg_infer_time if hasattr(self, 'view1_handler') else 0.0
         
-        view2_avg_fps = self.view2_handler.avg_fps
-        view2_avg_infer_time = self.view2_handler.avg_infer_time
+        view2_avg_fps = getattr(self, 'view2_handler', None).avg_fps if hasattr(self, 'view2_handler') else 0.0
+        view2_avg_infer_time = getattr(self, 'view2_handler', None).avg_infer_time if hasattr(self, 'view2_handler') else 0.0
         
-        view3_avg_fps = self.view3_handler.avg_fps
-        view3_avg_infer_time = self.view3_handler.avg_infer_time
+        view3_avg_fps = getattr(self, 'view3_handler', None).avg_fps if hasattr(self, 'view3_handler') else 0.0
+        view3_avg_infer_time = getattr(self, 'view3_handler', None).avg_infer_time if hasattr(self, 'view3_handler') else 0.0
         
-        view4_avg_fps = self.view4_handler.avg_fps
-        view4_avg_infer_time = self.view4_handler.avg_infer_time
+        view4_avg_fps = getattr(self, 'view4_handler', None).avg_fps if hasattr(self, 'view4_handler') else 0.0
+        view4_avg_infer_time = getattr(self, 'view4_handler', None).avg_infer_time if hasattr(self, 'view4_handler') else 0.0
         
         # Calculate total average FPS (total throughput)
         total_fps = (view1_avg_fps + view2_avg_fps + view3_avg_fps + view4_avg_fps)
@@ -545,6 +635,11 @@ class UnifiedViewer(QMainWindow):
             view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
             view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
             
+            # Check if view handlers exist
+            if not all(hasattr(self, f'view{i}_handler') for i in range(1, 5)):
+                print("[Save Throughput] No view handlers initialized, skipping throughput data save")
+                return
+                
             # Get performance statistics from view handlers
             view1_avg_fps = self.view1_handler.avg_fps
             view1_avg_infer_time = self.view1_handler.avg_infer_time
