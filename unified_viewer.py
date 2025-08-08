@@ -30,8 +30,8 @@ class InfoWindow(QWidget):
         super().__init__()
         # Load UI from file instead of creating components programmatically
         uic.loadUi("info_window.ui", self)
-        # Set window flags to make it behave like a main window
-        self.setWindowFlags(Qt.Window)
+        # Set window flags to make it behave like a main window and always stay on top of other app windows
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         
         # Store parent reference for callbacks
         self.parent = parent
@@ -115,7 +115,7 @@ class InfoWindow(QWidget):
 class UnifiedViewer(QMainWindow):
     """Main viewer class for the multimodel scheduling application."""
     
-    def __init__(self, schedule_file='model_schedules.yaml', combination_name=None):
+    def __init__(self, schedule_file='model_schedules.yaml', combination_name=None, info_window=None):
         """Initialize the UnifiedViewer.
         
         Args:
@@ -132,8 +132,16 @@ class UnifiedViewer(QMainWindow):
         self.schedule_file = schedule_file
         self.requested_combination = combination_name
         
-        # Create and show the info window as the main window
-        self.info_window = InfoWindow(parent=self)
+        # Create or reuse the info window as the main window (persistent across runs)
+        if info_window is not None:
+            self.info_window = info_window
+            # Rebind controller so buttons control this viewer instance
+            try:
+                self.info_window.parent = self
+            except Exception:
+                pass
+        else:
+            self.info_window = InfoWindow(parent=self)
         self.info_window.show()
         
         # Set window title to indicate it's a secondary window

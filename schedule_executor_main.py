@@ -17,7 +17,7 @@ import argparse
 import yaml
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer
-from unified_viewer import UnifiedViewer
+from unified_viewer import UnifiedViewer, InfoWindow
 
 def main():
     """Main function to execute all schedules sequentially and save throughput results."""
@@ -53,21 +53,23 @@ def main():
 
     app = QApplication(sys.argv)
 
-    state = {'index': 0, 'viewer': None}
+    # Create a persistent InfoWindow that will remain open across runs
+    persistent_info = InfoWindow(parent=None)
+    persistent_info.show()
+
+    state = {'index': 0, 'viewer': None, 'info_window': persistent_info}
 
     def run_next():
+        # If we've executed all combinations, leave windows open and stop scheduling further actions
+        if state['index'] >= len(combination_keys):
+            print('[Main] All combinations executed. Leaving windows open.')
+            return
+
         # If previous viewer exists, ensure it is cleaned up
         if state['viewer'] is not None:
             try:
                 # Ensure stop_execution has been called and viewer is hidden/deleted
                 state['viewer'].stop_execution()
-            except Exception:
-                pass
-            # Hide and delete the previous info window safely (do NOT close to avoid os._exit)
-            try:
-                if hasattr(state['viewer'], 'info_window') and state['viewer'].info_window is not None:
-                    state['viewer'].info_window.hide()
-                    state['viewer'].info_window.deleteLater()
             except Exception:
                 pass
             try:
@@ -80,21 +82,16 @@ def main():
                 pass
             state['viewer'] = None
 
-        if state['index'] >= len(combination_keys):
-            print('[Main] All combinations executed. Quitting application.')
-            app.quit()
-            return
-
         combo = combination_keys[state['index']]
         print(f"[Main] Starting schedule: {combo}")
-        viewer = UnifiedViewer(schedule_file=args.schedule, combination_name=combo)
+        viewer = UnifiedViewer(schedule_file=args.schedule, combination_name=combo, info_window=state['info_window'])
         state['viewer'] = viewer
         # Ensure the info window displays the current schedule name and is visible on top
         try:
-            viewer.info_window.update_schedule_name(f"Current Schedule: {combo}")
-            viewer.info_window.show()
-            viewer.info_window.raise_()
-            viewer.info_window.activateWindow()
+            state['info_window'].update_schedule_name(f"Current Schedule: {combo}")
+            state['info_window'].show()
+            state['info_window'].raise_()
+            state['info_window'].activateWindow()
         except Exception:
             pass
         viewer.show()
