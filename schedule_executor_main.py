@@ -1,19 +1,42 @@
-# schedule_executor_main.py
+"""
+Schedule Executor GUI application - Main file (legacy version)
+
+This file is kept for backward compatibility.
+For the modularized version, see:
+- main.py: Entry point
+- unified_viewer.py: Main viewer class
+- view_handlers.py: View handling components
+- model_processors.py: Model processing functions
+- image_processing.py: Image processing functions
+- utils.py: Utility functions
+"""
+
 import sys
 import os
+import argparse
 from PyQt5.QtWidgets import QApplication
-from schedule_executor_gui import UnifiedViewer
+from unified_viewer import UnifiedViewer
 
-if __name__ == "__main__":
+def main():
+    """Main function to start the application."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Schedule Executor GUI application')
+    parser.add_argument('--schedule', '-s', type=str, default='model_schedules.yaml',
+                        help='Path to the model scheduling information file (default: model_schedules.yaml)')
+    args = parser.parse_args()
+    
     app = QApplication(sys.argv)
-    viewer = UnifiedViewer()
+    viewer = UnifiedViewer(schedule_file=args.schedule)
     viewer.show()
-
+    
     try:
         exit_code = app.exec_()
     except Exception as e:
         print(f"[Main] QApplication error: {e}")
         exit_code = 1
-
+    
     print("[Main] QApplication loop exited.")
     os._exit(exit_code)
+
+if __name__ == "__main__":
+    main()

@@ -6,8 +6,8 @@ import json
 import signal
 import yaml
 from datetime import datetime
-from PyQt5.QtWidgets import QMainWindow, QLabel
-from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QMainWindow, QLabel, QWidget, QVBoxLayout
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
 from multiprocessing import Process, Queue, Event
 
@@ -21,6 +21,29 @@ from model_processors import (
     run_resnet_cpu_process,
     run_resnet_npu_process
 )
+
+class InfoWindow(QWidget):
+    """Independent window for displaying system and model information."""
+    
+    def __init__(self):
+        """Initialize the InfoWindow."""
+        super().__init__()
+        # Load UI from file instead of creating components programmatically
+        uic.loadUi("info_window.ui", self)
+        # Set window to stay on top to ensure visibility
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+    
+    def update_model_performance(self, text):
+        """Update the model performance label."""
+        self.model_performance_label.setText(text)
+    
+    def update_cpu_info(self, text):
+        """Update the CPU info label."""
+        self.cpu_info_label.setText(text)
+    
+    def update_npu_info(self, text):
+        """Update the NPU info label."""
+        self.npu_info_label.setText(text)
 
 class UnifiedViewer(QMainWindow):
     """Main viewer class for the multimodel scheduling application."""
@@ -39,6 +62,10 @@ class UnifiedViewer(QMainWindow):
 
         # Store the schedule file path
         self.schedule_file = schedule_file
+        
+        # Create and show the info window
+        self.info_window = InfoWindow()
+        self.info_window.show()
 
         # Initialize model settings and views
         self.initialize_model_settings()
@@ -107,10 +134,7 @@ class UnifiedViewer(QMainWindow):
         self.view2 = self.findChild(QLabel, "view2")
         self.view3 = self.findChild(QLabel, "view3")
         self.view4 = self.findChild(QLabel, "view4")
-        self.model_performance_label = self.findChild(QLabel, "model_performance_label")
-        self.cpu_info_label = self.findChild(QLabel, "cpu_info_label")
-        self.npu_info_label = self.findChild(QLabel, "npu_info_label")
-
+        
         # Define and connect signals
         self.model_signals = ModelSignals()
         self.model_signals.update_view1_display.connect(self.update_view1_display)
@@ -387,6 +411,10 @@ class UnifiedViewer(QMainWindow):
         self.shutdown_flag.set()
         self.global_exit_flag = True
         
+        # Close the info window
+        if hasattr(self, 'info_window') and self.info_window:
+            self.info_window.close()
+        
         # Set all shutdown events to stop processes
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
                      'view3_shutdown_event', 'view4_shutdown_event',
@@ -460,7 +488,8 @@ class UnifiedViewer(QMainWindow):
         view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
         view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
         
-        self.model_performance_label.setText(
+        # Create performance text
+        performance_text = (
             f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
             f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>"
             f"<b>View1 ({view1_model} {view1_mode})</b> Avg FPS: {view1_avg_fps:.1f} "
@@ -475,20 +504,27 @@ class UnifiedViewer(QMainWindow):
             f"<span style='color: blue;'>{view4_avg_fps:.1f}</span> "
             f"(<span style='color: blue;'>{view4_avg_infer_time:.1f} ms</span>)"
         )
-
-        self.cpu_info_label.setText(
+        
+        # Create CPU info text
+        cpu_info_text = (
             f"<b><span style='color: blue;'>CPU</span></b><br>"
             f"Usage: {current['CPU_Usage_percent']:.1f} %<br>"
             f"LoadAvg: {load1:.2f} / {load5:.2f} / {load15:.2f}<br>"
             f"CtxSwitches/sec: {delta_ctx} | Int/sec: {delta_int}"
         )
         
-        self.npu_info_label.setText(
+        # Create NPU info text
+        npu_info_text = (
             f"<b><span style='color: green;'>NPU</span></b><br>"
             f"Usage: 42.0 %<br>"
             f"LoadAvg: 0.12 / 0.10 / 0.08<br>"
             f"CtxSwitches/sec: 12 | Int/sec: 3"
         )
+        
+        # Update info window labels
+        self.info_window.update_model_performance(performance_text)
+        self.info_window.update_cpu_info(cpu_info_text)
+        self.info_window.update_npu_info(npu_info_text)
         
         # Update previous stats for next calculation
         self.prev_cpu_stats = current
