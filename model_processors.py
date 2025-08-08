@@ -45,8 +45,12 @@ def video_reader_process(video_path, frame_queue, shutdown_event, max_queue_size
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        if frame_queue.qsize() < max_queue_size:
-            frame_queue.put(frame)
+        try:
+            # Avoid qsize() which may not be implemented on some platforms (e.g., macOS)
+            frame_queue.put_nowait(frame)
+        except queue.Full:
+            # Drop frame if queue is full to avoid blocking
+            pass
         time.sleep(frame_delay)
 
     cap.release()

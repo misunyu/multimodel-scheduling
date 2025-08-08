@@ -215,13 +215,16 @@ class VideoFeeder:
                 # Feed frames to all views that are running YOLO models
                 for view_name in self.yolo_views:
                     if view_name in self.view_frame_queues:
-                        queue = self.view_frame_queues[view_name]
-                        if not queue.full():
-                            try:
-                                queue.put(frame.copy())
-                            except (EOFError, BrokenPipeError, OSError):
-                                # Queue might be closed during shutdown
-                                pass
+                        frame_q = self.view_frame_queues[view_name]
+                        try:
+                            # Use non-blocking put to avoid reliance on .full() which may be unreliable across platforms
+                            frame_q.put_nowait(frame.copy())
+                        except queue.Full:
+                            # Drop frame if the queue is full
+                            pass
+                        except (EOFError, BrokenPipeError, OSError):
+                            # Queue might be closed during shutdown
+                            pass
                 
                 time.sleep(frame_delay)
             except queue.Empty:
