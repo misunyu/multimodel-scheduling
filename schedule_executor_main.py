@@ -15,6 +15,7 @@ import sys
 import os
 import argparse
 import yaml
+import json
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer
 from unified_viewer import UnifiedViewer, InfoWindow
@@ -59,10 +60,68 @@ def main():
 
     state = {'index': 0, 'viewer': None, 'info_window': persistent_info, 'duration': args.duration, 'running': False}
 
+    def _write_best_header():
+        """After all runs, rewrite result_throughput.json into the required object format.
+        Output format:
+        {
+            "best deployment": "combination_X",
+            "data": [ ... ]
+        }
+        """
+        results_path = os.path.join(os.getcwd(), 'result_throughput.json')
+        if not os.path.exists(results_path):
+            print('[Main] No results file to annotate with best deployment.')
+            return
+        try:
+            with open(results_path, 'r', encoding='utf-8') as rf:
+                content = rf.read()
+            # Try to parse JSON directly; ignore any legacy comment lines starting with '#'
+            try:
+                data_json = json.loads(content)
+            except json.JSONDecodeError:
+                # Remove comment lines and try again (backward compatibility)
+                cleaned = '\n'.join(line for line in content.splitlines() if not line.strip().startswith('#'))
+                data_json = json.loads(cleaned)
+
+            # Determine if already wrapped or a plain list
+            if isinstance(data_json, dict) and isinstance(data_json.get('data'), list):
+                entries = data_json.get('data', [])
+            elif isinstance(data_json, list):
+                entries = data_json
+            else:
+                print('[Main] Results format not recognized; skipping annotation.')
+                return
+
+            if not entries:
+                print('[Main] No entries found in results; skipping annotation.')
+                return
+
+            # Select item with max total throughput
+            def _total(d):
+                try:
+                    return float(d.get('total', {}).get('total_throughput_fps', 0) or 0)
+                except Exception:
+                    return 0.0
+
+            best = max(entries, key=_total)
+            best_combo = best.get('combination') or 'unknown'
+
+            final_obj = {
+                "best deployment": best_combo,
+                "data": entries
+            }
+            with open(results_path, 'w', encoding='utf-8') as wf:
+                json.dump(final_obj, wf, indent=4, ensure_ascii=False)
+            print(f"[Main] Wrote results in required format with best deployment: {best_combo}")
+        except Exception as e:
+            print(f"[Main] Warning: failed to write required results format: {e}")
+
     def run_next():
         # If we've executed all combinations, leave windows open and stop scheduling further actions
         if state['index'] >= len(combination_keys):
             print('[Main] All combinations executed. Leaving windows open.')
+            # Add best deployment header at the end of all runs
+            _write_best_header()
             # Re-enable start button to allow re-running from the beginning
             try:
                 state['info_window'].start_button.setEnabled(True)
@@ -139,6 +198,18 @@ def main():
             if self._state.get('running'):
                 print('[Main] Start requested but execution is already running.')
                 return
+            # Remove and recreate results file at the moment Start is pressed
+            results_path = os.path.join(os.getcwd(), 'result_throughput.json')
+            try:
+                if os.path.exists(results_path):
+                    os.remove(results_path)
+                    print('[Main] Existing result_throughput.json removed on Start.')
+                # Recreate as empty JSON array for consistent appending during this run
+                with open(results_path, 'w', encoding='utf-8') as wf:
+                    wf.write('[]')
+                print('[Main] New empty result_throughput.json created.')
+            except Exception as e:
+                print(f"[Main] Warning: could not reset result_throughput.json on Start: {e}")
             # Set duration from InfoWindow and disable start button to prevent duplicates
             try:
                 self._state['info_window'].start_button.setEnabled(False)

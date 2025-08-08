@@ -242,6 +242,9 @@ class UnifiedViewer(QMainWindow):
         # Initialize common state variables
         self.shutdown_flag = Event()
         self.prev_cpu_stats = get_cpu_metrics(interval=0)
+        
+        # Ensure stop_execution is idempotent: save throughput only once per schedule
+        self._already_stopped = False
 
         # Initialize queues and events
         self.video_frame_queue = Queue(maxsize=10)
@@ -538,6 +541,9 @@ class UnifiedViewer(QMainWindow):
         """
         print(f"Starting execution with duration: {duration} seconds")
         
+        # Reset idempotent stop flag for new run
+        self._already_stopped = False
+        
         # Initialize and start processes if they're not already running
         if not hasattr(self, 'video_reader_proc') or not self.video_reader_proc.is_alive():
             self.initialize_processes()
@@ -553,6 +559,13 @@ class UnifiedViewer(QMainWindow):
         
     def stop_execution(self):
         """Stop model execution without closing the application."""
+        # If already stopped once for this run, skip duplicate work and saving
+        if getattr(self, '_already_stopped', False):
+            print("[Stop Execution] Already stopped for this run. Skipping duplicate save.")
+            return
+        # Mark as stopped to ensure idempotency
+        self._already_stopped = True
+        
         # Set shutdown events to signal processes to stop
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
                      'view3_shutdown_event', 'view4_shutdown_event',
@@ -573,7 +586,7 @@ class UnifiedViewer(QMainWindow):
                 except Exception as e:
                     print(f"[Stop Execution] Process termination error: {e}")
                     
-        # Save throughput data
+        # Save throughput data once
         try:
             self.save_throughput_data()
         except Exception as e:
