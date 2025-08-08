@@ -46,6 +46,9 @@ class InfoWindow(QWidget):
         # Initialize the start button
         self.start_button.clicked.connect(self.on_start_button_clicked)
         
+        # Initialize the stop button
+        self.stop_button.clicked.connect(self.on_stop_button_clicked)
+        
         # Default execution duration is 60 seconds
         self.duration_edit.setText("6")
         
@@ -64,6 +67,14 @@ class InfoWindow(QWidget):
                 print(f"Starting execution with duration: {duration} seconds")
         except ValueError:
             print("Please enter a valid number for duration")
+            
+    def on_stop_button_clicked(self):
+        """Handle the stop button click event."""
+        # Call the parent's stop_execution method if available
+        if self.parent and hasattr(self.parent, 'stop_execution'):
+            self.parent.stop_execution()
+        else:
+            print("Stopping execution")
     
     def get_execution_duration(self):
         """Get the execution duration from the input field."""
