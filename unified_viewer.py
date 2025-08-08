@@ -115,11 +115,12 @@ class InfoWindow(QWidget):
 class UnifiedViewer(QMainWindow):
     """Main viewer class for the multimodel scheduling application."""
     
-    def __init__(self, schedule_file='model_schedules.yaml'):
+    def __init__(self, schedule_file='model_schedules.yaml', combination_name=None):
         """Initialize the UnifiedViewer.
         
         Args:
             schedule_file (str): Path to the model scheduling information file.
+            combination_name (str|None): Specific combination key to use from the YAML. If None, default logic applies.
         """
         super().__init__()
         uic.loadUi("schedule_executor_display.ui", self)
@@ -127,8 +128,9 @@ class UnifiedViewer(QMainWindow):
         # Set up signal handler for SIGINT (Ctrl+C)
         signal.signal(signal.SIGINT, self.signal_handler)
 
-        # Store the schedule file path
+        # Store the schedule file path and requested combination
         self.schedule_file = schedule_file
+        self.requested_combination = combination_name
         
         # Create and show the info window as the main window
         self.info_window = InfoWindow(parent=self)
@@ -153,7 +155,8 @@ class UnifiedViewer(QMainWindow):
         """Initialize model settings from YAML configuration."""
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
-        self.current_combination = "combination1"  # Default combination
+        # Default combination, can be overridden by requested_combination
+        self.current_combination = self.requested_combination or "combination1"
         
         # Update the schedule name label
         self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
@@ -161,26 +164,27 @@ class UnifiedViewer(QMainWindow):
         try:
             # Load configuration from the specified schedule file
             with open(self.schedule_file, "r") as f:
-                config = yaml.safe_load(f)
+                config = yaml.safe_load(f) or {}
                 
             # Create a mapping from views to model configurations based on the display field
             view_to_model_map = {}
             
-            # Find the first available combination if the default is not available
-            if self.current_combination not in config and config:
+            # If a specific combination was not requested or not found, choose the first available
+            if (self.current_combination not in config) and config:
                 self.current_combination = next(iter(config))
                 # Update the schedule name label with the actual combination being used
                 self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
                 
             # Use the selected combination configuration
             if self.current_combination in config:
-                for model_config_name, model_config in config[self.current_combination].items():
-                    if "display" in model_config:
-                        view_name = model_config["display"]
-                        view_to_model_map[view_name] = {
-                            "model": model_config.get("model", ""),
-                            "execution": model_config.get("execution", "cpu")
-                        }
+                for model_config_name, model_config in (config[self.current_combination] or {}).items():
+                    if isinstance(model_config, dict) and "display" in model_config:
+                        view_name = model_config.get("display")
+                        if view_name:
+                            view_to_model_map[view_name] = {
+                                "model": model_config.get("model", ""),
+                                "execution": model_config.get("execution", "cpu")
+                            }
             
             # Assign model configurations to views
             for view in ["view1", "view2", "view3", "view4"]:
@@ -196,7 +200,7 @@ class UnifiedViewer(QMainWindow):
                     }
                     print(f"[UnifiedViewer] No model specified for {view} in {self.schedule_file}")
                     
-            print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file}")
+            print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file} for {self.current_combination}")
         except Exception as e:
             print(f"[UnifiedViewer ERROR] Failed to load {self.schedule_file}: {e}")
             # Set default settings if file loading fails
@@ -759,10 +763,45 @@ class UnifiedViewer(QMainWindow):
                     "inference_count": view4_infer_count
                 }
             
-            # Save to JSON file
+            # Determine if the current combination is the first schedule in the YAML
+            is_first_schedule = False
+            try:
+                with open(self.schedule_file, "r", encoding="utf-8") as sf:
+                    cfg = yaml.safe_load(sf) or {}
+                if cfg:
+                    first_key = next(iter(cfg))
+                    is_first_schedule = (self.current_combination == first_key)
+            except Exception as e:
+                # If we cannot read the YAML, default to not-first to avoid accidental truncation
+                print(f"[Save Throughput] Warning: failed to read schedule file {self.schedule_file}: {e}")
+                is_first_schedule = False
+
+            # Prepare aggregated results list. If this is the first schedule, clear previous contents.
+            results = []
+            if not is_first_schedule:
+                try:
+                    if os.path.exists("result_throughput.json"):
+                        with open("result_throughput.json", "r", encoding="utf-8") as rf:
+                            loaded = json.load(rf)
+                            if isinstance(loaded, list):
+                                results = loaded
+                            elif isinstance(loaded, dict):
+                                # Backward compatibility: wrap single dict into list
+                                results = [loaded]
+                            else:
+                                results = []
+                except Exception as read_err:
+                    print(f"[Save Throughput] Warning: failed to read existing results file: {read_err}. Starting new list.")
+                    results = []
+            else:
+                # Explicitly clear previous results when saving the first schedule
+                print("[Save Throughput] First schedule detected. Clearing previous contents of result_throughput.json.")
+
+            results.append(throughput_data)
+
             with open("result_throughput.json", "w", encoding="utf-8") as f:
-                json.dump(throughput_data, f, indent=4, ensure_ascii=False)
+                json.dump(results, f, indent=4, ensure_ascii=False)
                 
-            print("[Shutdown] Throughput data saved to result_throughput.json")
+            print("[Shutdown] Throughput data appended to result_throughput.json")
         except Exception as e:
             print(f"[Shutdown ERROR] Failed to save throughput data: {e}")
