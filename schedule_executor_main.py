@@ -57,12 +57,20 @@ def main():
     persistent_info = InfoWindow(parent=None)
     persistent_info.show()
 
-    state = {'index': 0, 'viewer': None, 'info_window': persistent_info}
+    state = {'index': 0, 'viewer': None, 'info_window': persistent_info, 'duration': args.duration, 'running': False}
 
     def run_next():
         # If we've executed all combinations, leave windows open and stop scheduling further actions
         if state['index'] >= len(combination_keys):
             print('[Main] All combinations executed. Leaving windows open.')
+            # Re-enable start button to allow re-running from the beginning
+            try:
+                state['info_window'].start_button.setEnabled(True)
+            except Exception:
+                pass
+            # Reset state to allow starting from the first schedule again
+            state['running'] = False
+            state['index'] = 0
             return
 
         # If previous viewer exists, ensure it is cleaned up
@@ -86,6 +94,12 @@ def main():
         print(f"[Main] Starting schedule: {combo}")
         viewer = UnifiedViewer(schedule_file=args.schedule, combination_name=combo, info_window=state['info_window'])
         state['viewer'] = viewer
+        # Ensure the InfoWindow keeps the external controller as parent (UnifiedViewer may set itself)
+        try:
+            if 'controller' in state and state['controller'] is not None:
+                state['info_window'].parent = state['controller']
+        except Exception:
+            pass
         # Ensure the info window displays the current schedule name and is visible on top
         try:
             state['info_window'].update_schedule_name(f"Current Schedule: {combo}")
@@ -95,13 +109,17 @@ def main():
         except Exception:
             pass
         viewer.show()
-        # Use specified duration per schedule
-        viewer.start_execution(args.duration)
+        # Use specified duration per schedule (from state, which can be set by InfoWindow Start)
+        duration = state.get('duration', args.duration)
+        viewer.start_execution(duration)
         # Schedule moving to the next combination after duration + small buffer (ms)
         buffer_ms = 1000
-        QTimer.singleShot((args.duration * 1000) + buffer_ms, lambda: _after_stop())
+        QTimer.singleShot((duration * 1000) + buffer_ms, lambda: _after_stop())
 
     def _after_stop():
+        # If user stopped execution, do not advance further
+        if not state.get('running'):
+            return
         # Ensure throughput is saved and proceed to next
         try:
             if state['viewer'] is not None:
@@ -112,8 +130,57 @@ def main():
         # Short delay to allow file writes flush
         QTimer.singleShot(300, run_next)
 
-    # Kick off the first run shortly after app starts
-    QTimer.singleShot(0, run_next)
+    # Wire InfoWindow buttons via a lightweight controller to start/stop execution on demand
+    class _Controller:
+        def __init__(self, state_ref):
+            self._state = state_ref
+        def start_execution(self, duration):
+            # Ignore if already running
+            if self._state.get('running'):
+                print('[Main] Start requested but execution is already running.')
+                return
+            # Set duration from InfoWindow and disable start button to prevent duplicates
+            try:
+                self._state['info_window'].start_button.setEnabled(False)
+            except Exception:
+                pass
+            self._state['duration'] = max(1, int(duration))
+            # Always start from the first schedule per requirement
+            self._state['index'] = 0
+            self._state['running'] = True
+            print('[Main] Starting execution from the first schedule via Start button.')
+            run_next()
+        def stop_execution(self):
+            # Stop current viewer and mark as not running; do not advance automatically
+            viewer = self._state.get('viewer')
+            if viewer is not None:
+                try:
+                    viewer.stop_execution()
+                except Exception:
+                    pass
+                try:
+                    viewer.hide()
+                except Exception:
+                    pass
+                try:
+                    viewer.deleteLater()
+                except Exception:
+                    pass
+                self._state['viewer'] = None
+            self._state['running'] = False
+            try:
+                self._state['info_window'].start_button.setEnabled(True)
+            except Exception:
+                pass
+            print('[Main] Execution stopped by user.')
+
+    controller = _Controller(state)
+    state['controller'] = controller
+    # Assign controller as the parent so InfoWindow's built-in handlers call our methods
+    try:
+        persistent_info.parent = controller
+    except Exception:
+        pass
 
     try:
         exit_code = app.exec_()
