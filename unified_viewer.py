@@ -23,15 +23,15 @@ from model_processors import (
 )
 
 class InfoWindow(QWidget):
-    """Independent window for displaying system and model information."""
+    """Main window for displaying system and model information."""
     
     def __init__(self, parent=None):
         """Initialize the InfoWindow."""
         super().__init__()
         # Load UI from file instead of creating components programmatically
         uic.loadUi("info_window.ui", self)
-        # Set window to stay on top to ensure visibility
-        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        # Set window flags to make it behave like a main window
+        self.setWindowFlags(Qt.Window)
         
         # Store parent reference for callbacks
         self.parent = parent
@@ -98,6 +98,19 @@ class InfoWindow(QWidget):
     def update_schedule_name(self, text):
         """Update the schedule name label."""
         self.schedule_name_label.setText(text)
+        
+    def closeEvent(self, event):
+        """Handle window close event - terminate the application."""
+        print("[InfoWindow] Close event triggered - terminating application")
+        event.accept()
+        
+        # If we have a parent (UnifiedViewer), call its shutdown method
+        if self.parent and hasattr(self.parent, 'shutdown_all'):
+            self.parent.shutdown_all()
+        else:
+            # If no parent, exit directly
+            print("[InfoWindow] Closing application directly")
+            os._exit(0)
 
 class UnifiedViewer(QMainWindow):
     """Main viewer class for the multimodel scheduling application."""
@@ -117,9 +130,12 @@ class UnifiedViewer(QMainWindow):
         # Store the schedule file path
         self.schedule_file = schedule_file
         
-        # Create and show the info window
+        # Create and show the info window as the main window
         self.info_window = InfoWindow(parent=self)
         self.info_window.show()
+        
+        # Set window title to indicate it's a secondary window
+        self.setWindowTitle("Schedule Executor Display (Secondary Window)")
 
         # Initialize model settings and views
         self.initialize_model_settings()
@@ -470,14 +486,15 @@ class UnifiedViewer(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event."""
+        print("[UnifiedViewer] Close event triggered - hiding window only")
         event.accept()
         # Immediately set shutdown flags to stop video generation
         self.shutdown_flag.set()
         self.global_exit_flag = True
         
-        # Close the info window
-        if hasattr(self, 'info_window') and self.info_window:
-            self.info_window.close()
+        # Don't close the info window as it's now the main window
+        # Instead, just hide this window
+        self.hide()
         
         # Set all shutdown events to stop processes
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
@@ -487,8 +504,9 @@ class UnifiedViewer(QMainWindow):
             if event:
                 event.set()
                 
-        # Call the shutdown method to clean up resources
-        self.shutdown_all()
+        # Call the stop_execution method to clean up resources but don't exit
+        self.stop_execution()
+        print("[UnifiedViewer] Window hidden, info_window remains open")
     
     def shutdown_all(self):
         """Clean up resources and shut down the application."""
