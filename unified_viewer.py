@@ -32,7 +32,7 @@ class UnifiedViewer(QMainWindow):
             schedule_file (str): Path to the model scheduling information file.
         """
         super().__init__()
-        uic.loadUi("schedule_executor_display_layout.ui", self)
+        uic.loadUi("schedule_executor_display.ui", self)
         
         # Set up signal handler for SIGINT (Ctrl+C)
         signal.signal(signal.SIGINT, self.signal_handler)
