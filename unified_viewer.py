@@ -6,7 +6,7 @@ import json
 import signal
 import yaml
 from datetime import datetime
-from PyQt5.QtWidgets import QMainWindow, QLabel, QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QMainWindow, QLabel, QWidget, QVBoxLayout, QFileDialog
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
 from multiprocessing import Process, Queue, Event
@@ -48,6 +48,13 @@ class InfoWindow(QWidget):
         
         # Initialize the stop button
         self.stop_button.clicked.connect(self.on_stop_button_clicked)
+
+        # Initialize the best button (open JSON file dialog)
+        try:
+            self.best_button.clicked.connect(self.load_best_schedule)
+        except Exception:
+            # If best_button is not present for some reason, ignore gracefully
+            pass
         
         # Default execution duration is 60 seconds
         self.duration_edit.setText("6")
@@ -75,6 +82,36 @@ class InfoWindow(QWidget):
             self.parent.stop_execution()
         else:
             print("Stopping execution")
+
+    def load_best_schedule(self):
+        """Open a file dialog to select a .json schedule and load it. If canceled, do nothing."""
+        try:
+            # Open file dialog restricted to JSON files
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Best Schedule JSON",
+                "",
+                "JSON Files (*.json);;All Files (*)"
+            )
+            # If the dialog was canceled or closed (e.g., ESC), do nothing
+            if not file_path:
+                return
+            # Remember selection and show in the schedule name label
+            self.selected_best_json = file_path
+            try:
+                self.update_schedule_name(f"Best schedule: {os.path.basename(file_path)}")
+            except Exception:
+                # Fallback: set text directly
+                self.schedule_name_label.setText(f"Best schedule: {os.path.basename(file_path)}")
+            
+            # If parent viewer can handle it, notify parent
+            if self.parent and hasattr(self.parent, 'load_best_schedule'):
+                try:
+                    self.parent.load_best_schedule(file_path)
+                except Exception as e:
+                    print(f"[InfoWindow] load_best_schedule failed: {e}")
+        except Exception as e:
+            print(f"[InfoWindow] Failed to open file dialog: {e}")
     
     def get_execution_duration(self):
         """Get the execution duration from the input field."""

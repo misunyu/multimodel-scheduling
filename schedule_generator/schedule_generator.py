@@ -126,70 +126,6 @@ class ModelProfiler:
         
         return load_time, inference_time, model_info
 
-        def profile_yolo_npu(self, npu_num, o_path):
-            try:
-                driver = NeublaDriver()
-                assert driver.Init(npu_num) == 0
-
-                start_load = time.time()
-                assert driver.LoadModel(o_path) == 0
-                end_load = time.time()
-                load_time_ms = (end_load - start_load) * 1000.0
-
-                random_input = np.random.rand(3, 608, 608).astype(np.uint8)
-                input_data = random_input.tobytes()
-
-                start_infer = time.time()
-                assert driver.SendInput(input_data, 3 * 608 * 608) == 0
-                assert driver.Launch() == 0
-                raw_outputs = driver.ReceiveOutputs()
-                end_infer = time.time()
-                infer_time_ms = (end_infer - start_infer) * 1000.0
-
-                assert driver.Close() == 0
-
-            except Exception as e:
-                try:
-                    driver.Close()
-                except:
-                    pass
-                print(f"[Error] NPU{npu_num}: {e}")
-                exit()
-
-            return load_time_ms, infer_time_ms
-
-        def profile_resnet50_npu(self, npu_num, o_path):
-            try:
-                driver = NeublaDriver()
-                assert driver.Init(npu_num) == 0
-
-                start_load = time.time()
-                assert driver.LoadModel(o_path) == 0
-                end_load = time.time()
-                load_time_ms = (end_load - start_load) * 1000.0
-
-                random_input = np.random.rand(3, 224, 224).astype(np.uint8)
-                input_data = random_input.tobytes()
-
-                start_infer = time.time()
-                assert driver.SendInput(input_data, 3 * 224 * 224) == 0
-                assert driver.Launch() == 0
-                raw_outputs = driver.ReceiveOutputs()
-                end_infer = time.time()
-                infer_time_ms = (end_infer - start_infer) * 1000.0
-
-                assert driver.Close() == 0
-
-            except Exception as e:
-                try:
-                    driver.Close()
-                except:
-                    pass
-                print(f"[Error] NPU{npu_num}: {e}")
-                exit()
-
-            return load_time_ms, infer_time_ms
-
     def profile_model_npu(self, o_path: str, label: str) -> Tuple[float, float, Dict[str, Any]]:
         """
         Profile a model on NPU.
@@ -278,7 +214,7 @@ class ModelProfiler:
         }
 
         return load_time_ms, infer_time_ms, model_info
-    
+
     def contains_custom_op(self, onnx_path: str) -> bool:
         """
         Check if an ONNX model contains custom operations.

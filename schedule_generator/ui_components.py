@@ -11,6 +11,9 @@ from PyQt5.QtGui import QColor, QBrush, QFont
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import json
+import yaml
+from datetime import datetime
 
 class UIComponents:
     """
@@ -176,71 +179,238 @@ class UIComponents:
     
     def highlight_deploy_results(self, total_table, times, models):
         """
-        Highlight the best deployment options in the total table.
+        Compute and highlight a globally optimal deployment schedule that minimizes
+        the overall completion time (makespan), considering that:
+        - CPU can execute multiple models/partitions concurrently (parallel), so
+          its total time is the maximum of assigned CPU model times.
+        - Each NPU device is exclusive: it can run only one model/partition at a time,
+          so multiple assignments to the same NPU serialize (sum of their times).
+        The function also saves the chosen assignments to static_best_schedule.json.
         
         Args:
             total_table: QTableWidget for total results
-            times: List of profiling times
-            models: List of model names
+            times: Output list, will be populated with the chosen per-model device time
+            models: Output list, will be populated with tuples (model_name, device_label)
         """
         if not total_table or total_table.rowCount() == 0:
             return
-        
+
         # Clear any previous highlighting
         for row in range(total_table.rowCount()):
             for col in range(total_table.columnCount()):
                 item = total_table.item(row, col)
                 if item:
                     item.setBackground(QBrush(QColor(255, 255, 255)))
-        
+
         # Define colors for different devices
-        cpu_color = QColor(204, 230, 255)  # Light blue for CPU
-        npu1_color = QColor(255, 255, 204)  # Light yellow for NPU1
-        npu2_color = QColor(255, 214, 153)  # Light orange for NPU2
-        
-        # Process each model
-        for row in range(total_table.rowCount() - 1):  # Skip the total row
-            model_item = total_table.item(row, 0)
-            if not model_item:
+        cpu_color = QColor(204, 230, 255)   # Light blue for CPU
+        npu1_color = QColor(255, 255, 204)  # Light yellow for NPU1 (UI label)
+        npu2_color = QColor(255, 214, 153)  # Light orange for NPU2 (UI label)
+
+        # Collect per-model timing options from the table
+        # Columns: 0=Model, 1=CPU Inf, 2=NPU1 Load, 3=NPU1+CPU Inf, 4=NPU2 Load, 5=NPU2+CPU Inf
+        models_data = []  # list of dicts: {name, cpu, npu1_total, npu2_total, npu1_inf, npu2_inf}
+        last_row_index = total_table.rowCount() - 1  # last row is the Total row
+        for row in range(max(0, last_row_index)):
+            name_item = total_table.item(row, 0)
+            if not name_item:
                 continue
-            
-            model_name = model_item.text()
-            
-            # Get inference times for each device
-            cpu_time = float(total_table.item(row, 1).text()) if total_table.item(row, 1) else float('inf')
-            npu1_time = float(total_table.item(row, 3).text()) if total_table.item(row, 3) else float('inf')
-            npu2_time = float(total_table.item(row, 5).text()) if total_table.item(row, 5) else float('inf')
-            
-            # Find the best device (minimum inference time)
-            best_time = min(cpu_time, npu1_time, npu2_time)
-            
-            # Highlight the row based on the best device
-            if best_time == cpu_time and cpu_time < float('inf'):
-                for col in range(total_table.columnCount()):
-                    item = total_table.item(row, col)
-                    if item:
-                        item.setBackground(QBrush(cpu_color))
-                # Add to times and models lists
-                times.append(cpu_time)
-                models.append((model_name, "CPU"))
-                
-            elif best_time == npu1_time and npu1_time < float('inf'):
-                for col in range(total_table.columnCount()):
-                    item = total_table.item(row, col)
-                    if item:
-                        item.setBackground(QBrush(npu1_color))
-                # Add to times and models lists
-                times.append(npu1_time)
-                models.append((model_name, "NPU1"))
-                
-            elif best_time == npu2_time and npu2_time < float('inf'):
-                for col in range(total_table.columnCount()):
-                    item = total_table.item(row, col)
-                    if item:
-                        item.setBackground(QBrush(npu2_color))
-                # Add to times and models lists
-                times.append(npu2_time)
-                models.append((model_name, "NPU2"))
+            model_name = name_item.text()
+            try:
+                cpu_time = float(total_table.item(row, 1).text()) if total_table.item(row, 1) else 0.0
+            except Exception:
+                cpu_time = 0.0
+            try:
+                npu1_load = float(total_table.item(row, 2).text()) if total_table.item(row, 2) else 0.0
+            except Exception:
+                npu1_load = 0.0
+            try:
+                npu1_infer = float(total_table.item(row, 3).text()) if total_table.item(row, 3) else 0.0
+            except Exception:
+                npu1_infer = 0.0
+            try:
+                npu2_load = float(total_table.item(row, 4).text()) if total_table.item(row, 4) else 0.0
+            except Exception:
+                npu2_load = 0.0
+            try:
+                npu2_infer = float(total_table.item(row, 5).text()) if total_table.item(row, 5) else 0.0
+            except Exception:
+                npu2_infer = 0.0
+
+            # Treat non-positive or 0 times as unavailable
+            def norm(x):
+                return x if (isinstance(x, (int, float)) and x > 0) else float('inf')
+
+            models_data.append({
+                "name": model_name,
+                "cpu": norm(cpu_time),
+                # For scheduling on NPU we consider load + inference time occupying the NPU
+                "npu1_total": norm(npu1_load) + norm(npu1_infer) if norm(npu1_load) < float('inf') and norm(npu1_infer) < float('inf') else float('inf'),
+                "npu2_total": norm(npu2_load) + norm(npu2_infer) if norm(npu2_load) < float('inf') and norm(npu2_infer) < float('inf') else float('inf'),
+                # Keep pure inference times for JSON reporting (historical format)
+                "npu1_inf": norm(npu1_infer),
+                "npu2_inf": norm(npu2_infer),
+            })
+
+        if not models_data:
+            return
+
+        # Brute-force search over assignments to minimize makespan
+        # Device indices: 0=CPU, 1=NPU1, 2=NPU2
+        n = len(models_data)
+        best_assignment = None
+        best_makespan = float('inf')
+
+        # Early exit: if n is large, we could add heuristics, but typical n is small
+        from itertools import product
+        for choices in product((0, 1, 2), repeat=n):
+            cpu_bucket = 0.0
+            npu1_bucket = 0.0
+            npu2_bucket = 0.0
+            feasible = True
+            for i, d in enumerate(choices):
+                m = models_data[i]
+                if d == 0:
+                    t = m["cpu"]
+                    if t == float('inf'):
+                        feasible = False
+                        break
+                    # CPU runs in parallel: bucket is max
+                    cpu_bucket = max(cpu_bucket, t)
+                elif d == 1:
+                    t = m["npu1_total"]
+                    if t == float('inf'):
+                        feasible = False
+                        break
+                    npu1_bucket += t
+                else:  # d == 2
+                    t = m["npu2_total"]
+                    if t == float('inf'):
+                        feasible = False
+                        break
+                    npu2_bucket += t
+            if not feasible:
+                continue
+            makespan = max(cpu_bucket, npu1_bucket, npu2_bucket)
+            if makespan < best_makespan:
+                best_makespan = makespan
+                best_assignment = choices
+
+        if best_assignment is None:
+            # Fallback: highlight nothing if no feasible assignment
+            return
+
+        # Clear output containers and fill with best assignment
+        times.clear()
+        models.clear()
+
+        # Apply highlighting according to the best assignment
+        for i, d in enumerate(best_assignment):
+            row = i
+            # Safety check: skip if beyond table (shouldn't happen)
+            if row >= last_row_index:
+                continue
+            # Determine color and time for outputs
+            if d == 0:
+                color = cpu_color
+                chosen_label = "CPU"
+                chosen_time = models_data[i]["cpu"] if models_data[i]["cpu"] < float('inf') else 0.0
+            elif d == 1:
+                color = npu1_color
+                chosen_label = "NPU1"  # UI label; JSON will map to NPU0
+                # For times list, keep inference part (for external expectations)
+                chosen_time = models_data[i]["npu1_inf"] if models_data[i]["npu1_inf"] < float('inf') else 0.0
+            else:
+                color = npu2_color
+                chosen_label = "NPU2"  # UI label; JSON will map to NPU1
+                chosen_time = models_data[i]["npu2_inf"] if models_data[i]["npu2_inf"] < float('inf') else 0.0
+
+            # Highlight the entire row
+            for col in range(total_table.columnCount()):
+                item = total_table.item(row, col)
+                if item:
+                    item.setBackground(QBrush(color))
+
+            # Append results
+            times.append(chosen_time)
+            models.append((models_data[i]["name"], chosen_label))
+
+        # After highlighting, save best schedule to static_best_schedule.json
+        try:
+            # Map UI device labels to execution names for JSON output
+            # UI labels: CPU, NPU1, NPU2 -> JSON execution: CPU, NPU0, NPU1
+            def to_execution_label(label: str) -> str:
+                up = label.upper()
+                if up == "CPU":
+                    return "CPU"
+                if up == "NPU1":
+                    return "NPU0"  # Map UI NPU1 to NPU0
+                if up == "NPU2":
+                    return "NPU1"  # Map UI NPU2 to NPU1
+                return up
+
+            # Build a single-entry results object
+            models_dict = {}
+            total_fps_sum = 0.0
+            for idx, (model_name, device_label) in enumerate(models, start=1):
+                view_key = f"view{idx}"
+
+                # Determine avg_inference_time_ms (use inference time only for reporting)
+                avg_time_ms = 0.0
+                exec_label = to_execution_label(device_label)
+                # Locate row to read time columns again
+                for row in range(last_row_index):
+                    item = total_table.item(row, 0)
+                    if item and item.text() == model_name:
+                        cpu_item = total_table.item(row, 1)
+                        npu0_inf_item = total_table.item(row, 3)
+                        npu1_inf_item = total_table.item(row, 5)
+                        if exec_label == "CPU":
+                            ref = cpu_item
+                        elif exec_label == "NPU0":
+                            ref = npu0_inf_item
+                        else:
+                            ref = npu1_inf_item
+                        try:
+                            avg_time_ms = float(ref.text()) if ref and ref.text() else 0.0
+                        except Exception:
+                            avg_time_ms = 0.0
+                        break
+
+                throughput_fps = round(1000.0 / avg_time_ms, 2) if avg_time_ms > 0 else 0.0
+                total_fps_sum += throughput_fps
+
+                models_dict[view_key] = {
+                    "model": model_name,
+                    "execution": exec_label,
+                    "throughput_fps": throughput_fps,
+                    "avg_inference_time_ms": round(avg_time_ms, 2),
+                    "inference_count": 0
+                }
+
+            active_views = len(models_dict)
+            result_entry = {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "combination": "combination_1",
+                "models": models_dict,
+                "total": {
+                    "total_throughput_fps": round(total_fps_sum, 2),
+                    "avg_throughput_fps": round((total_fps_sum / active_views) if active_views else 0.0, 2)
+                }
+            }
+
+            final_obj = {
+                "best deployment": "combination_1",
+                "data": [result_entry]
+            }
+
+            with open("static_best_schedule.json", "w", encoding="utf-8") as f:
+                json.dump(final_obj, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            try:
+                self.log(f"[Error] Failed to write static_best_schedule.json: {e}")
+            except Exception:
+                pass
     
     def create_inference_bar_chart(self, parent_widget, models, cpu_table, npu1_table, npu2_table):
         """
