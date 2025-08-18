@@ -748,32 +748,23 @@ class UnifiedViewer(QMainWindow):
             view4_avg_infer_time = self.view4_handler.avg_infer_time
             view4_infer_count = self.view4_handler.infer_count
             
-            # Identify views with allocated models (inference_count > 0)
-            active_views = []
-            active_fps_values = []
-            
-            if view1_infer_count > 0:
-                active_views.append("view1")
-                active_fps_values.append(view1_avg_fps)
-            
-            if view2_infer_count > 0:
-                active_views.append("view2")
-                active_fps_values.append(view2_avg_fps)
-            
-            if view3_infer_count > 0:
-                active_views.append("view3")
-                active_fps_values.append(view3_avg_fps)
-            
-            if view4_infer_count > 0:
-                active_views.append("view4")
-                active_fps_values.append(view4_avg_fps)
-            
-            # Calculate total throughput only for active views
-            total_fps = sum(active_fps_values)
-            active_view_count = len(active_views)
-            total_avg_fps = total_fps / active_view_count if active_view_count > 0 else 0.0
-            
-            # Prepare throughput data with only active views
+            # Determine which views are actually scheduled in this combination
+            scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
+
+            # Map helpers for per-view stats
+            per_view_stats = {
+                "view1": (view1_avg_fps, view1_avg_infer_time, view1_infer_count, view1_model, view1_mode),
+                "view2": (view2_avg_fps, view2_avg_infer_time, view2_infer_count, view2_model, view2_mode),
+                "view3": (view3_avg_fps, view3_avg_infer_time, view3_infer_count, view3_model, view3_mode),
+                "view4": (view4_avg_fps, view4_avg_infer_time, view4_infer_count, view4_model, view4_mode),
+            }
+
+            # Calculate total throughput for scheduled views
+            total_fps = sum(per_view_stats[v][0] for v in scheduled_views)
+            scheduled_count = len(scheduled_views)
+            total_avg_fps = total_fps / scheduled_count if scheduled_count > 0 else 0.0
+
+            # Prepare throughput data including all scheduled views (even if 0 inferences)
             throughput_data = {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "combination": self.current_combination,
@@ -784,41 +775,15 @@ class UnifiedViewer(QMainWindow):
                 }
             }
             
-            # Add only active views to the models dictionary
-            if "view1" in active_views:
-                throughput_data["models"]["view1"] = {
-                    "model": view1_model,
-                    "execution": view1_mode,
-                    "throughput_fps": round(view1_avg_fps, 2),
-                    "avg_inference_time_ms": round(view1_avg_infer_time, 2),
-                    "inference_count": view1_infer_count
-                }
-            
-            if "view2" in active_views:
-                throughput_data["models"]["view2"] = {
-                    "model": view2_model,
-                    "execution": view2_mode,
-                    "throughput_fps": round(view2_avg_fps, 2),
-                    "avg_inference_time_ms": round(view2_avg_infer_time, 2),
-                    "inference_count": view2_infer_count
-                }
-            
-            if "view3" in active_views:
-                throughput_data["models"]["view3"] = {
-                    "model": view3_model,
-                    "execution": view3_mode,
-                    "throughput_fps": round(view3_avg_fps, 2),
-                    "avg_inference_time_ms": round(view3_avg_infer_time, 2),
-                    "inference_count": view3_infer_count
-                }
-            
-            if "view4" in active_views:
-                throughput_data["models"]["view4"] = {
-                    "model": view4_model,
-                    "execution": view4_mode,
-                    "throughput_fps": round(view4_avg_fps, 2),
-                    "avg_inference_time_ms": round(view4_avg_infer_time, 2),
-                    "inference_count": view4_infer_count
+            # Add all scheduled views to the models dictionary (include zeros if no inferences)
+            for v in scheduled_views:
+                avg_fps, avg_time, infer_cnt, model_name, exec_mode = per_view_stats[v]
+                throughput_data["models"][v] = {
+                    "model": model_name,
+                    "execution": exec_mode,
+                    "throughput_fps": round(avg_fps, 2),
+                    "avg_inference_time_ms": round(avg_time, 2),
+                    "inference_count": int(infer_cnt)
                 }
             
             # Determine if the current combination is the first schedule in the YAML
