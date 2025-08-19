@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+import numpy as np
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
@@ -12,6 +14,12 @@ from PyQt5.QtWidgets import (
 
 from schedule_generator import (
     ModelProfiler, DataProcessor, UIComponents, FileManager
+)
+from image_processing import (
+    yolo_preprocess_local,
+    resnet50_preprocess_local,
+    yolo_postprocess_cpu,
+    yolo_postprocess_npu,
 )
 
 class ONNXProfilerApp(QMainWindow):
@@ -91,6 +99,7 @@ class ONNXProfilerApp(QMainWindow):
         self.cpu_table = self.findChild(QTableWidget, "cpu_table")
         self.npu1_table = self.findChild(QTableWidget, "npu1_table")
         self.npu2_table = self.findChild(QTableWidget, "npu2_table")
+        self.pre_post_table = self.findChild(QTableWidget, "pre_post_table")
         
         # Set up NPU2 visibility
         self.npu2_table.setVisible(self.enable_npu2_checkbox.isChecked())
@@ -100,6 +109,17 @@ class ONNXProfilerApp(QMainWindow):
             header = table.horizontalHeader()
             header.setStretchLastSection(True)
             header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        
+        # Initialize Pre/Post table headers
+        if self.pre_post_table:
+            self.pre_post_table.clear()
+            self.pre_post_table.setColumnCount(2)
+            self.pre_post_table.setHorizontalHeaderLabels(["Function", "Avg (ms)"])
+            self.pre_post_table.setRowCount(0)
+            ph = self.pre_post_table.horizontalHeader()
+            ph.setStretchLastSection(True)
+            ph.setSectionResizeMode(0, QHeaderView.Stretch)
+            ph.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         
         # Create and add legend label
         self.legend_label = QLabel()
@@ -297,6 +317,9 @@ class ONNXProfilerApp(QMainWindow):
             # Process profiling results
             if self.total_table:
                 self._process_profiling_results(valid_model_onnx, root_folder)
+
+            # At the end of profiling, compute and display pre/post average times
+            self._profile_pre_post_avg_times()
         
         except Exception as e:
             self.log_message(f"[Error] Profiling failed: {str(e)}\n")
@@ -316,6 +339,13 @@ class ONNXProfilerApp(QMainWindow):
         self.ui_components.init_table(self.cpu_table)
         self.ui_components.init_table(self.npu1_table)
         self.ui_components.init_table(self.npu2_table)
+        
+        # Reset Pre/Post table
+        if hasattr(self, 'pre_post_table') and self.pre_post_table is not None:
+            self.pre_post_table.clear()
+            self.pre_post_table.setColumnCount(2)
+            self.pre_post_table.setHorizontalHeaderLabels(["Function", "Avg (ms)"])
+            self.pre_post_table.setRowCount(0)
         
         # Clear profiled data
         self.profiled_times = []
@@ -418,6 +448,87 @@ class ONNXProfilerApp(QMainWindow):
             self.total_table, cpu_infer_total, npu1_load_total, 
             npu1_infer_total, npu2_load_total, npu2_infer_total
         )
+
+    def _profile_pre_post_avg_times(self):
+        """Run specified pre/post-processing functions 10 times with dummy inputs and display their average times in pre_post_table."""
+        if not hasattr(self, 'pre_post_table') or self.pre_post_table is None:
+            return
+
+        # Prepare dummy images
+        img_h, img_w = 720, 1280
+        raw_img = (np.random.randint(0, 256, size=(img_h, img_w, 3), dtype=np.uint8))
+
+        # Helper to time a callable 10 times
+        def avg_time_ms(fn, *args, **kwargs):
+            total = 0.0
+            for _ in range(10):
+                t0 = time.perf_counter()
+                _ = fn(*args, **kwargs)
+                t1 = time.perf_counter()
+                total += (t1 - t0) * 1000.0
+            return total / 10.0
+
+        # Build dummy outputs for postprocess functions
+        # For YOLO CPU postprocess: output[0] -> rows of [cx, cy, w, h, obj_conf, class_probs...]
+        rows_cpu = 50
+        cols_cpu = 85  # 4 + 1 + 80 class probs (typical YOLOv5), enough for indexing
+        yolo_cpu_output0 = np.zeros((rows_cpu, cols_cpu), dtype=np.float32)
+        # center x,y around input size 608 used inside image_processing, but any values ok
+        yolo_cpu_output0[:, 0:4] = np.random.rand(rows_cpu, 4).astype(np.float32) * 608.0
+        yolo_cpu_output0[:, 4] = np.random.rand(rows_cpu).astype(np.float32)  # object confidence
+        yolo_cpu_output0[:, 5:] = np.random.rand(rows_cpu, cols_cpu - 5).astype(np.float32)
+        yolo_cpu_output = [yolo_cpu_output0]
+
+        # For YOLO NPU postprocess: output[0]=[left, top, right, bottom, conf], output[1]=class_ids
+        rows_npu = 50
+        left = np.random.rand(rows_npu).astype(np.float32) * 608.0
+        top = np.random.rand(rows_npu).astype(np.float32) * 608.0
+        right = left + np.random.rand(rows_npu).astype(np.float32) * 100.0 + 1.0
+        bottom = top + np.random.rand(rows_npu).astype(np.float32) * 100.0 + 1.0
+        conf = np.random.rand(rows_npu).astype(np.float32)
+        yolo_npu_output0 = np.stack([left, top, right, bottom, conf], axis=1)
+        yolo_npu_output1 = np.random.randint(0, 80, size=(rows_npu,), dtype=np.int32)
+        yolo_npu_output = [yolo_npu_output0, yolo_npu_output1]
+
+        # Compute averages
+        results = []
+        try:
+            avg1 = avg_time_ms(yolo_preprocess_local, raw_img)
+            results.append(("yolo_preprocess_local", avg1))
+        except Exception as e:
+            self.log_message(f"[Warn] yolo_preprocess_local timing failed: {e}")
+        try:
+            avg2 = avg_time_ms(resnet50_preprocess_local, raw_img)
+            results.append(("resnet50_preprocess_local", avg2))
+        except Exception as e:
+            self.log_message(f"[Warn] resnet50_preprocess_local timing failed: {e}")
+        try:
+            avg3 = avg_time_ms(yolo_postprocess_cpu, yolo_cpu_output, raw_img.copy(), img_w, img_h)
+            results.append(("yolo_postprocess_cpu", avg3))
+        except Exception as e:
+            self.log_message(f"[Warn] yolo_postprocess_cpu timing failed: {e}")
+        try:
+            avg4 = avg_time_ms(yolo_postprocess_npu, yolo_npu_output, raw_img.copy(), img_w, img_h)
+            results.append(("yolo_postprocess_npu", avg4))
+        except Exception as e:
+            self.log_message(f"[Warn] yolo_postprocess_npu timing failed: {e}")
+
+        # Update table
+        self.pre_post_table.setRowCount(0)
+        self.pre_post_table.setColumnCount(2)
+        self.pre_post_table.setHorizontalHeaderLabels(["Function", "Avg (ms)"])
+        for name, avg_ms in results:
+            row = self.pre_post_table.rowCount()
+            self.pre_post_table.insertRow(row)
+            from PyQt5.QtWidgets import QTableWidgetItem
+            self.pre_post_table.setItem(row, 0, QTableWidgetItem(name))
+            self.pre_post_table.setItem(row, 1, QTableWidgetItem(f"{avg_ms:.2f}"))
+
+        # Log results
+        if results:
+            self.log_message("[Pre-Post] Average times (10 runs):")
+            for name, avg_ms in results:
+                self.log_message(f"  - {name}: {avg_ms:.2f} ms")
     
     def generate_all_combinations(self, models=None):
         """Generate all possible model-to-device combinations."""

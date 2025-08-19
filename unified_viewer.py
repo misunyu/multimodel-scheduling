@@ -348,13 +348,13 @@ class UnifiedViewer(QMainWindow):
                 print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
                 process = Process(
                     target=run_yolo_npu_process,
-                    args=(frame_queue, output_queue, shutdown_event, npu_id),
+                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name),
                 )
             else:
                 print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
                 process = Process(
                     target=run_yolo_cpu_process,
-                    args=(frame_queue, output_queue, shutdown_event),
+                    args=(frame_queue, output_queue, shutdown_event, view_name),
                 )
         else:
             # ResNet model
@@ -363,13 +363,13 @@ class UnifiedViewer(QMainWindow):
                 print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
                 process = Process(
                     target=run_resnet_npu_process,
-                    args=("./imagenet-sample-images", output_queue, shutdown_event, npu_id),
+                    args=("./imagenet-sample-images", output_queue, shutdown_event, npu_id, view_name),
                 )
             else:
                 print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
                 process = Process(
                     target=run_resnet_cpu_process,
-                    args=("./imagenet-sample-images", output_queue, shutdown_event),
+                    args=("./imagenet-sample-images", output_queue, shutdown_event, view_name),
                 )
         
         setattr(self, f"{view_name}_process", process)
@@ -580,6 +580,13 @@ class UnifiedViewer(QMainWindow):
         
         # Reset idempotent stop flag for new run
         self._already_stopped = False
+
+        # Create a run_id and export to environment so child processes can log it
+        try:
+            self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            os.environ["RUN_ID"] = self.run_id
+        except Exception:
+            self.run_id = ""
         
         # Initialize and start processes if they're not already running
         if not hasattr(self, 'video_reader_proc') or not self.video_reader_proc.is_alive():
@@ -628,6 +635,14 @@ class UnifiedViewer(QMainWindow):
             self.save_throughput_data()
         except Exception as e:
             print(f"[Stop Execution] Error saving throughput data: {e}")
+
+        # After stopping, compute and insert average pre/post/load times at top when enabled
+        try:
+            record_time = int(os.environ.get("RECORD_TIME", "0"))
+            if record_time == 1:
+                self.save_pre_post_time_average()
+        except Exception as e:
+            print(f"[Stop Execution] Error saving pre/post timing averages: {e}")
             
         print("[Stop Execution] Model execution stopped, window remains open with last results")
         
@@ -828,3 +843,86 @@ class UnifiedViewer(QMainWindow):
             print("[Shutdown] Throughput data appended to result_throughput.json")
         except Exception as e:
             print(f"[Shutdown ERROR] Failed to save throughput data: {e}")
+
+    def save_pre_post_time_average(self):
+        """Compute averages for the last run_id and insert a summary line at the top of result_pre_post_time.json (JSON Lines)."""
+        try:
+            run_id = getattr(self, 'run_id', os.environ.get('RUN_ID', ''))
+            path = "result_pre_post_time.json"
+            if not os.path.exists(path):
+                print("[Timing] No timing file to summarize.")
+                return
+            # Read all lines
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if not lines:
+                print("[Timing] Timing file empty.")
+                return
+            import json as _json
+            records = []
+            for ln in lines:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    rec = _json.loads(ln)
+                    records.append(rec)
+                except Exception:
+                    continue
+            if not records:
+                print("[Timing] No valid records to summarize.")
+                return
+            # Filter for last run_id; if missing, infer last by max timestamp
+            target_run = run_id
+            if not target_run:
+                # fallback: determine the most recent run_id appearing in records by timestamp
+                # build map run_id -> latest timestamp
+                from datetime import datetime as _dt
+                latest_by_run = {}
+                for r in records:
+                    rid = r.get("run_id", "")
+                    ts = r.get("timestamp")
+                    try:
+                        tsv = _dt.strptime(ts, "%Y-%m-%d %H:%M:%S") if ts else _dt.min
+                    except Exception:
+                        tsv = _dt.min
+                    if rid not in latest_by_run or tsv > latest_by_run[rid]:
+                        latest_by_run[rid] = tsv
+                if latest_by_run:
+                    target_run = max(latest_by_run, key=lambda k: latest_by_run[k])
+                else:
+                    target_run = ""
+            run_records = [r for r in records if r.get("run_id", "") == target_run] if target_run else records
+            if not run_records:
+                print("[Timing] No records for the current run.")
+                return
+            # Compute averages
+            import math
+            def _avg(vals):
+                vals = [v for v in vals if isinstance(v, (int, float)) and not math.isnan(v)]
+                return round(sum(vals) / len(vals), 3) if vals else 0.0
+            pre_list = [r.get("preprocess_time_ms") for r in run_records if r.get("kind") == "inference"]
+            infer_list = [r.get("inference_time_ms") for r in run_records if r.get("kind") == "inference"]
+            post_list = [r.get("postprocess_time_ms") for r in run_records if r.get("kind") == "inference"]
+            load_list = [r.get("model_load_time_ms") for r in run_records if r.get("kind") == "model_load"]
+            npu_mem_load_list = [r.get("npu_memory_load_time_ms") for r in run_records if r.get("kind") == "model_load"]
+
+            summary = {
+                "type": "average_summary",
+                "run_id": target_run,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "averages": {
+                    "preprocess_time_ms": _avg(pre_list),
+                    "inference_time_ms": _avg(infer_list),
+                    "postprocess_time_ms": _avg(post_list),
+                    "model_load_time_ms": _avg(load_list),
+                    "npu_memory_load_time_ms": _avg(npu_mem_load_list),
+                }
+            }
+            # Prepend as the first line
+            new_lines = [json.dumps(summary, ensure_ascii=False) + "\n"] + lines
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+            print("[Timing] Average summary inserted at the top of result_pre_post_time.json")
+        except Exception as e:
+            print(f"[Timing ERROR] Failed to compute/save averages: {e}")
