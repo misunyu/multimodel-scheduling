@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import json
 import numpy as np
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, QTimer
@@ -529,6 +530,16 @@ class ONNXProfilerApp(QMainWindow):
             self.log_message("[Pre-Post] Average times (10 runs):")
             for name, avg_ms in results:
                 self.log_message(f"  - {name}: {avg_ms:.2f} ms")
+        
+        # Save results to static_pre_post_time.json in project root
+        try:
+            data = {name: round(float(avg_ms), 2) for name, avg_ms in results}
+            out_path = os.path.join(os.path.dirname(__file__), "static_pre_post_time.json")
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+            self.log_message(f"[Pre-Post] Saved averages to {out_path}\n")
+        except Exception as e:
+            self.log_message(f"[Warn] Failed to save static_pre_post_time.json: {e}\n")
     
     def generate_all_combinations(self, models=None):
         """Generate all possible model-to-device combinations."""
