@@ -48,6 +48,11 @@ class ViewHandler:
         self.avg_infer_time = 0.0
         self.avg_fps = 0.0
         
+        # Waiting time stats (time from enqueue to start of preprocessing)
+        self.total_wait_ms = 0.0
+        self.wait_count = 0
+        self.avg_wait_ms = 0.0
+        
         # Get the signal method for this view
         signal_method_name = f"update_{view_name}_display"
         self.update_signal = getattr(model_signals, signal_method_name)
@@ -103,8 +108,13 @@ class YoloViewHandler(ViewHandler):
             
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
-                # For YOLO models, the result queue contains (frame, infer_time)
-                frame, infer_time = self.result_queue.get(timeout=1)
+                # For YOLO models, the result queue contains (frame, infer_time[, wait_ms])
+                item = self.result_queue.get(timeout=1)
+                if isinstance(item, tuple) and len(item) == 3:
+                    frame, infer_time, wait_ms = item
+                else:
+                    frame, infer_time = item
+                    wait_ms = 0.0
             except queue.Empty:
                 continue
             except (EOFError, BrokenPipeError, OSError) as e:
@@ -121,6 +131,11 @@ class YoloViewHandler(ViewHandler):
                 if not pixmap.isNull():
                     self.update_signal.emit(pixmap)
                     self.update_stats(self.model_type, infer_time)
+                    # Update wait statistics if available
+                    if wait_ms is not None:
+                        self.total_wait_ms += float(wait_ms)
+                        self.wait_count += 1
+                        self.avg_wait_ms = self.total_wait_ms / self.wait_count if self.wait_count > 0 else 0.0
                 else:
                     print(f"[{self.view_name}] Pixmap is null")
             except Exception as e:
@@ -184,6 +199,8 @@ class VideoFeeder:
         self.view_frame_queues = view_frame_queues
         self.yolo_views = yolo_views
         self.shutdown_flag = shutdown_flag
+        # Track dropped frames per view due to full queue
+        self.drop_counts = {v: 0 for v in view_frame_queues.keys()}
         
     def start_feed_thread(self):
         """Start the thread for feeding video frames to model queues."""
@@ -217,11 +234,14 @@ class VideoFeeder:
                     if view_name in self.view_frame_queues:
                         frame_q = self.view_frame_queues[view_name]
                         try:
-                            # Use non-blocking put to avoid reliance on .full() which may be unreliable across platforms
-                            frame_q.put_nowait(frame.copy())
+                            # Use non-blocking put with enqueue timestamp
+                            frame_q.put_nowait((frame.copy(), time.time()))
                         except queue.Full:
                             # Drop frame if the queue is full
-                            pass
+                            try:
+                                self.drop_counts[view_name] += 1
+                            except Exception:
+                                pass
                         except (EOFError, BrokenPipeError, OSError):
                             # Queue might be closed during shutdown
                             pass

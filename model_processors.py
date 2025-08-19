@@ -113,11 +113,18 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
         
         while not shutdown_event.is_set():
             try:
-                frame = input_queue.get(timeout=1)
+                item = input_queue.get(timeout=1)
+                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
+                    frame, enqueue_ts = item
+                else:
+                    frame = item
+                    enqueue_ts = None
             except queue.Empty:
                 continue
                 
             pre_s = time.time()
+            # Waiting time until preprocessing begins
+            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
             input_tensor, (w, h) = yolo_preprocess_local(frame)
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
@@ -143,10 +150,11 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
                         "model": "yolov3_small",
                         "preprocess_time_ms": pre_ms,
                         "inference_time_ms": infer_time_ms,
-                        "postprocess_time_ms": post_ms
+                        "postprocess_time_ms": post_ms,
+                        "wait_to_preprocess_ms": wait_ms
                     })
                 
-                output_queue.put((result, infer_time_ms))
+                output_queue.put((result, infer_time_ms, wait_ms))
                 
             except Exception as e:
                 print(f"[YOLO CPU Process ERROR] {e}")
@@ -287,11 +295,18 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
 
         while not shutdown_event.is_set():
             try:
-                frame = input_queue.get(timeout=1)
+                item = input_queue.get(timeout=1)
+                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
+                    frame, enqueue_ts = item
+                else:
+                    frame = item
+                    enqueue_ts = None
             except queue.Empty:
                 continue
 
             pre_s = time.time()
+            # Waiting time until preprocessing begins
+            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
             input_tensor, (w, h) = yolo_preprocess_local(frame)
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
@@ -339,7 +354,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
             result_img, drawn_boxes = yolo_postprocess_npu(output, frame, w, h)
             post_e = time.time()
             post_ms = (post_e - post_s) * 1000.0
-
+            
             infer_time_ms = (infer_end - infer_start) * 1000.0
             if record_time == 1 and drawn_boxes:
                 _append_timing_record({
@@ -350,11 +365,12 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
                     "model": "yolov3_small",
                     "preprocess_time_ms": pre_ms,
                     "inference_time_ms": infer_time_ms,
-                    "postprocess_time_ms": post_ms
+                    "postprocess_time_ms": post_ms,
+                    "wait_to_preprocess_ms": wait_ms
                 })
-
+            
             if drawn_boxes:
-                output_queue.put((result_img, infer_time_ms))
+                output_queue.put((result_img, infer_time_ms, wait_ms))
 
     except Exception as e:
         print(f"[YOLO NPU Process ERROR] {e}")

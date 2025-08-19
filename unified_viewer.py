@@ -766,12 +766,21 @@ class UnifiedViewer(QMainWindow):
             # Determine which views are actually scheduled in this combination
             scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
 
-            # Map helpers for per-view stats
+            # Map helpers for per-view stats, including avg_wait_ms (if available) and dropped frames
+            view1_wait = getattr(self.view1_handler, 'avg_wait_ms', 0.0)
+            view2_wait = getattr(self.view2_handler, 'avg_wait_ms', 0.0)
+            view3_wait = getattr(self.view3_handler, 'avg_wait_ms', 0.0)
+            view4_wait = getattr(self.view4_handler, 'avg_wait_ms', 0.0)
+
+            # Drop counts from feeder (0 if not present)
+            drop_counts = getattr(self, 'video_feeder', None)
+            drop_map = getattr(drop_counts, 'drop_counts', {}) if drop_counts else {}
+
             per_view_stats = {
-                "view1": (view1_avg_fps, view1_avg_infer_time, view1_infer_count, view1_model, view1_mode),
-                "view2": (view2_avg_fps, view2_avg_infer_time, view2_infer_count, view2_model, view2_mode),
-                "view3": (view3_avg_fps, view3_avg_infer_time, view3_infer_count, view3_model, view3_mode),
-                "view4": (view4_avg_fps, view4_avg_infer_time, view4_infer_count, view4_model, view4_mode),
+                "view1": (view1_avg_fps, view1_avg_infer_time, view1_infer_count, view1_model, view1_mode, view1_wait, int(drop_map.get("view1", 0))),
+                "view2": (view2_avg_fps, view2_avg_infer_time, view2_infer_count, view2_model, view2_mode, view2_wait, int(drop_map.get("view2", 0))),
+                "view3": (view3_avg_fps, view3_avg_infer_time, view3_infer_count, view3_model, view3_mode, view3_wait, int(drop_map.get("view3", 0))),
+                "view4": (view4_avg_fps, view4_avg_infer_time, view4_infer_count, view4_model, view4_mode, view4_wait, int(drop_map.get("view4", 0))),
             }
 
             # Calculate total throughput for scheduled views
@@ -792,13 +801,15 @@ class UnifiedViewer(QMainWindow):
             
             # Add all scheduled views to the models dictionary (include zeros if no inferences)
             for v in scheduled_views:
-                avg_fps, avg_time, infer_cnt, model_name, exec_mode = per_view_stats[v]
+                avg_fps, avg_time, infer_cnt, model_name, exec_mode, avg_wait_ms, dropped = per_view_stats[v]
                 throughput_data["models"][v] = {
                     "model": model_name,
                     "execution": exec_mode,
                     "throughput_fps": round(avg_fps, 2),
                     "avg_inference_time_ms": round(avg_time, 2),
-                    "inference_count": int(infer_cnt)
+                    "inference_count": int(infer_cnt),
+                    "avg_wait_to_preprocess_ms": round(avg_wait_ms or 0.0, 2),
+                    "dropped_frames_due_to_full_queue": int(dropped or 0)
                 }
             
             # Determine if the current combination is the first schedule in the YAML
