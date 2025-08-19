@@ -57,7 +57,7 @@ class InfoWindow(QWidget):
             pass
         
         # Default execution duration is 60 seconds
-        self.duration_edit.setText("6")
+        self.duration_edit.setText("60")
         
     def on_start_button_clicked(self):
         """Handle the start button click event."""
