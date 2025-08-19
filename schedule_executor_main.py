@@ -27,7 +27,7 @@ def main():
     parser.add_argument('--schedule', '-s', type=str, default='model_schedules.yaml',
                         help='Path to the model scheduling information file (default: model_schedules.yaml)')
     parser.add_argument('--duration', '-d', type=int, default=6,
-                        help='Execution duration per schedule in seconds (default: 6)')
+                        help='Execution duration per schedule in seconds (default: 60)')
     args = parser.parse_args()
 
     # Remove existing result_throughput.json before execution if exists
