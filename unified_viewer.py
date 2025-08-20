@@ -13,7 +13,7 @@ from multiprocessing import Process, Queue, Event
 
 # Import local modules
 from utils import get_cpu_metrics
-from view_handlers import ModelSignals, YoloViewHandler, ResNetViewHandler, VideoFeeder
+from view_handlers import ModelSignals, YoloViewHandler, ResNetViewHandler, VideoFeeder, ResnetImageFeeder
 from model_processors import (
     video_reader_process,
     run_yolo_cpu_process,
@@ -309,6 +309,8 @@ class UnifiedViewer(QMainWindow):
         
         # Initialize a dictionary to track which views are running YOLO models (need video frames)
         self.yolo_views = set()
+        # Track ResNet views that need image feeder at 10 Hz
+        self.resnet_views = set()
     
     def initialize_processes(self):
         """Initialize and start model processes."""
@@ -358,18 +360,19 @@ class UnifiedViewer(QMainWindow):
                 )
         else:
             # ResNet model
+            self.resnet_views.add(view_name)
             if execution == "npu0" or execution == "npu1":
                 npu_id = 0 if execution == "npu0" else 1
                 print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
                 process = Process(
                     target=run_resnet_npu_process,
-                    args=("./imagenet-sample-images", output_queue, shutdown_event, npu_id, view_name),
+                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name),
                 )
             else:
                 print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
                 process = Process(
                     target=run_resnet_cpu_process,
-                    args=("./imagenet-sample-images", output_queue, shutdown_event, view_name),
+                    args=(frame_queue, output_queue, shutdown_event, view_name),
                 )
         
         setattr(self, f"{view_name}_process", process)
@@ -385,7 +388,7 @@ class UnifiedViewer(QMainWindow):
             "view4": self.view4_frame_queue
         }
         
-        # Start video feeder thread
+        # Start video feeder thread (for YOLO models)
         self.video_feeder = VideoFeeder(
             self.video_frame_queue,
             view_frame_queues,
@@ -393,6 +396,16 @@ class UnifiedViewer(QMainWindow):
             self.shutdown_flag
         )
         self.video_feeder.start_feed_thread()
+
+        # Start ResNet image feeder at 10 Hz for ResNet views
+        self.resnet_feeder = ResnetImageFeeder(
+            image_dir="./imagenet-sample-images",
+            view_frame_queues=view_frame_queues,
+            resnet_views=self.resnet_views,
+            shutdown_flag=self.shutdown_flag,
+            interval_sec=0.1
+        )
+        self.resnet_feeder.start_feed_thread()
         
         # Start view handler threads
         self.initialize_view_handlers()

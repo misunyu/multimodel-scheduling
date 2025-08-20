@@ -163,7 +163,7 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
     except Exception as e:
         print(f"[YOLO CPU Process ERROR] {e}")
 
-def run_resnet_cpu_process(image_dir, output_queue, shutdown_event, view_name=None):
+def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=None):
     """
     Process for running ResNet model on CPU.
     
@@ -189,26 +189,20 @@ def run_resnet_cpu_process(image_dir, output_queue, shutdown_event, view_name=No
                 "model": "resnet50_small",
                 "model_load_time_ms": load_time_ms
             })
-        
-        # Get list of image files
-        image_files = [os.path.join(image_dir, f)
-                      for f in os.listdir(image_dir)
-                      if f.lower().endswith(('jpg', 'jpeg', 'png'))]
-        if not image_files:
-            print("[ResNet CPU] No images found")
-            return
-            
-        index = 0
         while not shutdown_event.is_set():
-            if index >= len(image_files):
-                index = 0
-                
-            img = cv2.imread(image_files[index])
-            index += 1
-            if img is None:
+            try:
+                item = input_queue.get(timeout=1)
+                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
+                    img, enqueue_ts = item
+                else:
+                    img = item
+                    enqueue_ts = None
+            except queue.Empty:
                 continue
-                
+
             pre_s = time.time()
+            # Waiting time until preprocessing begins (for parity with YOLO)
+            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
             input_tensor = resnet50_preprocess_local(img)
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
@@ -236,7 +230,8 @@ def run_resnet_cpu_process(image_dir, output_queue, shutdown_event, view_name=No
                         "model": "resnet50_small",
                         "preprocess_time_ms": pre_ms,
                         "inference_time_ms": infer_time_ms,
-                        "postprocess_time_ms": post_ms
+                        "postprocess_time_ms": post_ms,
+                        "wait_to_preprocess_ms": wait_ms
                     })
                 
                 output_queue.put((img, class_name, infer_time_ms))
@@ -382,7 +377,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
         except:
             pass
 
-def run_resnet_npu_process(image_dir, output_queue, shutdown_event, npu_id=1, view_name=None):
+def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, view_name=None):
     """
     Process for running ResNet model on NPU.
     
@@ -402,14 +397,6 @@ def run_resnet_npu_process(image_dir, output_queue, shutdown_event, npu_id=1, vi
             resnet50_prepare_onnx_model,
             resnet50_preprocess
         )
-        
-        image_files = [os.path.join(image_dir, f)
-                      for f in os.listdir(image_dir)
-                      if f.lower().endswith(('jpg', 'jpeg', 'png'))]
-        if not image_files:
-            print("[ResNet NPU] No images found")
-            return
-
         host_load_s = time.time()
         front_sess, back_sess, params = resnet50_prepare_onnx_model(
             "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
@@ -440,17 +427,20 @@ def run_resnet_npu_process(image_dir, output_queue, shutdown_event, npu_id=1, vi
                 "npu_memory_load_time_ms": npu_memory_load_time_ms
             })
 
-        index = 0
         while not shutdown_event.is_set():
-            if index >= len(image_files):
-                index = 0
-
-            img = cv2.imread(image_files[index])
-            index += 1
-            if img is None:
+            try:
+                item = input_queue.get(timeout=1)
+                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
+                    img, enqueue_ts = item
+                else:
+                    img = item
+                    enqueue_ts = None
+            except queue.Empty:
                 continue
 
             pre_s = time.time()
+            # Waiting time until preprocessing begins
+            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
             input_data = front_sess.run(None, {"input": resnet50_preprocess(img)})[0].tobytes()
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
@@ -488,7 +478,8 @@ def run_resnet_npu_process(image_dir, output_queue, shutdown_event, npu_id=1, vi
                     "model": "resnet50_small",
                     "preprocess_time_ms": pre_ms,
                     "inference_time_ms": infer_ms,
-                    "postprocess_time_ms": post_ms
+                    "postprocess_time_ms": post_ms,
+                    "wait_to_preprocess_ms": wait_ms
                 })
 
             output_queue.put((img, class_name, infer_ms))

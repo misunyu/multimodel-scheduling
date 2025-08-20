@@ -253,3 +253,80 @@ class VideoFeeder:
                 print(f"[feed_queues ERROR] {e}")
                 if self.shutdown_flag.is_set() or global_exit_flag:
                     break
+
+class ResnetImageFeeder:
+    """Class for feeding image samples to ResNet model input queues at a fixed interval."""
+
+    def __init__(self, image_dir, view_frame_queues, resnet_views, shutdown_flag, interval_sec=0.1):
+        """
+        Args:
+            image_dir: Directory of sample images to cycle through
+            view_frame_queues: Dict view_name -> frame_queue
+            resnet_views: Set of view_names that are running ResNet
+            shutdown_flag: Event/flag to stop feeding
+            interval_sec: Interval between enqueues per view (default 0.1s)
+        """
+        self.image_dir = image_dir
+        self.view_frame_queues = view_frame_queues
+        self.resnet_views = resnet_views
+        self.shutdown_flag = shutdown_flag
+        self.interval_sec = max(0.0, float(interval_sec) if interval_sec else 0.1)
+        self._images = []
+        self._index_map = {}
+        try:
+            import os
+            self._images = [os.path.join(image_dir, f) for f in os.listdir(image_dir)
+                            if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+        except Exception as e:
+            print(f"[ResnetImageFeeder] Failed to list images in {image_dir}: {e}")
+            self._images = []
+        if not self._images:
+            print("[ResnetImageFeeder] No images found. Feeder will be idle.")
+
+    def start_feed_thread(self):
+        thread = threading.Thread(target=self.feed_queues, daemon=True)
+        thread.start()
+        return thread
+
+    def _next_image(self, view_name):
+        if not self._images:
+            return None
+        idx = self._index_map.get(view_name, 0)
+        if idx >= len(self._images):
+            idx = 0
+        path = self._images[idx]
+        self._index_map[view_name] = idx + 1
+        try:
+            import cv2
+            img = cv2.imread(path)
+            return img
+        except Exception as e:
+            print(f"[ResnetImageFeeder] Failed to read image {path}: {e}")
+            return None
+
+    def feed_queues(self):
+        global_exit_flag = False
+        last_time = 0.0
+        while not self.shutdown_flag.is_set() and not global_exit_flag:
+            start = time.time()
+            try:
+                for view_name in list(self.resnet_views):
+                    q = self.view_frame_queues.get(view_name)
+                    if q is None:
+                        continue
+                    img = self._next_image(view_name)
+                    if img is None:
+                        continue
+                    try:
+                        q.put_nowait((img, time.time()))
+                    except queue.Full:
+                        pass
+                    except (EOFError, BrokenPipeError, OSError):
+                        pass
+            except Exception as e:
+                print(f"[ResnetImageFeeder ERROR] {e}")
+            # Sleep to maintain approximately interval_sec between batches per view
+            elapsed = time.time() - start
+            to_sleep = self.interval_sec - elapsed
+            if to_sleep > 0:
+                time.sleep(to_sleep)
