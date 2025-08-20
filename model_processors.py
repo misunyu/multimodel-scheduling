@@ -20,29 +20,8 @@ from image_processing import (
     yolo_postprocess_npu
 )
 
-# Timing control via environment variable
-record_time = int(os.environ.get("RECORD_TIME", "0"))
-run_id = os.environ.get("RUN_ID", "")
-
-RESULT_TIME_FILE = "result_pre_post_time.json"
-
-
-def _append_timing_record(record: dict):
-    """
-    Append a single timing record as a JSON line to RESULT_TIME_FILE.
-    Using JSON Lines format to avoid concurrency issues with multiple processes.
-    """
-    try:
-        record = dict(record)
-        record.setdefault("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        if run_id:
-            record.setdefault("run_id", run_id)
-        # Ensure directory exists if path includes subdir (here it's root, so usually not needed)
-        with open(RESULT_TIME_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception as e:
-        # Do not crash pipeline on logging failure
-        print(f"[Timing LOGGING ERROR] {e}")
+# Modularized timing/logging utilities (moved to dedicated module)
+from timing_utils import should_record_time, log_model_load, log_inference
 
 # Load ImageNet class labels
 with open("imagenet_classes.txt", "r") as f:
@@ -101,15 +80,14 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
         load_time_ms = (load_end - load_start) * 1000.0
         print(f"[YOLO CPU] Model loaded successfully")
 
-        if record_time == 1:
-            _append_timing_record({
-                "kind": "model_load",
-                "pipeline": "yolo",
-                "device": "CPU",
-                "view": view_name,
-                "model": "yolov3_small",
-                "model_load_time_ms": load_time_ms
-            })
+        # Log model load
+        log_model_load(
+            pipeline="yolo",
+            device="CPU",
+            view=view_name,
+            model="yolov3_small",
+            model_load_time_ms=load_time_ms,
+        )
         
         while not shutdown_event.is_set():
             try:
@@ -141,18 +119,17 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
                 post_e = time.time()
                 post_ms = (post_e - post_s) * 1000.0
 
-                if record_time == 1:
-                    _append_timing_record({
-                        "kind": "inference",
-                        "pipeline": "yolo",
-                        "device": "CPU",
-                        "view": view_name,
-                        "model": "yolov3_small",
-                        "preprocess_time_ms": pre_ms,
-                        "inference_time_ms": infer_time_ms,
-                        "postprocess_time_ms": post_ms,
-                        "wait_to_preprocess_ms": wait_ms
-                    })
+                # Log per-frame inference timing
+                log_inference(
+                    pipeline="yolo",
+                    device="CPU",
+                    view=view_name,
+                    model="yolov3_small",
+                    preprocess_time_ms=pre_ms,
+                    inference_time_ms=infer_time_ms,
+                    postprocess_time_ms=post_ms,
+                    wait_to_preprocess_ms=wait_ms,
+                )
                 
                 output_queue.put((result, infer_time_ms, wait_ms))
                 
@@ -180,15 +157,14 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
         load_end = time.time()
         load_time_ms = (load_end - load_start) * 1000.0
 
-        if record_time == 1:
-            _append_timing_record({
-                "kind": "model_load",
-                "pipeline": "resnet50",
-                "device": "CPU",
-                "view": view_name,
-                "model": "resnet50_small",
-                "model_load_time_ms": load_time_ms
-            })
+        # Log model load
+        log_model_load(
+            pipeline="resnet50",
+            device="CPU",
+            view=view_name,
+            model="resnet50_small",
+            model_load_time_ms=load_time_ms,
+        )
         while not shutdown_event.is_set():
             try:
                 item = input_queue.get(timeout=1)
@@ -221,18 +197,17 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
                 post_e = time.time()
                 post_ms = (post_e - post_s) * 1000.0
 
-                if record_time == 1:
-                    _append_timing_record({
-                        "kind": "inference",
-                        "pipeline": "resnet50",
-                        "device": "CPU",
-                        "view": view_name,
-                        "model": "resnet50_small",
-                        "preprocess_time_ms": pre_ms,
-                        "inference_time_ms": infer_time_ms,
-                        "postprocess_time_ms": post_ms,
-                        "wait_to_preprocess_ms": wait_ms
-                    })
+                # Log per-frame inference timing
+                log_inference(
+                    pipeline="resnet50",
+                    device="CPU",
+                    view=view_name,
+                    model="resnet50_small",
+                    preprocess_time_ms=pre_ms,
+                    inference_time_ms=infer_time_ms,
+                    postprocess_time_ms=post_ms,
+                    wait_to_preprocess_ms=wait_ms,
+                )
                 
                 output_queue.put((img, class_name, infer_time_ms))
                 
@@ -284,16 +259,15 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
             print(f"[YOLO NPU INIT ERROR] NPU driver initialization failed: {e}")
             raise
 
-        if record_time == 1:
-            _append_timing_record({
-                "kind": "model_load",
-                "pipeline": "yolo",
-                "device": f"NPU{npu_id}",
-                "view": view_name,
-                "model": "yolov3_small",
-                "model_load_time_ms": host_model_load_ms,
-                "npu_memory_load_time_ms": npu_memory_load_time_ms
-            })
+        # Log model load (host + NPU memory)
+        log_model_load(
+            pipeline="yolo",
+            device=f"NPU{npu_id}",
+            view=view_name,
+            model="yolov3_small",
+            model_load_time_ms=host_model_load_ms,
+            npu_memory_load_time_ms=npu_memory_load_time_ms,
+        )
 
         frame_delay = 1.0 / 30.0
 
@@ -370,20 +344,18 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
             post_ms = (post_e - post_s) * 1000.0
             
             infer_time_ms = (infer_end - infer_start) * 1000.0
-            if record_time == 1 and drawn_boxes:
-                _append_timing_record({
-                    "kind": "inference",
-                    "pipeline": "yolo",
-                    "device": f"NPU{npu_id}",
-                    "view": view_name,
-                    "model": "yolov3_small",
-                    "preprocess_time_ms": pre_ms,
-                    "inference_time_ms": infer_time_ms,
-                    "postprocess_time_ms": post_ms,
-                    "wait_to_preprocess_ms": wait_ms
-                })
-            
             if drawn_boxes:
+                # Log per-frame inference timing only when we have valid detections
+                log_inference(
+                    pipeline="yolo",
+                    device=f"NPU{npu_id}",
+                    view=view_name,
+                    model="yolov3_small",
+                    preprocess_time_ms=pre_ms,
+                    inference_time_ms=infer_time_ms,
+                    postprocess_time_ms=post_ms,
+                    wait_to_preprocess_ms=wait_ms,
+                )
                 output_queue.put((result_img, infer_time_ms, wait_ms))
 
     except Exception as e:
@@ -444,16 +416,15 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
             print(f"[ResNet NPU INIT ERROR] NPU driver initialization failed: {e}")
             raise
 
-        if record_time == 1:
-            _append_timing_record({
-                "kind": "model_load",
-                "pipeline": "resnet50",
-                "device": f"NPU{npu_id}",
-                "view": view_name,
-                "model": "resnet50_small",
-                "model_load_time_ms": host_model_load_ms,
-                "npu_memory_load_time_ms": npu_memory_load_time_ms
-            })
+        # Log model load (host + NPU memory)
+        log_model_load(
+            pipeline="resnet50",
+            device=f"NPU{npu_id}",
+            view=view_name,
+            model="resnet50_small",
+            model_load_time_ms=host_model_load_ms,
+            npu_memory_load_time_ms=npu_memory_load_time_ms,
+        )
 
         while not shutdown_event.is_set():
             try:
@@ -503,18 +474,17 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
             post_ms = (post_e - post_s) * 1000.0
 
             infer_ms = (infer_end - infer_start) * 1000.0
-            if record_time == 1:
-                _append_timing_record({
-                    "kind": "inference",
-                    "pipeline": "resnet50",
-                    "device": f"NPU{npu_id}",
-                    "view": view_name,
-                    "model": "resnet50_small",
-                    "preprocess_time_ms": pre_ms,
-                    "inference_time_ms": infer_ms,
-                    "postprocess_time_ms": post_ms,
-                    "wait_to_preprocess_ms": wait_ms
-                })
+            # Log per-frame inference timing
+            log_inference(
+                pipeline="resnet50",
+                device=f"NPU{npu_id}",
+                view=view_name,
+                model="resnet50_small",
+                preprocess_time_ms=pre_ms,
+                inference_time_ms=infer_ms,
+                postprocess_time_ms=post_ms,
+                wait_to_preprocess_ms=wait_ms,
+            )
 
             output_queue.put((img, class_name, infer_ms))
 
