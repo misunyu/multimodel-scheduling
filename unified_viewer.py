@@ -335,6 +335,11 @@ class UnifiedViewer(QMainWindow):
         Args:
             view_name: Name of the view (view1, view2, etc.)
         """
+        # If no model is assigned for this view, do not start any process
+        if hasattr(self, 'views_without_model') and view_name in self.views_without_model:
+            print(f"[UnifiedViewer] Skipping process start for {view_name}: no model assigned")
+            return
+        
         model = self.model_settings.get(view_name, {}).get("model", "")
         execution = self.model_settings.get(view_name, {}).get("execution", "cpu")
         
