@@ -408,7 +408,7 @@ class UnifiedViewer(QMainWindow):
             view_frame_queues=view_frame_queues,
             resnet_views=self.resnet_views,
             shutdown_flag=self.shutdown_flag,
-            interval_sec=0.1
+            interval_sec=0.5
         )
         self.resnet_feeder.start_feed_thread()
         
@@ -636,10 +636,19 @@ class UnifiedViewer(QMainWindow):
             if event:
                 event.set()
                 
-        # Terminate all processes
+        # Gracefully stop all processes first, then force terminate if needed
         process_names = ['view1_process', 'view2_process', 'view3_process', 'view4_process', 'video_reader_proc']
         processes = [getattr(self, name, None) for name in process_names if hasattr(self, name) and getattr(self, name, None)]
         
+        # Give processes time to exit their loops and run cleanup (e.g., NPU driver close in finally)
+        for p in processes:
+            if p and p.is_alive():
+                try:
+                    p.join(timeout=3.0)
+                except Exception as e:
+                    print(f"[Stop Execution] Process join error: {e}")
+        
+        # Force terminate any stubborn processes that didn't exit
         for p in processes:
             if p and p.is_alive():
                 try:

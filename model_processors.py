@@ -263,17 +263,26 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
             yolo_prepare_onnx_model
         )
         
-        host_load_s = time.time()
-        front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
-            "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
-        )
-        host_load_e = time.time()
-        host_model_load_ms = (host_load_e - host_load_s) * 1000.0
+        driver = None
+        try:
+            host_load_s = time.time()
+            front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
+                "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+            )
+            host_load_e = time.time()
+            host_model_load_ms = (host_load_e - host_load_s) * 1000.0
+        except Exception as e:
+            print(f"[YOLO NPU INIT ERROR] npu_id = {npu_id}, Host model preparation failed: {e}")
+            raise
 
-        npu_load_s = time.time()
-        driver = initialize_driver(npu_id, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
-        npu_load_e = time.time()
-        npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
+        try:
+            npu_load_s = time.time()
+            driver = initialize_driver(npu_id, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+            npu_load_e = time.time()
+            npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
+        except Exception as e:
+            print(f"[YOLO NPU INIT ERROR] NPU driver initialization failed: {e}")
+            raise
 
         if record_time == 1:
             _append_timing_record({
@@ -308,12 +317,23 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
             infer_start = time.time()
 
             try:
+                # Host front inference
                 front_output = front_sess.run(None, {"input": input_tensor})[0]
                 input_data = front_output.tobytes()
+            except Exception as e:
+                print(f"[YOLO NPU INFERENCE ERROR] Front session failed: {e}")
+                continue
 
+            try:
+                # Data transfer to/from NPU
                 raw_outputs = send_receive_data_npu(driver, input_data, 3 * 608 * 608)
                 output_data = [np.frombuffer(buf, dtype=np.uint8) for buf in raw_outputs]
+            except Exception as e:
+                print(f"[YOLO NPU DATA TRANSFER ERROR] send/receive failed: {e}")
+                continue
 
+            try:
+                # Dequantization and back session
                 output_dequant_data = [
                     (data.astype(np.float32) - zero_point[name]) * scale[name]
                     for name, data in zip(
@@ -334,14 +354,13 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
                 for name, data in zip(shape_dict.keys(), output_dequant_data):
                     needed_size = np.prod(shape_dict[name])
                     if data.size < needed_size:
-                        print(f"[YOLO NPU ERROR] insufficient data for {name}, expected {needed_size}, got {data.size}")
+                        print(f"[YOLO NPU BACKEND ERROR] insufficient data for {name}, expected {needed_size}, got {data.size}")
                         raise ValueError("Invalid data size")
                     back_feeds[name] = data[:needed_size].reshape(shape_dict[name])
 
                 output = back_sess.run(None, back_feeds)
-
             except Exception as e:
-                print(f"[YOLO NPU ERROR] {e}")
+                print(f"[YOLO NPU BACKEND ERROR] {e}")
                 continue
 
             infer_end = time.time()
@@ -397,12 +416,17 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
             resnet50_prepare_onnx_model,
             resnet50_preprocess
         )
-        host_load_s = time.time()
-        front_sess, back_sess, params = resnet50_prepare_onnx_model(
-            "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
-        )
-        host_load_e = time.time()
-        host_model_load_ms = (host_load_e - host_load_s) * 1000.0
+        driver = None
+        try:
+            host_load_s = time.time()
+            front_sess, back_sess, params = resnet50_prepare_onnx_model(
+                "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
+            )
+            host_load_e = time.time()
+            host_model_load_ms = (host_load_e - host_load_s) * 1000.0
+        except Exception as e:
+            print(f"[ResNet NPU INIT ERROR] Host model preparation failed: {e}")
+            raise
 
         scale = params['/0/avgpool/GlobalAveragePool_output_0_scale'] * params['0.fc.weight_scale']
         zp_act = params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
@@ -411,10 +435,14 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
         zp_out = params['/0/fc/Gemm_output_0_zero_point']
         weight_q = params['0.fc.weight_quantized'].T.astype(np.int32)
 
-        npu_load_s = time.time()
-        driver = initialize_driver(npu_id, "./models/resnet50_small/npu_code/resnet50_small_neubla_p1.o")
-        npu_load_e = time.time()
-        npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
+        try:
+            npu_load_s = time.time()
+            driver = initialize_driver(npu_id, "./models/resnet50_small/npu_code/resnet50_small_neubla_p1.o")
+            npu_load_e = time.time()
+            npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
+        except Exception as e:
+            print(f"[ResNet NPU INIT ERROR] NPU driver initialization failed: {e}")
+            raise
 
         if record_time == 1:
             _append_timing_record({
@@ -445,14 +473,20 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
             infer_start = time.time()
-            raw_outputs = send_receive_data_npu(driver, input_data, 3 * 224 * 224)
-            output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
+            try:
+                raw_outputs = send_receive_data_npu(driver, input_data, 3 * 224 * 224)
+                output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
+            except Exception as e:
+                print(f"[ResNet NPU DATA TRANSFER ERROR] send/receive failed: {e}")
+                # Skip this frame and continue
+                continue
 
             try:
                 back_output = back_sess.run(None, {"input": output_data.reshape(1, -1)})
                 output = back_output[0]
                 max_index = int(np.argmax(output))
             except Exception as e:
+                # Fallback to manual computation if back session fails
                 output = np.matmul(output_data.astype(np.int32), weight_q)
                 output -= zp_act * np.sum(weight_q, axis=0)
                 output -= zp_w * np.sum(output_data, axis=0)

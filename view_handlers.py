@@ -257,7 +257,7 @@ class VideoFeeder:
 class ResnetImageFeeder:
     """Class for feeding image samples to ResNet model input queues at a fixed interval."""
 
-    def __init__(self, image_dir, view_frame_queues, resnet_views, shutdown_flag, interval_sec=0.1):
+    def __init__(self, image_dir, view_frame_queues, resnet_views, shutdown_flag, interval_sec=0.5):
         """
         Args:
             image_dir: Directory of sample images to cycle through
