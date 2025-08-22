@@ -296,6 +296,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--save-dets", action="store_true", help="Save detection JSON for COCO eval")
     parser.add_argument("--device", type=str, choices=["cpu", "npu", "both"], default="cpu", help="Device to run inference on: cpu, npu, or both (sequential)")
     parser.add_argument("--npu-id", type=int, default=0, help="NPU device ID (default: 0)")
+    parser.add_argument("--npu-onnx", type=str, default=None, help="Path to combined quantized YOLOv3 ONNX for NPU (no partitions). If not provided, a default path is used.")
 
     args = parser.parse_args(argv)
 
@@ -468,8 +469,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             host_t0 = time.time()
             try:
+                npu_onnx_path = args.npu_onnx or "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+                write_log_line(log_npu, f"[INFO] Using NPU ONNX: {npu_onnx_path}")
                 front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
-                    "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+                    npu_onnx_path
                 )
                 input_w, input_h = 608, 608
             except Exception as e:
@@ -669,8 +672,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             write_log_line(log_npu, "[INFO] NPU evaluation finished.")
             return results_summary
 
-        cpu_summary = run_cpu_eval()
         npu_summary = run_npu_eval()
+        cpu_summary = run_cpu_eval()
         combined = {"timestamp": run_ts, "cpu": cpu_summary, "npu": npu_summary}
         combined_path = os.path.join(args.results_dir, f"yolov3_coco_combined_{run_ts}.json")
         with open(combined_path, "w", encoding="utf-8") as f:
@@ -766,9 +769,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Prepare NPU host/back sessions and driver
         host_t0 = time.time()
         try:
-            # NOTE: paths align with model_processors.py expectation
+            # NOTE: allow overriding the NPU ONNX path to avoid any partitions usage
+            npu_onnx_path = args.npu_onnx or "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+            write_log_line(log_path, f"[INFO] Using NPU ONNX: {npu_onnx_path}")
             front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
-                "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+                npu_onnx_path
             )
             input_w, input_h = 608, 608
         except Exception as e:

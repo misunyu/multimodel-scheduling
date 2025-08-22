@@ -347,8 +347,6 @@ def discover_npu_models(models_root: str) -> List[Tuple[str, str, Optional[str]]
 
 def run_resnet_inference_npu(
     npu_o_path: str,
-    front_onnx_path: Optional[str],
-    back_onnx_path: Optional[str],
     batch_inputs_raw: List[Tuple[str, np.ndarray]],
     gt_lookup: Optional[Dict[str, int]] = None,
     classes: Optional[List[str]] = None,
@@ -356,39 +354,29 @@ def run_resnet_inference_npu(
     npu_id: int = 1,
 ) -> Tuple[Dict[str, int], float, Optional[Dict[str, List[int]]]]:
     """
-    Run ResNet using the project's NPU pipeline with the same images as CPU.
-    Uses front partition to quantize, sends to NPU binary, then back partition to compute logits.
-    Falls back to naive argmax over raw NPU output if back partition execution fails.
-    Returns (pred_by_filename, elapsed_seconds, top5_indices_by_filename or None)
+    Run ResNet50 on NPU exactly like run_resnet_npu_process in model_processors.py.
+    Do NOT use partitions/*.onnx. Instead, use npu.resnet50_prepare_onnx_model to get front_sess
+    and quantization params, and perform the manual FC fallback when needed.
+    Returns (pred_by_filename, elapsed_seconds, top5_indices_by_filename)
     """
     if npu_mod is None:
         raise RuntimeError("npu module not available; cannot run NPU evaluation")
 
-    # Resolve front/back ONNX partitions for ResNet50 small
-    models_root = os.path.join(REPO_ROOT, "models", "resnet50_small", "partitions")
-    if front_onnx_path is None:
-        front_onnx_path = os.path.join(models_root, "resnet50_small_neubla_p0.onnx")
-    if back_onnx_path is None:
-        back_onnx_path = os.path.join(models_root, "resnet50_small_neubla_p2.onnx")
-
-    if not os.path.exists(front_onnx_path):
-        raise FileNotFoundError(f"Front partition not found: {front_onnx_path}")
-    if not os.path.exists(npu_o_path):
-        raise FileNotFoundError(f"NPU binary not found: {npu_o_path}")
-
-    # Prepare sessions
-    front_sess = ort.InferenceSession(front_onnx_path)
-    back_sess = None
-    back_input_name = None
-    back_output_name = None
+    # Prepare host (front) session and params like run_resnet_npu_process
     try:
-        if os.path.exists(back_onnx_path):
-            back_sess = ort.InferenceSession(back_onnx_path)
-            back_input_name = back_sess.get_inputs()[0].name
-            back_output_name = back_sess.get_outputs()[0].name
+        front_sess, back_sess, params = npu_mod.resnet50_prepare_onnx_model(
+            "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
+        )
     except Exception as e:
-        print(f"[WARN] Failed to prepare back-end session: {e}")
-        back_sess = None
+        raise RuntimeError(f"Host model preparation failed: {e}")
+
+    # Extract quantization parameters
+    scale = params['/0/avgpool/GlobalAveragePool_output_0_scale'] * params['0.fc.weight_scale']
+    zp_act = params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
+    zp_w = params['0.fc.weight_zero_point']
+    scale_out = params['/0/fc/Gemm_output_0_scale']
+    zp_out = params['/0/fc/Gemm_output_0_zero_point']
+    weight_q = params['0.fc.weight_quantized'].T.astype(np.int32)
 
     # Initialize NPU driver
     driver = None
@@ -403,27 +391,33 @@ def run_resnet_inference_npu(
         correct_so_far_top5 = 0
 
         for i, (fname, img_bgr) in enumerate(batch_inputs_raw, start=1):
-            # Preprocess through front partition (quantization)
+            # Preprocess and run front onnx (quantization)
             pre_inp = npu_mod.resnet50_preprocess(img_bgr)
-            front_out = front_sess.run(None, {front_sess.get_inputs()[0].name: pre_inp})[0]
+            front_out = front_sess.run(None, {"input": pre_inp})[0]
             input_bytes = front_out.tobytes()
 
             # Send to NPU and receive intermediate
             raw_outputs = npu_mod.send_receive_data_npu(driver, input_bytes, 3 * 224 * 224)
-            inter_u8 = np.frombuffer(raw_outputs[0], dtype=np.uint8)
+            output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
 
-            # Back-end to logits
+            # Try back_sess first (if available), else manual FC computation
             try:
-                if back_sess is not None and back_input_name is not None:
-                    logits = back_sess.run([back_output_name], {back_input_name: inter_u8.reshape(1, -1)})[0]
-                    logits_arr = logits[0] if logits.ndim == 2 else logits
+                if back_sess is not None:
+                    back_output = back_sess.run(None, {"input": output_data.reshape(1, -1)})
+                    logits_arr = back_output[0]
                 else:
-                    # Fallback: cast to float for argmax consistency
-                    logits_arr = inter_u8.astype(np.float32)
-            except Exception as e:
-                print(f"[WARN] Back-end run failed for {fname}: {e}; falling back to raw argmax")
-                logits_arr = inter_u8.astype(np.float32)
+                    raise RuntimeError("Back session not available")
+            except Exception:
+                # Manual quantized FC as in run_resnet_npu_process
+                out = np.matmul(output_data.astype(np.int32), weight_q)
+                out -= zp_act * np.sum(weight_q, axis=0)
+                out -= zp_w * np.sum(output_data, axis=0)
+                out += zp_act * zp_w
+                out = np.round(out * scale / scale_out) + zp_out
+                # For argmax and top-5, cast to uint8-like range consistent with code
+                logits_arr = out.astype(np.uint8)
 
+            # Compute prediction and top-5
             pred_idx = int(np.argmax(logits_arr))
             top5_idx = np.argsort(logits_arr)[-5:][::-1].astype(int).tolist()
             preds[fname] = pred_idx
@@ -468,7 +462,7 @@ def run_resnet_inference_npu(
 
 
 def main():
-    # Prepare log file path
+    # Prepare log file path for CPU part (kept for compatibility)
     log_filename = f"eval_resnet50_imagenet_cpu_{RUN_TS}.log"
     log_path = os.path.join(DEFAULT_LOG_DIR, log_filename)
     write_log_line(log_path, f"[START] ResNet50 ImageNet evaluation @ {RUN_TS}")
@@ -487,6 +481,52 @@ def main():
         write_log_line(log_path, err)
         return
 
+    # ===== NPU evaluation first =====
+    npu_models = discover_npu_models(os.path.join(REPO_ROOT, "models"))
+    npu_last_result = None  # (model_key, top1, top5, elapsed, images)
+    if npu_models and npu_mod is not None:
+        raw_imgs = load_images_raw(IMAGES_DIR, image_filenames)
+        npu_log_filename = f"eval_resnet50_imagenet_npu_{RUN_TS}.log"
+        npu_log_path = os.path.join(DEFAULT_LOG_DIR, npu_log_filename)
+        write_log_line(npu_log_path, f"[START] ResNet50 ImageNet NPU evaluation @ {RUN_TS}")
+
+        for model_key, o_path, _ in npu_models:
+            print(f"[STEP NPU] Evaluating {model_key} on NPU using {o_path}...")
+            write_log_line(npu_log_path, f"[STEP NPU] Evaluating {model_key} on NPU using {o_path}...")
+            try:
+                npu_preds, npu_elapsed, npu_top5 = run_resnet_inference_npu(
+                    npu_o_path=o_path,
+                    batch_inputs_raw=raw_imgs,
+                    gt_lookup=filename_to_index,
+                    classes=classes,
+                    log_path=npu_log_path,
+                    npu_id=1,
+                )
+                npu_top1, npu_top5_acc = compute_accuracy(npu_preds, filename_to_index, top5=npu_top5)
+
+                # Log NPU results
+                lines = [
+                    "",
+                    f"===== NPU Evaluation Result: {model_key} =====",
+                    f"Images evaluated: {len(raw_imgs)}",
+                    f"Elapsed: {npu_elapsed:.2f}s",
+                    f"Top-1 accuracy: {npu_top1*100:.2f}%",
+                    f"Top-5 accuracy: {npu_top5_acc*100:.2f}%" if not np.isnan(npu_top5_acc) else "Top-5 accuracy: N/A",
+                ]
+                for l in lines:
+                    print(l)
+                    write_log_line(npu_log_path, l)
+
+                # Store last NPU result to be included in combined metrics after CPU eval
+                npu_last_result = (model_key, npu_top1, (None if np.isnan(npu_top5_acc) else npu_top5_acc), npu_elapsed, len(raw_imgs))
+            except Exception as e:
+                err = f"[ERROR] NPU evaluation failed for {model_key}: {e}"
+                print(err)
+                write_log_line(npu_log_path, err)
+    else:
+        print("[INFO] No NPU-capable ResNet models discovered or npu module unavailable; skipping NPU eval.")
+
+    # ===== CPU evaluation afterwards =====
     print("[STEP 3] Running ONNX model on CPU (1x per image) with live progress...")
     write_log_line(log_path, "[STEP 3] Running ONNX model on CPU (1x per image) with live progress...")
     preds, elapsed, top5_dict = run_onnx_inference_cpu(
@@ -530,66 +570,23 @@ def main():
     except Exception as e:
         print(f"[WARN] Failed to re-write log header with final accuracy: {e}")
 
-    # ===== NPU evaluation using the same images =====
-    npu_models = discover_npu_models(os.path.join(REPO_ROOT, "models"))
-    if npu_models and npu_mod is not None:
-        # Use same filenames/images
-        raw_imgs = load_images_raw(IMAGES_DIR, image_filenames)
-        npu_log_filename = f"eval_resnet50_imagenet_npu_{RUN_TS}.log"
-        npu_log_path = os.path.join(DEFAULT_LOG_DIR, npu_log_filename)
-        write_log_line(npu_log_path, f"[START] ResNet50 ImageNet NPU evaluation @ {RUN_TS}")
-
-        for model_key, o_path, _ in npu_models:
-            print(f"[STEP NPU] Evaluating {model_key} on NPU using {o_path}...")
-            write_log_line(npu_log_path, f"[STEP NPU] Evaluating {model_key} on NPU using {o_path}...")
-            try:
-                npu_preds, npu_elapsed, npu_top5 = run_resnet_inference_npu(
-                    npu_o_path=o_path,
-                    front_onnx_path=os.path.join(REPO_ROOT, "models", "resnet50_small", "partitions", "resnet50_small_neubla_p0.onnx"),
-                    back_onnx_path=os.path.join(REPO_ROOT, "models", "resnet50_small", "partitions", "resnet50_small_neubla_p2.onnx"),
-                    batch_inputs_raw=raw_imgs,
-                    gt_lookup=filename_to_index,
-                    classes=classes,
-                    log_path=npu_log_path,
-                    npu_id=1,
-                )
-                npu_top1, npu_top5_acc = compute_accuracy(npu_preds, filename_to_index, top5=npu_top5)
-
-                # Log and write consolidated results
-                lines = [
-                    "",
-                    f"===== NPU Evaluation Result: {model_key} =====",
-                    f"Images evaluated: {len(raw_imgs)}",
-                    f"Elapsed: {npu_elapsed:.2f}s",
-                    f"Top-1 accuracy: {npu_top1*100:.2f}%",
-                    f"Top-5 accuracy: {npu_top5_acc*100:.2f}%" if not np.isnan(npu_top5_acc) else "Top-5 accuracy: N/A",
-                ]
-                for l in lines:
-                    print(l)
-                    write_log_line(npu_log_path, l)
-
-                # Write a simple JSON metrics file per run summarizing CPU vs NPU
-                metrics_path = os.path.join(
-                    DEFAULT_LOG_DIR, f"imagenet_resnet50_accuracy_{RUN_TS}.json"
-                )
-                record = {
-                    "timestamp": RUN_TS,
-                    "images": len(raw_imgs),
-                    "cpu": {"top1": top1, "top5": (None if np.isnan(top5) else top5), "elapsed_sec": elapsed},
-                    "npu": {"model": model_key, "top1": npu_top1, "top5": (None if np.isnan(npu_top5_acc) else npu_top5_acc), "elapsed_sec": npu_elapsed},
-                }
-                _ensure_log_dir(metrics_path)
-                with open(metrics_path, "w", encoding="utf-8") as f:
-                    import json as _json
-                    _json.dump(record, f, indent=2)
-                print(f"[INFO] Wrote metrics to {metrics_path}")
-                write_log_line(npu_log_path, f"[INFO] Wrote metrics to {metrics_path}")
-            except Exception as e:
-                err = f"[ERROR] NPU evaluation failed for {model_key}: {e}"
-                print(err)
-                write_log_line(npu_log_path, err)
-    else:
-        print("[INFO] No NPU-capable ResNet models discovered or npu module unavailable; skipping NPU eval.")
+    # Write combined metrics once, after CPU evaluation, if NPU results exist
+    if npu_last_result is not None:
+        model_key, npu_top1_val, npu_top5_val, npu_elapsed_val, npu_images = npu_last_result
+        metrics_path = os.path.join(
+            DEFAULT_LOG_DIR, f"imagenet_resnet50_accuracy_{RUN_TS}.json"
+        )
+        record = {
+            "timestamp": RUN_TS,
+            "images": npu_images,
+            "cpu": {"top1": top1, "top5": (None if np.isnan(top5) else top5), "elapsed_sec": elapsed},
+            "npu": {"model": model_key, "top1": npu_top1_val, "top5": npu_top5_val, "elapsed_sec": npu_elapsed_val},
+        }
+        _ensure_log_dir(metrics_path)
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            import json as _json
+            _json.dump(record, f, indent=2)
+        print(f"[INFO] Wrote metrics to {metrics_path}")
 
 
 if __name__ == "__main__":
