@@ -284,46 +284,32 @@ def evaluate_coco(dets: List[Dict[str, Any]], ann_json: str, img_ids_subset: Opt
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Evaluate YOLOv3 ONNX model on COCO 2017 val using CPU.")
-    parser.add_argument("--model", type=str, default=YOLO_MODEL_PATH, help="Path to YOLOv3 ONNX model")
+    parser = argparse.ArgumentParser(description="Evaluate YOLOv3 model on COCO 2017 val using CPU or NPU.")
+    parser.add_argument("--model", type=str, default=YOLO_MODEL_PATH, help="Path to YOLOv3 ONNX model (CPU path)")
     parser.add_argument("--data-dir", type=str, default=DEFAULT_DATA_DIR, help="COCO data root directory")
     parser.add_argument("--results-dir", type=str, default=DEFAULT_RESULTS_DIR, help="Directory to store logs/results")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size (currently images processed one by one)")
     parser.add_argument("--max-images", type=int, default=100, help="Max number of images to evaluate (use 0 for all)")
     parser.add_argument("--conf-thr", type=float, default=0.3, help="Confidence threshold")
     parser.add_argument("--iou-thr", type=float, default=0.5, help="IoU threshold for NMS")
-    parser.add_argument("--threads", type=int, default=1, help="Number of intra/inter op threads for ORT")
+    parser.add_argument("--threads", type=int, default=1, help="Number of intra/inter op threads for ORT (CPU only)")
     parser.add_argument("--save-dets", action="store_true", help="Save detection JSON for COCO eval")
+    parser.add_argument("--device", type=str, choices=["cpu", "npu", "both"], default="cpu", help="Device to run inference on: cpu, npu, or both (sequential)")
+    parser.add_argument("--npu-id", type=int, default=0, help="NPU device ID (default: 0)")
 
     args = parser.parse_args(argv)
 
     ensure_dir(args.results_dir)
-    log_path = os.path.join(args.results_dir, f"yolov3_coco_cpu_{_timestamp()}.log")
+    log_path = os.path.join(args.results_dir, f"yolov3_coco_{args.device}_{_timestamp()}.log")
 
-    write_log_line(log_path, f"[INFO] Starting YOLOv3 COCO eval on CPU")
+    write_log_line(log_path, f"[INFO] Starting YOLOv3 COCO eval on {args.device.upper()}")
     write_log_line(log_path, f"[INFO] Model: {args.model}")
     write_log_line(log_path, f"[INFO] Data dir: {args.data_dir}")
     write_log_line(log_path, f"[INFO] Max images: {args.max_images}")
     write_log_line(log_path, f"[INFO] Conf thr: {args.conf_thr}, IoU thr: {args.iou_thr}")
 
-    if not os.path.isfile(args.model):
-        write_log_line(log_path, f"[ERROR] Model not found at {args.model}")
-        return 1
-
     # Prepare dataset
     images_dir, ann_json = prepare_coco_val(args.data_dir, log_path)
-
-    # Build session
-    t0 = time.time()
-    session = build_session(args.model, intra_op=args.threads, inter_op=args.threads)
-    input_name = session.get_inputs()[0].name
-    input_w, input_h = infer_input_shape(session)
-    write_log_line(log_path, f"[INFO] Inference input size: {input_w}x{input_h}")
-
-    output_names = [o.name for o in session.get_outputs()]
-    write_log_line(log_path, f"[INFO] Output names: {output_names}")
-    t1 = time.time()
-    write_log_line(log_path, f"[TIME] Session init: {(t1 - t0)*1000:.1f} ms")
 
     # Collect image list and optionally subset
     img_files = sorted([f for f in os.listdir(images_dir) if f.endswith('.jpg') or f.endswith('.jpeg') or f.endswith('.png')])
@@ -336,56 +322,586 @@ def main(argv: Optional[List[str]] = None) -> int:
     img_id_map: Dict[str, int] = {}
     if HAS_COCO:
         coco = COCO(ann_json)
-        # Build map filename -> id
         for img in coco.imgs.values():
             img_id_map[img['file_name']] = img['id']
-        # restrict to files present
         img_ids_subset = [img_id_map[f] for f in img_files if f in img_id_map]
     else:
         img_ids_subset = None
 
-    # Inference loop
+    # Special mode: run both CPU and NPU sequentially and write combined results
+    if args.device == "both":
+        run_ts = _timestamp()
+
+        def run_cpu_eval() -> Dict[str, Any]:
+            log_cpu = os.path.join(args.results_dir, f"yolov3_coco_cpu_{run_ts}.log")
+            write_log_line(log_cpu, f"[INFO] Starting YOLOv3 COCO eval on CPU (both mode)")
+            if not os.path.isfile(args.model):
+                write_log_line(log_cpu, f"[ERROR] Model not found at {args.model}")
+                return {"error": f"Model not found: {args.model}"}
+            # Build CPU session
+            t0 = time.time()
+            session = build_session(args.model, intra_op=args.threads, inter_op=args.threads)
+            input_name = session.get_inputs()[0].name
+            input_w, input_h = infer_input_shape(session)
+            write_log_line(log_cpu, f"[INFO] Inference input size: {input_w}x{input_h}")
+            output_names = [o.name for o in session.get_outputs()]
+            write_log_line(log_cpu, f"[INFO] Output names: {output_names}")
+            t1 = time.time()
+            write_log_line(log_cpu, f"[TIME] Session init: {(t1 - t0)*1000:.1f} ms")
+
+            det_json: List[Dict[str, Any]] = []
+            pre_times: List[float] = []
+            inf_times: List[float] = []
+            post_times: List[float] = []
+
+            for i, fname in enumerate(img_files, 1):
+                img_path = os.path.join(images_dir, fname)
+                img0 = cv2.imread(img_path)
+                if img0 is None:
+                    write_log_line(log_cpu, f"[WARN] Failed to read image: {img_path}")
+                    continue
+                t_pre0 = time.time()
+                inp, meta = preprocess(img0, (input_w, input_h))
+                t_pre1 = time.time()
+                pre_times.append((t_pre1 - t_pre0) * 1000)
+
+                t_inf0 = time.time()
+                outputs = session.run(None, {input_name: inp})
+                t_inf1 = time.time()
+                inf_times.append((t_inf1 - t_inf0) * 1000)
+
+                t_post0 = time.time()
+                dets = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
+                t_post1 = time.time()
+                post_times.append((t_post1 - t_post0) * 1000)
+
+                if HAS_COCO and fname in img_id_map:
+                    image_id = img_id_map[fname]
+                    for x1, y1, x2, y2, score, cls_idx in dets:
+                        w = x2 - x1
+                        h = y2 - y1
+                        cat_id = COCO80_TO_COCO91_CLASS[cls_idx] if 0 <= cls_idx < len(COCO80_TO_COCO91_CLASS) else 1
+                        det_json.append({
+                            "image_id": image_id,
+                            "category_id": int(cat_id),
+                            "bbox": [float(x1), float(y1), float(w), float(h)],
+                            "score": float(score)
+                        })
+
+                if i % 10 == 0 or i == len(img_files):
+                    write_log_line(log_cpu, f"[PROGRESS] {i}/{len(img_files)} images processed")
+
+            pre_avg = float(np.mean(pre_times)) if pre_times else None
+            pre_p95 = float(np.percentile(pre_times, 95)) if pre_times else None
+            inf_avg = float(np.mean(inf_times)) if inf_times else None
+            inf_p95 = float(np.percentile(inf_times, 95)) if inf_times else None
+            post_avg = float(np.mean(post_times)) if post_times else None
+            post_p95 = float(np.percentile(post_times, 95)) if post_times else None
+
+            if pre_avg is not None:
+                write_log_line(log_cpu, f"[TIME] Preprocess avg: {pre_avg:.1f} ms, p95: {pre_p95:.1f} ms")
+            if inf_avg is not None:
+                write_log_line(log_cpu, f"[TIME] Inference avg: {inf_avg:.1f} ms, p95: {inf_p95:.1f} ms")
+            if post_avg is not None:
+                write_log_line(log_cpu, f"[TIME] Postprocess avg: {post_avg:.1f} ms, p95: {post_p95:.1f} ms")
+
+            det_json_path = None
+            if (HAS_COCO and det_json) or args.save_dets:
+                det_json_path = os.path.join(args.results_dir, f"yolov3_coco_dets_cpu_{run_ts}.json")
+                with open(det_json_path, "w", encoding="utf-8") as f:
+                    json.dump(det_json, f)
+                write_log_line(log_cpu, f"[INFO] Saved detections to {det_json_path}")
+
+            metrics = {}
+            if HAS_COCO and det_json:
+                metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_cpu)
+                mAP = metrics.get("mAP@[.5:.95]")
+                mAP50 = metrics.get("mAP@0.5")
+                if mAP is not None or mAP50 is not None:
+                    parts = []
+                    if mAP is not None:
+                        parts.append(f"mAP@[.5:.95]={mAP:.4f}")
+                    if mAP50 is not None:
+                        parts.append(f"mAP@0.5={mAP50:.4f}")
+                    write_log_line(log_cpu, f"[RESULT] Accuracy: " + ", ".join(parts))
+            else:
+                if not HAS_COCO:
+                    write_log_line(log_cpu, "[WARN] Skipping evaluation: pycocotools not installed.")
+                else:
+                    write_log_line(log_cpu, "[WARN] Skipping evaluation: no detections were produced.")
+
+            results_summary = {
+                "timestamp": run_ts,
+                "device": "cpu",
+                "model": args.model,
+                "data_dir": args.data_dir,
+                "num_images": len(img_files),
+                "conf_thr": args.conf_thr,
+                "iou_thr": args.iou_thr,
+                "threads": args.threads,
+                "timing_ms": {
+                    "preprocess_avg": pre_avg,
+                    "preprocess_p95": pre_p95,
+                    "inference_avg": inf_avg,
+                    "inference_p95": inf_p95,
+                    "postprocess_avg": post_avg,
+                    "postprocess_p95": post_p95,
+                },
+                "metrics": metrics,
+                "detections_json": det_json_path,
+            }
+            metrics_path = os.path.join(args.results_dir, f"yolov3_coco_metrics_cpu_{run_ts}.json")
+            with open(metrics_path, "w", encoding="utf-8") as f:
+                json.dump(results_summary, f, ensure_ascii=False, indent=2)
+            write_log_line(log_cpu, f"[INFO] Saved metrics/results to {metrics_path}")
+            write_log_line(log_cpu, "[INFO] CPU evaluation finished.")
+            return results_summary
+
+        def run_npu_eval() -> Dict[str, Any]:
+            log_npu = os.path.join(args.results_dir, f"yolov3_coco_npu_{run_ts}.log")
+            write_log_line(log_npu, f"[INFO] Starting YOLOv3 COCO eval on NPU (both mode)")
+            try:
+                from npu import initialize_driver, close_driver, send_receive_data_npu, yolo_prepare_onnx_model
+            except Exception as e:
+                write_log_line(log_npu, f"[ERROR] Failed to import NPU utilities: {e}")
+                return {"error": f"NPU import failed: {e}"}
+
+            host_t0 = time.time()
+            try:
+                front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
+                    "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+                )
+                input_w, input_h = 608, 608
+            except Exception as e:
+                write_log_line(log_npu, f"[ERROR] NPU host model preparation failed: {e}")
+                return {"error": f"NPU host prepare failed: {e}"}
+            host_t1 = time.time()
+            write_log_line(log_npu, f"[TIME] NPU host session prep: {(host_t1 - host_t0)*1000:.1f} ms")
+
+            drv_t0 = time.time()
+            try:
+                driver = initialize_driver(args.npu_id, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+            except Exception as e:
+                write_log_line(log_npu, f"[ERROR] NPU driver init/load failed: {e}")
+                return {"error": f"NPU driver failed: {e}"}
+            drv_t1 = time.time()
+            write_log_line(log_npu, f"[TIME] NPU memory load: {(drv_t1 - drv_t0)*1000:.1f} ms")
+
+            def npu_preprocess(img_bgr: np.ndarray) -> Tuple[np.ndarray, Tuple[int,int]]:
+                img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                img = cv2.resize(img, (input_w, input_h))
+                image_data = (img.astype(np.float32) / 255.0).transpose(2,0,1)[None, ...]
+                return image_data, (img_bgr.shape[1], img_bgr.shape[0])
+
+            def npu_postprocess_to_dets(output: List[np.ndarray], orig_wh: Tuple[int,int], conf_thr: float, iou_thr: float) -> List[Tuple[float,float,float,float,float,int]]:
+                output_box = np.squeeze(output[0])
+                output_label = np.squeeze(output[1])
+                rows = output_box.shape[0]
+                ow, oh = orig_wh
+                x_factor = ow / 608.0
+                y_factor = oh / 608.0
+                boxes = []
+                scores = []
+                clses = []
+                for i in range(rows):
+                    conf = float(output_box[i][4])
+                    if conf >= conf_thr:
+                        left, top, right, bottom = output_box[i][:4]
+                        w = (right - left) * x_factor
+                        h = (bottom - top) * y_factor
+                        x1 = left * x_factor
+                        y1 = top * y_factor
+                        if w <= 0 or h <= 0 or w > 2000 or h > 2000:
+                            continue
+                        if x1 < -100 or y1 < -100 or x1 > 3000 or y1 > 3000:
+                            continue
+                        boxes.append([x1, y1, x1 + w, y1 + h])
+                        scores.append(conf)
+                        clses.append(int(output_label[i]))
+                if not boxes:
+                    return []
+                boxes = np.array(boxes, dtype=np.float32)
+                scores = np.array(scores, dtype=np.float32)
+                clses = np.array(clses, dtype=np.int32)
+                dets: List[Tuple[float,float,float,float,float,int]] = []
+                for c in np.unique(clses):
+                    inds = np.where(clses == c)[0]
+                    keep = nms_boxes(boxes[inds], scores[inds], iou_thr)
+                    for j in keep:
+                        x1, y1, x2, y2 = boxes[inds][j]
+                        dets.append((float(x1), float(y1), float(x2), float(y2), float(scores[inds][j]), int(c)))
+                return dets
+
+            det_json: List[Dict[str, Any]] = []
+            pre_times: List[float] = []
+            inf_times: List[float] = []
+            post_times: List[float] = []
+            try:
+                for i, fname in enumerate(img_files, 1):
+                    img_path = os.path.join(images_dir, fname)
+                    img0 = cv2.imread(img_path)
+                    if img0 is None:
+                        write_log_line(log_npu, f"[WARN] Failed to read image: {img_path}")
+                        continue
+                    t_pre0 = time.time()
+                    inp, (ow, oh) = npu_preprocess(img0)
+                    t_pre1 = time.time()
+                    pre_times.append((t_pre1 - t_pre0) * 1000)
+
+                    t_inf0 = time.time()
+                    front_output = front_sess.run(None, {"input": inp})[0]
+                    input_data = front_output.tobytes()
+                    raw_outputs = send_receive_data_npu(driver, input_data, 3 * input_w * input_h)
+                    output_data = [np.frombuffer(buf, dtype=np.uint8) for buf in raw_outputs]
+                    output_dequant_data = [
+                        (data.astype(np.float32) - zero_point[name]) * scale[name]
+                        for name, data in zip(
+                            [
+                                "onnx::Transpose_684_DequantizeLinear",
+                                "onnx::Transpose_688_DequantizeLinear",
+                                "onnx::Transpose_692_DequantizeLinear",
+                            ],
+                            output_data,
+                        )
+                    ]
+                    shape_dict = {
+                        "onnx::Transpose_684": (1, 255, 19, 19),
+                        "onnx::Transpose_688": (1, 255, 38, 38),
+                        "onnx::Transpose_692": (1, 255, 76, 76),
+                    }
+                    back_feeds = {}
+                    for name, data in zip(shape_dict.keys(), output_dequant_data):
+                        needed_size = int(np.prod(shape_dict[name]))
+                        back_feeds[name] = data[:needed_size].reshape(shape_dict[name])
+                    outputs = back_sess.run(None, back_feeds)
+                    t_inf1 = time.time()
+                    inf_times.append((t_inf1 - t_inf0) * 1000)
+
+                    t_post0 = time.time()
+                    dets = npu_postprocess_to_dets(outputs, (ow, oh), args.conf_thr, args.iou_thr)
+                    t_post1 = time.time()
+                    post_times.append((t_post1 - t_post0) * 1000)
+
+                    if HAS_COCO and fname in img_id_map:
+                        image_id = img_id_map[fname]
+                        for x1, y1, x2, y2, score, cls_idx in dets:
+                            w = x2 - x1
+                            h = y2 - y1
+                            cat_id = COCO80_TO_COCO91_CLASS[cls_idx] if 0 <= cls_idx < len(COCO80_TO_COCO91_CLASS) else 1
+                            det_json.append({
+                                "image_id": image_id,
+                                "category_id": int(cat_id),
+                                "bbox": [float(x1), float(y1), float(w), float(h)],
+                                "score": float(score)
+                            })
+
+                    if i % 10 == 0 or i == len(img_files):
+                        write_log_line(log_npu, f"[PROGRESS] {i}/{len(img_files)} images processed")
+            finally:
+                try:
+                    close_driver(driver)
+                except Exception:
+                    pass
+
+            pre_avg = float(np.mean(pre_times)) if pre_times else None
+            pre_p95 = float(np.percentile(pre_times, 95)) if pre_times else None
+            inf_avg = float(np.mean(inf_times)) if inf_times else None
+            inf_p95 = float(np.percentile(inf_times, 95)) if inf_times else None
+            post_avg = float(np.mean(post_times)) if post_times else None
+            post_p95 = float(np.percentile(post_times, 95)) if post_times else None
+
+            if pre_avg is not None:
+                write_log_line(log_npu, f"[TIME] Preprocess avg: {pre_avg:.1f} ms, p95: {pre_p95:.1f} ms")
+            if inf_avg is not None:
+                write_log_line(log_npu, f"[TIME] Inference avg: {inf_avg:.1f} ms, p95: {inf_p95:.1f} ms")
+            if post_avg is not None:
+                write_log_line(log_npu, f"[TIME] Postprocess avg: {post_avg:.1f} ms, p95: {post_p95:.1f} ms")
+
+            det_json_path = None
+            if (HAS_COCO and det_json) or args.save_dets:
+                det_json_path = os.path.join(args.results_dir, f"yolov3_coco_dets_npu_{run_ts}.json")
+                with open(det_json_path, "w", encoding="utf-8") as f:
+                    json.dump(det_json, f)
+                write_log_line(log_npu, f"[INFO] Saved detections to {det_json_path}")
+
+            metrics = {}
+            if HAS_COCO and det_json:
+                metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_npu)
+                mAP = metrics.get("mAP@[.5:.95]")
+                mAP50 = metrics.get("mAP@0.5")
+                if mAP is not None or mAP50 is not None:
+                    parts = []
+                    if mAP is not None:
+                        parts.append(f"mAP@[.5:.95]={mAP:.4f}")
+                    if mAP50 is not None:
+                        parts.append(f"mAP@0.5={mAP50:.4f}")
+                    write_log_line(log_npu, f"[RESULT] Accuracy: " + ", ".join(parts))
+            else:
+                if not HAS_COCO:
+                    write_log_line(log_npu, "[WARN] Skipping evaluation: pycocotools not installed.")
+                else:
+                    write_log_line(log_npu, "[WARN] Skipping evaluation: no detections were produced.")
+
+            results_summary = {
+                "timestamp": run_ts,
+                "device": "npu",
+                "model": args.model,
+                "data_dir": args.data_dir,
+                "num_images": len(img_files),
+                "conf_thr": args.conf_thr,
+                "iou_thr": args.iou_thr,
+                "threads": None,
+                "timing_ms": {
+                    "preprocess_avg": pre_avg,
+                    "preprocess_p95": pre_p95,
+                    "inference_avg": inf_avg,
+                    "inference_p95": inf_p95,
+                    "postprocess_avg": post_avg,
+                    "postprocess_p95": post_p95,
+                },
+                "metrics": metrics,
+                "detections_json": det_json_path,
+            }
+            metrics_path = os.path.join(args.results_dir, f"yolov3_coco_metrics_npu_{run_ts}.json")
+            with open(metrics_path, "w", encoding="utf-8") as f:
+                json.dump(results_summary, f, ensure_ascii=False, indent=2)
+            write_log_line(log_npu, f"[INFO] Saved metrics/results to {metrics_path}")
+            write_log_line(log_npu, "[INFO] NPU evaluation finished.")
+            return results_summary
+
+        cpu_summary = run_cpu_eval()
+        npu_summary = run_npu_eval()
+        combined = {"timestamp": run_ts, "cpu": cpu_summary, "npu": npu_summary}
+        combined_path = os.path.join(args.results_dir, f"yolov3_coco_combined_{run_ts}.json")
+        with open(combined_path, "w", encoding="utf-8") as f:
+            json.dump(combined, f, ensure_ascii=False, indent=2)
+        write_log_line(os.path.join(args.results_dir, f"yolov3_coco_both_{run_ts}.log"), f"[INFO] Saved combined results to {combined_path}")
+
+        # Also write a concise accuracy summary file
+        cpu_metrics = cpu_summary.get("metrics", {}) if isinstance(cpu_summary, dict) else {}
+        npu_metrics = npu_summary.get("metrics", {}) if isinstance(npu_summary, dict) else {}
+        acc_record = {
+            "timestamp": run_ts,
+            "images": len(img_files),
+            "cpu": {
+                "mAP": cpu_metrics.get("mAP@[.5:.95]"),
+                "mAP50": cpu_metrics.get("mAP@0.5"),
+            },
+            "npu": {
+                "mAP": npu_metrics.get("mAP@[.5:.95]"),
+                "mAP50": npu_metrics.get("mAP@0.5"),
+            },
+        }
+        acc_path = os.path.join(args.results_dir, f"yolov3_coco_accuracy_{run_ts}.json")
+        with open(acc_path, "w", encoding="utf-8") as f:
+            json.dump(acc_record, f, ensure_ascii=False, indent=2)
+        write_log_line(os.path.join(args.results_dir, f"yolov3_coco_both_{run_ts}.log"), f"[INFO] Saved accuracy summary to {acc_path}")
+        return 0
+
+    # Inference loop common accumulators
     det_json: List[Dict[str, Any]] = []
     inf_times: List[float] = []
     pre_times: List[float] = []
     post_times: List[float] = []
 
-    for i, fname in enumerate(img_files, 1):
-        img_path = os.path.join(images_dir, fname)
-        img0 = cv2.imread(img_path)
-        if img0 is None:
-            write_log_line(log_path, f"[WARN] Failed to read image: {img_path}")
-            continue
-        t_pre0 = time.time()
-        inp, meta = preprocess(img0, (input_w, input_h))
-        t_pre1 = time.time()
-        pre_times.append((t_pre1 - t_pre0) * 1000)
+    if args.device == "cpu":
+        if not os.path.isfile(args.model):
+            write_log_line(log_path, f"[ERROR] Model not found at {args.model}")
+            return 1
+        # Build CPU session
+        t0 = time.time()
+        session = build_session(args.model, intra_op=args.threads, inter_op=args.threads)
+        input_name = session.get_inputs()[0].name
+        input_w, input_h = infer_input_shape(session)
+        write_log_line(log_path, f"[INFO] Inference input size: {input_w}x{input_h}")
+        output_names = [o.name for o in session.get_outputs()]
+        write_log_line(log_path, f"[INFO] Output names: {output_names}")
+        t1 = time.time()
+        write_log_line(log_path, f"[TIME] Session init: {(t1 - t0)*1000:.1f} ms")
 
-        t_inf0 = time.time()
-        outputs = session.run(None, {input_name: inp})
-        t_inf1 = time.time()
-        inf_times.append((t_inf1 - t_inf0) * 1000)
+        for i, fname in enumerate(img_files, 1):
+            img_path = os.path.join(images_dir, fname)
+            img0 = cv2.imread(img_path)
+            if img0 is None:
+                write_log_line(log_path, f"[WARN] Failed to read image: {img_path}")
+                continue
+            t_pre0 = time.time()
+            inp, meta = preprocess(img0, (input_w, input_h))
+            t_pre1 = time.time()
+            pre_times.append((t_pre1 - t_pre0) * 1000)
 
-        t_post0 = time.time()
-        dets = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
-        t_post1 = time.time()
-        post_times.append((t_post1 - t_post0) * 1000)
+            t_inf0 = time.time()
+            outputs = session.run(None, {input_name: inp})
+            t_inf1 = time.time()
+            inf_times.append((t_inf1 - t_inf0) * 1000)
 
-        if HAS_COCO and fname in img_id_map:
-            image_id = img_id_map[fname]
-            for x1, y1, x2, y2, score, cls_idx in dets:
-                w = x2 - x1
-                h = y2 - y1
-                cat_id = COCO80_TO_COCO91_CLASS[cls_idx] if 0 <= cls_idx < len(COCO80_TO_COCO91_CLASS) else 1
-                det_json.append({
-                    "image_id": image_id,
-                    "category_id": int(cat_id),
-                    "bbox": [float(x1), float(y1), float(w), float(h)],
-                    "score": float(score)
-                })
+            t_post0 = time.time()
+            dets = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
+            t_post1 = time.time()
+            post_times.append((t_post1 - t_post0) * 1000)
 
-        if i % 10 == 0 or i == len(img_files):
-            write_log_line(log_path, f"[PROGRESS] {i}/{len(img_files)} images processed")
+            if HAS_COCO and fname in img_id_map:
+                image_id = img_id_map[fname]
+                for x1, y1, x2, y2, score, cls_idx in dets:
+                    w = x2 - x1
+                    h = y2 - y1
+                    cat_id = COCO80_TO_COCO91_CLASS[cls_idx] if 0 <= cls_idx < len(COCO80_TO_COCO91_CLASS) else 1
+                    det_json.append({
+                        "image_id": image_id,
+                        "category_id": int(cat_id),
+                        "bbox": [float(x1), float(y1), float(w), float(h)],
+                        "score": float(score)
+                    })
+
+            if i % 10 == 0 or i == len(img_files):
+                write_log_line(log_path, f"[PROGRESS] {i}/{len(img_files)} images processed")
+    else:
+        # NPU path
+        try:
+            from npu import initialize_driver, close_driver, send_receive_data_npu, yolo_prepare_onnx_model
+        except Exception as e:
+            write_log_line(log_path, f"[ERROR] Failed to import NPU utilities: {e}")
+            return 1
+
+        # Prepare NPU host/back sessions and driver
+        host_t0 = time.time()
+        try:
+            # NOTE: paths align with model_processors.py expectation
+            front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
+                "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
+            )
+            input_w, input_h = 608, 608
+        except Exception as e:
+            write_log_line(log_path, f"[ERROR] NPU host model preparation failed: {e}")
+            return 1
+        host_t1 = time.time()
+        write_log_line(log_path, f"[TIME] NPU host session prep: {(host_t1 - host_t0)*1000:.1f} ms")
+
+        drv_t0 = time.time()
+        try:
+            driver = initialize_driver(args.npu_id, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+        except Exception as e:
+            write_log_line(log_path, f"[ERROR] NPU driver init/load failed: {e}")
+            return 1
+        drv_t1 = time.time()
+        write_log_line(log_path, f"[TIME] NPU memory load: {(drv_t1 - drv_t0)*1000:.1f} ms")
+
+        def npu_preprocess(img_bgr: np.ndarray) -> Tuple[np.ndarray, Tuple[int,int]]:
+            img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(img, (input_w, input_h))
+            image_data = (img.astype(np.float32) / 255.0).transpose(2,0,1)[None, ...]
+            return image_data, (img_bgr.shape[1], img_bgr.shape[0])
+
+        def npu_postprocess_to_dets(output: List[np.ndarray], orig_wh: Tuple[int,int], conf_thr: float, iou_thr: float) -> List[Tuple[float,float,float,float,float,int]]:
+            # Replicate logic from image_processing.yolo_postprocess_npu but return dets
+            output_box = np.squeeze(output[0])
+            output_label = np.squeeze(output[1])
+            rows = output_box.shape[0]
+            ow, oh = orig_wh
+            x_factor = ow / 608.0
+            y_factor = oh / 608.0
+            boxes = []
+            scores = []
+            clses = []
+            for i in range(rows):
+                conf = float(output_box[i][4])
+                if conf >= conf_thr:
+                    left, top, right, bottom = output_box[i][:4]
+                    w = (right - left) * x_factor
+                    h = (bottom - top) * y_factor
+                    x1 = left * x_factor
+                    y1 = top * y_factor
+                    # filter abnormal
+                    if w <= 0 or h <= 0 or w > 2000 or h > 2000:
+                        continue
+                    if x1 < -100 or y1 < -100 or x1 > 3000 or y1 > 3000:
+                        continue
+                    boxes.append([x1, y1, x1 + w, y1 + h])
+                    scores.append(conf)
+                    clses.append(int(output_label[i]))
+            if not boxes:
+                return []
+            boxes = np.array(boxes, dtype=np.float32)
+            scores = np.array(scores, dtype=np.float32)
+            clses = np.array(clses, dtype=np.int32)
+            dets: List[Tuple[float,float,float,float,float,int]] = []
+            for c in np.unique(clses):
+                inds = np.where(clses == c)[0]
+                keep = nms_boxes(boxes[inds], scores[inds], iou_thr)
+                for j in keep:
+                    x1, y1, x2, y2 = boxes[inds][j]
+                    dets.append((float(x1), float(y1), float(x2), float(y2), float(scores[inds][j]), int(c)))
+            return dets
+
+        try:
+            for i, fname in enumerate(img_files, 1):
+                img_path = os.path.join(images_dir, fname)
+                img0 = cv2.imread(img_path)
+                if img0 is None:
+                    write_log_line(log_path, f"[WARN] Failed to read image: {img_path}")
+                    continue
+                t_pre0 = time.time()
+                inp, (ow, oh) = npu_preprocess(img0)
+                t_pre1 = time.time()
+                pre_times.append((t_pre1 - t_pre0) * 1000)
+
+                t_inf0 = time.time()
+                # Front (host) quantize
+                front_output = front_sess.run(None, {"input": inp})[0]
+                input_data = front_output.tobytes()
+                # NPU core
+                raw_outputs = send_receive_data_npu(driver, input_data, 3 * input_w * input_h)
+                output_data = [np.frombuffer(buf, dtype=np.uint8) for buf in raw_outputs]
+                # Dequantize and back (host) post layers
+                output_dequant_data = [
+                    (data.astype(np.float32) - zero_point[name]) * scale[name]
+                    for name, data in zip(
+                        [
+                            "onnx::Transpose_684_DequantizeLinear",
+                            "onnx::Transpose_688_DequantizeLinear",
+                            "onnx::Transpose_692_DequantizeLinear",
+                        ],
+                        output_data,
+                    )
+                ]
+                shape_dict = {
+                    "onnx::Transpose_684": (1, 255, 19, 19),
+                    "onnx::Transpose_688": (1, 255, 38, 38),
+                    "onnx::Transpose_692": (1, 255, 76, 76),
+                }
+                back_feeds = {}
+                for name, data in zip(shape_dict.keys(), output_dequant_data):
+                    needed_size = int(np.prod(shape_dict[name]))
+                    back_feeds[name] = data[:needed_size].reshape(shape_dict[name])
+                outputs = back_sess.run(None, back_feeds)
+                t_inf1 = time.time()
+                inf_times.append((t_inf1 - t_inf0) * 1000)
+
+                t_post0 = time.time()
+                dets = npu_postprocess_to_dets(outputs, (ow, oh), args.conf_thr, args.iou_thr)
+                t_post1 = time.time()
+                post_times.append((t_post1 - t_post0) * 1000)
+
+                if HAS_COCO and fname in img_id_map:
+                    image_id = img_id_map[fname]
+                    for x1, y1, x2, y2, score, cls_idx in dets:
+                        w = x2 - x1
+                        h = y2 - y1
+                        cat_id = COCO80_TO_COCO91_CLASS[cls_idx] if 0 <= cls_idx < len(COCO80_TO_COCO91_CLASS) else 1
+                        det_json.append({
+                            "image_id": image_id,
+                            "category_id": int(cat_id),
+                            "bbox": [float(x1), float(y1), float(w), float(h)],
+                            "score": float(score)
+                        })
+
+                if i % 10 == 0 or i == len(img_files):
+                    write_log_line(log_path, f"[PROGRESS] {i}/{len(img_files)} images processed")
+        finally:
+            try:
+                close_driver(driver)
+            except Exception:
+                pass
 
     # Timing summary (compute and log)
     pre_avg = float(np.mean(pre_times)) if pre_times else None
@@ -414,7 +930,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     metrics = {}
     if HAS_COCO and det_json:
         metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_path)
-        # concise accuracy summary line
         mAP = metrics.get("mAP@[.5:.95]")
         mAP50 = metrics.get("mAP@0.5")
         if mAP is not None or mAP50 is not None:
@@ -430,15 +945,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             write_log_line(log_path, "[WARN] Skipping evaluation: no detections were produced.")
 
-    # Save consolidated results JSON (timing + metrics)
     results_summary = {
         "timestamp": _timestamp(),
+        "device": args.device,
         "model": args.model,
         "data_dir": args.data_dir,
         "num_images": len(img_files),
         "conf_thr": args.conf_thr,
         "iou_thr": args.iou_thr,
-        "threads": args.threads,
+        "threads": args.threads if args.device == "cpu" else None,
         "timing_ms": {
             "preprocess_avg": pre_avg,
             "preprocess_p95": pre_p95,
@@ -454,6 +969,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(results_summary, f, ensure_ascii=False, indent=2)
     write_log_line(log_path, f"[INFO] Saved metrics/results to {metrics_path}")
+
+    # Also write a concise accuracy summary for this device
+    acc_record = {
+        "timestamp": _timestamp(),
+        "device": args.device,
+        "images": len(img_files),
+        "mAP": metrics.get("mAP@[.5:.95]") if metrics else None,
+        "mAP50": metrics.get("mAP@0.5") if metrics else None,
+    }
+    acc_path = os.path.join(args.results_dir, f"yolov3_coco_accuracy_{_timestamp()}.json")
+    with open(acc_path, "w", encoding="utf-8") as f:
+        json.dump(acc_record, f, ensure_ascii=False, indent=2)
+    write_log_line(log_path, f"[INFO] Saved accuracy summary to {acc_path}")
 
     write_log_line(log_path, "[INFO] Evaluation finished.")
     return 0
