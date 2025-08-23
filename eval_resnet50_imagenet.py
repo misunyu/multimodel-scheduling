@@ -150,8 +150,24 @@ def run_onnx_inference_cpu(
     sess_opts.intra_op_num_threads = max(1, os.cpu_count() or 1)
     session = ort.InferenceSession(model_path, sess_options=sess_opts, providers=["CPUExecutionProvider"]) 
 
-    input_name = session.get_inputs()[0].name
-    output_name = session.get_outputs()[0].name
+    # Determine input/output names and expected layout dynamically
+    inputs = session.get_inputs()
+    outputs = session.get_outputs()
+    input_name = inputs[0].name if inputs else "data"
+    output_name = outputs[0].name if outputs else None
+    input_shape = inputs[0].shape if inputs else None
+    # Heuristic for layout: NCHW if channel dim is 3 at index 1; NHWC if last dim is 3
+    layout = "NCHW"
+    if isinstance(input_shape, (list, tuple)) and len(input_shape) == 4:
+        c_dim = input_shape[1]
+        last_dim = input_shape[3]
+        if last_dim == 3 or (isinstance(last_dim, str) and str(last_dim).upper() in ("C", "CHANNEL", "CHANNELS")):
+            layout = "NHWC"
+        elif c_dim == 3 or (isinstance(c_dim, str) and str(c_dim).upper() in ("C", "CHANNEL", "CHANNELS")):
+            layout = "NCHW"
+    io_msg = f"[INFO] Model IO - input_name={input_name}, output_name={output_name}, input_shape={input_shape}, layout={layout}"
+    print(io_msg)
+    write_log_line(log_path, io_msg)
 
     last_preds: Dict[str, int] = {}
     last_top5: Optional[Dict[str, List[int]]] = None
@@ -163,7 +179,8 @@ def run_onnx_inference_cpu(
         correct_so_far_top5 = 0
         last_top5 = {}
         for i, (fname, inp) in enumerate(batch_inputs, start=1):
-            outputs = session.run([output_name], {input_name: inp})
+            feed_inp = np.transpose(inp, (0, 2, 3, 1)) if layout == "NHWC" else inp
+            outputs = session.run([output_name] if output_name else None, {input_name: feed_inp})
             logits = outputs[0]
             # logits may be (1,1000) or (1000,), ensure shape
             if logits.ndim == 2:
@@ -203,7 +220,8 @@ def run_onnx_inference_cpu(
     else:
         for r in range(repeats):
             for fname, inp in batch_inputs:
-                outputs = session.run([output_name], {input_name: inp})
+                feed_inp = np.transpose(inp, (0, 2, 3, 1)) if layout == "NHWC" else inp
+                outputs = session.run([output_name] if output_name else None, {input_name: feed_inp})
                 logits = outputs[0]
                 if logits.ndim == 2:
                     pred_idx = int(np.argmax(logits[0]))

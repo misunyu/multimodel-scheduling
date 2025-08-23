@@ -157,6 +157,29 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
         load_end = time.time()
         load_time_ms = (load_end - load_start) * 1000.0
 
+        # Determine input/output names and expected layout dynamically
+        try:
+            inputs = session.get_inputs()
+            outputs = session.get_outputs()
+            input_name = inputs[0].name if inputs else "data"
+            output_name = outputs[0].name if outputs else None
+            input_shape = inputs[0].shape if inputs else None
+            # Heuristic for layout: NCHW if channel dim is 3 at index 1; NHWC if last dim is 3
+            layout = "NCHW"
+            if isinstance(input_shape, (list, tuple)) and len(input_shape) == 4:
+                c_dim = input_shape[1]
+                last_dim = input_shape[3]
+                if last_dim == 3 or (isinstance(last_dim, str) and last_dim.upper() in ("C", "CHANNEL", "CHANNELS")):
+                    layout = "NHWC"
+                elif c_dim == 3 or (isinstance(c_dim, str) and c_dim.upper() in ("C", "CHANNEL", "CHANNELS")):
+                    layout = "NCHW"
+            print(f"[ResNet CPU] Model IO - input_name={input_name}, output_name={output_name}, input_shape={input_shape}, layout={layout}")
+        except Exception as e:
+            print(f"[ResNet CPU] Warning: could not introspect model IO names: {e}")
+            input_name = "data"
+            output_name = None
+            layout = "NCHW"
+
         # Log model load
         log_model_load(
             pipeline="resnet50",
@@ -179,19 +202,26 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
             pre_s = time.time()
             # Waiting time until preprocessing begins (for parity with YOLO)
             wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            input_tensor = resnet50_preprocess_local(img)
+            tensor_nchw = resnet50_preprocess_local(img)
+            # Adapt to model's expected layout
+            if layout == "NHWC":
+                input_tensor = np.transpose(tensor_nchw, (0, 2, 3, 1))
+            else:
+                input_tensor = tensor_nchw
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
             
             try:
                 infer_start = time.time()
-                output = session.run(None, {"data": input_tensor})
+                outputs = session.run([output_name] if output_name else None, {input_name: input_tensor})
                 infer_end = time.time()
                 
                 infer_time_ms = (infer_end - infer_start) * 1000.0
                 
                 post_s = time.time()
-                class_id = int(np.argmax(output[0]))
+                logits = outputs[0]
+                logits = np.squeeze(logits)
+                class_id = int(np.argmax(logits))
                 class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
                 cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 post_e = time.time()
