@@ -1,16 +1,11 @@
 """
 Model processing functions for the multimodel scheduling application.
 """
-import os
 import time
-import json
 import cv2
 import numpy as np
 import onnxruntime as ort
 import queue
-from datetime import datetime
-
-# import npu
 
 # Import local modules
 from image_processing import (
@@ -21,7 +16,7 @@ from image_processing import (
 )
 
 # Modularized timing/logging utilities (moved to dedicated module)
-from timing_utils import should_record_time, log_model_load, log_inference
+from timing_utils import log_model_load, log_inference
 
 # Load ImageNet class labels
 with open("imagenet_classes.txt", "r") as f:
@@ -358,7 +353,6 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
             npu_memory_load_time_ms=npu_memory_load_time_ms,
         )
 
-        frame_delay = 1.0 / 30.0
 
         while not shutdown_event.is_set():
             try:

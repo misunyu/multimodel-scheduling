@@ -4,7 +4,7 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 
-# import npu
+import npu
 # from NeublaDriver import NeublaDriver
 
 from typing import List, Tuple, Dict, Any, Optional

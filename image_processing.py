@@ -3,6 +3,7 @@ Image processing functions for the multimodel scheduling application.
 """
 import cv2
 import numpy as np
+import os
 
 # Constants (default). Will be overridden by model input if provided at call time
 input_width = input_height = 608
@@ -126,7 +127,7 @@ def yolo_postprocess_cpu(outputs, original_img, meta, confidence_thres=0.5, iou_
       C) [1,N,6]  (좌표 4개 + score + class)  ← 좌표 형식 자동 추정
     최종 드로잉은 현재 캔버스(original_img) 크기 기준.
     """
-    import numpy as np, cv2, os
+    # using module-level imports (np, cv2, os)
 
     # ---------- helpers ----------
     def ltwh_to_xyxy(ltwh):
