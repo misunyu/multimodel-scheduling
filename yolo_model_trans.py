@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Fix YOLO ONNX input to 1x3x608x608, run inference on a test image,
 # and optionally evaluate accuracy on one image.
-# Comments in English by request.
 
 import os, json
 from typing import List, Tuple, Dict, Any
@@ -13,11 +11,9 @@ import onnx
 from onnx import shape_inference, helper, numpy_helper, TensorProto
 import onnxruntime as ort
 
-# ======= Fixed model paths per request =======
+# ======= Fixed model paths =======
 INPUT_MODEL  = "/Users/msyu/Library/CloudStorage/Dropbox/Demo/models/yolov3-10_cpu.onnx"
 OUTPUT_MODEL = "/Users/msyu/Library/CloudStorage/Dropbox/Demo/models/yolov3-10_cpu_608.onnx"
-
-# Reference model whose output shapes we mirror, and converted model path
 REF_MODEL        = "/Users/msyu/Library/CloudStorage/Dropbox/Demo/models/yolov3_neubla_movingaverage.onnx"
 CONVERTED_MODEL  = "/Users/msyu/Library/CloudStorage/Dropbox/Demo/models/yolov3-10_cpu_608_float32_like_ref.onnx"
 
@@ -67,29 +63,7 @@ def fix_model_input(input_path: str, output_path: str) -> None:
     onnx.checker.check_model(model)
     onnx.save(model, output_path)
 
-# ======= 1.5) Make outputs match reference shapes and cast to float32 =======
-def _all_value_dims(vi: onnx.ValueInfoProto) -> Tuple[bool, List[int]]:
-    dims = []
-    for d in vi.type.tensor_type.shape.dim:
-        if d.HasField("dim_value"):
-            dims.append(int(d.dim_value))
-        else:
-            return False, []
-    return True, dims
-
-def _collect_all_names(g: onnx.GraphProto) -> set:
-    names = {vi.name for vi in g.input} | {vi.name for vi in g.output} | {init.name for init in g.initializer}
-    for n in g.node:
-        for x in n.input: names.add(x)
-        for y in n.output: names.add(y)
-    return names
-
-def _find_producer(g: onnx.GraphProto, tensor_name: str):
-    for n in g.node:
-        if tensor_name in n.output:
-            return n
-    return None
-
+# ======= 1.5) Cast outputs to float32 and (optionally) reshape =======
 def convert_outputs_like_reference(src_path: str, ref_path: str, dst_path: str) -> None:
     import numpy as np
     from onnx import helper, numpy_helper, TensorProto, shape_inference, checker, load, save
@@ -116,7 +90,6 @@ def convert_outputs_like_reference(src_path: str, ref_path: str, dst_path: str) 
         used.add(name); return name
 
     src = load(src_path)
-    # infer shapes first so src outputs may have concrete dims
     try: src = shape_inference.infer_shapes(src)
     except Exception: pass
     ref = load(ref_path)
@@ -131,10 +104,7 @@ def convert_outputs_like_reference(src_path: str, ref_path: str, dst_path: str) 
         out_src = src.graph.output[i]
         out_ref = ref.graph.output[i]
 
-        # keep original producer output name
         old_name = out_src.name
-
-        # float32 cast
         cast_out = unique(f"{old_name}_f32", used)
         cast_node = helper.make_node(
             "Cast", inputs=[old_name], outputs=[cast_out],
@@ -144,9 +114,8 @@ def convert_outputs_like_reference(src_path: str, ref_path: str, dst_path: str) 
         src.graph.node.append(cast_node)
         prev = cast_out
 
-        # decide reshape only if element counts match
         ref_dims, ref_known = dims_and_known(out_ref)
-        src_dims, src_known = dims_and_known(out_src)  # capture BEFORE we overwrite meta
+        src_dims, src_known = dims_and_known(out_src)
         ref_ne = num_elems(ref_dims) if ref_known else None
         src_ne = num_elems(src_dims) if src_known else None
         can_reshape = (ref_ne is not None) and (src_ne is not None) and (ref_ne == src_ne)
@@ -162,24 +131,23 @@ def convert_outputs_like_reference(src_path: str, ref_path: str, dst_path: str) 
             )
             src.graph.node.append(reshape_node)
             prev = reshaped
-        # else: skip reshape; sizes incompatible
 
-        # redirect graph output and set meta
         out_src.name = prev
         out_src.type.tensor_type.elem_type = TensorProto.FLOAT
-        # copy reference shape meta as annotation only
-        del out_src.type.tensor_type.shape.dim[:]
-        for d in out_ref.type.tensor_type.shape.dim:
-            dd = out_src.type.tensor_type.shape.dim.add()
-            if d.HasField("dim_value"): dd.dim_value = d.dim_value
-            elif d.HasField("dim_param"): dd.dim_param = d.dim_param
+
+        # Only copy ref shape meta if we actually reshaped; otherwise keep original to avoid warnings
+        if can_reshape:
+            del out_src.type.tensor_type.shape.dim[:]
+            for d in out_ref.type.tensor_type.shape.dim:
+                dd = out_src.type.tensor_type.shape.dim.add()
+                if d.HasField("dim_value"): dd.dim_value = d.dim_value
+                elif d.HasField("dim_param"): dd.dim_param = d.dim_param
 
     try: src = shape_inference.infer_shapes(src)
     except Exception: pass
     checker.check_model(src)
     save(src, dst_path)
     print(f"Converted model saved to: {dst_path}")
-
 
 # ======= 2) Pre/Post =======
 def letterbox(im: Image.Image, new_shape: Tuple[int,int]) -> Tuple[np.ndarray, float, Tuple[int,int]]:
@@ -255,17 +223,16 @@ def parse_outputs(session: ort.InferenceSession, outputs: List[np.ndarray]) -> T
     Returns (boxes_xyxy, scores, cls_ids, already_on_original_scale).
 
     지원 레이아웃
-      A) 인덱스 기반 NMS: boxes [1,N,4] 또는 [N,4], scores [1,C,N] 또는 [C,N], indices [M,3] (int)
+      A) 인덱스 기반 NMS: boxes [1,N,4]/[N,4], scores [1,C,N]/[C,N], indices [M,3] (int)
       B) per-class scores: scores [1,C,N]/[C,N] + boxes [1,N,4]/[N,4]
       C) flat: [N, 5+num_classes] (xywh+obj+cls)
     """
     out_meta = session.get_outputs()
     arrs = {out_meta[i].name: np.asarray(outputs[i]) for i in range(len(out_meta))}
 
-    # ---- 후보 탐색 ----
-    boxes_arr = None           # (N,4) float
-    scores_2d = None           # (C,N) float
-    indices_2d = None          # (M,3) int
+    boxes_arr = None   # (N,4) float
+    scores_2d = None   # (C,N) float
+    indices_2d = None  # (M,3) int
 
     # boxes 후보
     for a in arrs.values():
@@ -296,44 +263,44 @@ def parse_outputs(session: ort.InferenceSession, outputs: List[np.ndarray]) -> T
     for a in arrs.values():
         a2 = np.squeeze(a)
         if a2.ndim == 2 and a2.shape[1] == 3 and np.issubdtype(a2.dtype, np.integer):
-            indices_2d = a2.astype(np.int32)  # (M,3): [batch, class, box]
+            indices_2d = a2.astype(np.int32)
             break
         if a.ndim == 3 and a.shape[-1] == 3 and np.issubdtype(a.dtype, np.integer):
             indices_2d = a.reshape(-1, 3).astype(np.int32)
             break
 
-    # ---- Case A: indices가 있는 경우 (가장 신뢰도 높음) ----
+    # ---- Case A: indices ----
     if boxes_arr is not None and scores_2d is not None and indices_2d is not None:
         C, N = scores_2d.shape
-        picked_boxes = []
-        picked_scores = []
-        picked_cls = []
+        picked_boxes, picked_scores, picked_cls = [], [], []
         for b, c, j in indices_2d:
             if 0 <= c < C and 0 <= j < N:
                 picked_boxes.append(boxes_arr[j])
                 picked_scores.append(scores_2d[c, j])
                 picked_cls.append(c)
-        if len(picked_boxes) == 0:
-            return np.zeros((0,4), np.float32), np.zeros((0,), np.float32), np.zeros((0,), np.int32), True
+        if not picked_boxes:
+            return np.zeros((0,4), np.float32), np.zeros((0,), np.float32), np.zeros((0,), np.int32), False
         boxes = np.stack(picked_boxes).astype(np.float32)
+        # TF 스타일 (y1,x1,y2,x2) → (x1,y1,x2,y2)
+        boxes = boxes[:, [1,0,3,2]]
         scores = np.array(picked_scores, dtype=np.float32)
         cls_ids = np.array(picked_cls, dtype=np.int32)
         m = scores >= CONF_THRES
-        boxes, scores, cls_ids = boxes[m], scores[m], cls_ids[m]
-        return boxes, scores, cls_ids, True
+        return boxes[m], scores[m], cls_ids[m], True  # 레터박스 스케일로 간주
 
     # ---- Case B: per-class scores + boxes ----
     if boxes_arr is not None and scores_2d is not None:
         S = scores_2d
-        # 로짓이면 시그모이드
-        if S.max() > 1.0 or S.min() < 0.0:
+        if S.max() > 1.0 or S.min() < 0.0:  # logits -> sigmoid
             S = 1.0 / (1.0 + np.exp(-S))
         best_cls = np.argmax(S, axis=0)                 # (N,)
         best_score = S[best_cls, np.arange(S.shape[1])] # (N,)
         m = best_score >= CONF_THRES
         if not np.any(m):
-            return np.zeros((0,4), np.float32), np.zeros((0,), np.float32), np.zeros((0,), np.int32), True
+            return np.zeros((0,4), np.float32), np.zeros((0,), np.float32), np.zeros((0,), np.int32), False
         boxes = boxes_arr[m]
+        # TF 스타일 (y1,x1,y2,x2) → (x1,y1,x2,y2)
+        boxes = boxes[:, [1,0,3,2]]
         scores = best_score[m].astype(np.float32)
         cls_ids = best_cls[m].astype(np.int32)
         # per-class NMS
@@ -343,7 +310,7 @@ def parse_outputs(session: ort.InferenceSession, outputs: List[np.ndarray]) -> T
             kidx = nms(boxes[idx], scores[idx], IOU_THRES)
             keep.extend(idx[kidx])
         keep = np.array(keep, dtype=np.int32)
-        return boxes[keep], scores[keep], cls_ids[keep], True
+        return boxes[keep], scores[keep], cls_ids[keep], True  # 레터박스 스케일로 간주
 
     # ---- Case C: flat [N, 5+num_classes] ----
     for a in arrs.values():
@@ -353,10 +320,7 @@ def parse_outputs(session: ort.InferenceSession, outputs: List[np.ndarray]) -> T
             xywh = flat[:, :4]
             obj = flat[:, 4]
             cls_part = flat[:, 5:]
-            if cls_part.max() > 1.0 or cls_part.min() < 0.0:
-                cls_scores = 1.0 / (1.0 + np.exp(-cls_part))
-            else:
-                cls_scores = cls_part
+            cls_scores = 1.0 / (1.0 + np.exp(-cls_part)) if (cls_part.max() > 1.0 or cls_part.min() < 0.0) else cls_part
             best_cls = cls_scores.argmax(axis=1)
             best_cls_score = cls_scores.max(axis=1)
             conf = obj * best_cls_score
@@ -368,13 +332,13 @@ def parse_outputs(session: ort.InferenceSession, outputs: List[np.ndarray]) -> T
             cls_ids = best_cls[mask].astype(np.int32)
             keep_all = []
             for c in np.unique(cls_ids):
-                m = np.where(cls_ids == c)[0]
-                kidx = nms(xyxy[m], scores[m], IOU_THRES)
-                keep_all.extend(m[kidx])
+                mm = np.where(cls_ids == c)[0]
+                kidx = nms(xyxy[mm], scores[mm], IOU_THRES)
+                keep_all.extend(mm[kidx])
             keep_all = np.array(keep_all, dtype=np.int32)
             return xyxy[keep_all], scores[keep_all], cls_ids[keep_all], False
 
-    # ---- Fallback ----
+    # Fallback
     return np.zeros((0,4), np.float32), np.zeros((0,), np.float32), np.zeros((0,), np.int32), False
 
 
@@ -419,13 +383,11 @@ def eval_ap50(dets: List[Dict], gts: List[Dict]) -> Dict[str, float]:
     ap = 0.0
     for r_th in [i/10 for i in range(11)]:
         p = np.max(precisions[recalls >= r_th]) if np.any(recalls >= r_th) else 0.0
-    # keep last p if available
         ap += p
     ap /= 11.0
     precision = precisions[-1] if precisions.size else 0.0
     recall = recalls[-1] if recalls.size else 0.0
     return {"AP50": float(ap), "precision": float(precision), "recall": float(recall)}
-
 
 def verify_converted_vs_original(inp: np.ndarray,
                                  meta: Dict[str, Any],
@@ -433,12 +395,6 @@ def verify_converted_vs_original(inp: np.ndarray,
                                  conv_model_path: str,
                                  atol: float = 1e-5,
                                  rtol: float = 1e-4) -> None:
-    """
-    Run both models on the same input and compare outputs.
-    - For float outputs: passes if max_abs_diff <= atol OR max_rel_diff <= rtol.
-    - For int/bool outputs: exact match.
-    - If shapes differ but element count matches, reshape for value-wise comparison.
-    """
     def run_model(path: str):
         sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
         feeds = build_input_feed(sess, inp, meta)
@@ -452,7 +408,6 @@ def verify_converted_vs_original(inp: np.ndarray,
     n = min(len(arrsA), len(arrsB))
     print(f"[VERIFY] base outputs={len(arrsA)}, converted outputs={len(arrsB)}, compare first {n}")
 
-    # Try name-based pairing when converted names are suffixed with "_f32..."
     name_map = {}
     for i, na in enumerate(namesA):
         cand = [j for j, nb in enumerate(namesB) if nb.startswith(na)]
@@ -469,12 +424,9 @@ def verify_converted_vs_original(inp: np.ndarray,
         a = np.asarray(arrsA[i])
         b = np.asarray(arrsB[j])
 
-        # Align element count if only shape differs
         if a.size == b.size and a.shape != b.shape:
-            try:
-                b = b.reshape(a.shape)
-            except Exception:
-                pass  # keep original if reshape impossible
+            try: b = b.reshape(a.shape)
+            except Exception: pass
 
         same_dtype_class = (np.issubdtype(a.dtype, np.integer) and np.issubdtype(b.dtype, np.integer)) or \
                            (np.issubdtype(a.dtype, np.bool_) and np.issubdtype(b.dtype, np.bool_))
@@ -504,50 +456,118 @@ def verify_converted_vs_original(inp: np.ndarray,
 
     print(f"[VERIFY RESULT] {'PASS' if all_pass else 'FAIL'}")
 
-
 # ======= 5) Main =======
 def run(image_path: str, gt_json: str = None) -> None:
+    # 1) Prepare model
     if not os.path.exists(OUTPUT_MODEL):
         fix_model_input(INPUT_MODEL, OUTPUT_MODEL)
 
     convert_outputs_like_reference(OUTPUT_MODEL, REF_MODEL, CONVERTED_MODEL)
     model_for_infer = CONVERTED_MODEL
 
+    # 2) Preprocess & sanity check converted vs base
     inp, meta = preprocess(image_path)
-
     verify_converted_vs_original(inp, meta, OUTPUT_MODEL, CONVERTED_MODEL, atol=1e-5, rtol=1e-4)
 
+    # 3) Inference
     sess = ort.InferenceSession(model_for_infer, providers=["CPUExecutionProvider"])
     feeds = build_input_feed(sess, inp, meta)
-
     out_names = [o.name for o in sess.get_outputs()]
     pred = sess.run(out_names, feeds)
 
-    # DEBUG: inspect outputs
+    # Debug: print raw outputs
     for i, o in enumerate(sess.get_outputs()):
         arr = np.asarray(pred[i])
         mn = float(arr.min()) if arr.size else 0.0
         mx = float(arr.max()) if arr.size else 0.0
         print(f"[OUT] {o.name}: shape={arr.shape}, dtype={arr.dtype}, min={mn:.4f}, max={mx:.4f}")
 
+    # 4) Parse detections
     boxes, scores, cls_ids, already_scaled = parse_outputs(sess, pred)
-    if not already_scaled and boxes.shape[0] > 0:
+
+    # De-letterbox ONLY if outputs are not on the original image scale
+    if boxes.shape[0] > 0 and (not already_scaled):
         boxes = deletterbox_boxes(boxes, meta)
 
     print(f"Detections: {len(boxes)} (conf >= {CONF_THRES})")
     for i in range(min(20, len(boxes))):
-        x1,y1,x2,y2 = boxes[i].tolist()
+        x1, y1, x2, y2 = boxes[i].tolist()
         c = int(cls_ids[i])
         name = COCO80[c] if 0 <= c < len(COCO80) else str(c)
         print(f"[{i:02d}] {name:>12s}  conf={scores[i]:.3f}  box=({x1:.1f},{y1:.1f},{x2:.1f},{y2:.1f})")
 
-    if gt_json and os.path.exists(gt_json):
-        with open(gt_json, "r") as f:
-            gt = json.load(f)
-        gt_objs = [{"cls": int(o["cls"]),
-                    "bbox": [float(o["bbox"][0]), float(o["bbox"][1]),
-                             float(o["bbox"][2]), float(o["bbox"][3])]}
-                   for o in gt.get("objects", []) if len(o.get("bbox", []))==4]
+    # 5) Load GT (custom JSON → sidecar → COCO)
+    gt_loaded = False
+    gt_objs: List[Dict[str, Any]] = []
+
+    # (a) custom JSON path if provided
+    if gt_json and isinstance(gt_json, str) and os.path.isfile(gt_json):
+        try:
+            with open(gt_json, "r") as f:
+                gt = json.load(f)
+            gt_objs = [
+                {"cls": int(o["cls"]),
+                 "bbox": [float(o["bbox"][0]), float(o["bbox"][1]),
+                          float(o["bbox"][2]), float(o["bbox"][3])]}
+                for o in gt.get("objects", []) if len(o.get("bbox", [])) == 4
+            ]
+            print(f"Loaded GT from file: {gt_json}")
+            gt_loaded = True
+        except Exception as e:
+            print(f"Failed to load GT JSON '{gt_json}': {e}")
+
+    # (b) sidecar next to image (same basename with .json)
+    if not gt_loaded:
+        sidecar = os.path.splitext(image_path)[0] + ".json"
+        if os.path.isfile(sidecar):
+            try:
+                with open(sidecar, "r") as f:
+                    gt = json.load(f)
+                gt_objs = [
+                    {"cls": int(o["cls"]),
+                     "bbox": [float(o["bbox"][0]), float(o["bbox"][1]),
+                              float(o["bbox"][2]), float(o["bbox"][3])]}
+                    for o in gt.get("objects", []) if len(o.get("bbox", [])) == 4
+                ]
+                print(f"Loaded GT from sidecar: {sidecar}")
+                gt_loaded = True
+            except Exception as e:
+                print(f"Failed to load sidecar GT '{sidecar}': {e}")
+
+    # (c) COCO annotation auto-discovery
+    if not gt_loaded:
+        try:
+            base = os.path.basename(image_path)
+            split = "val2017" if "val2017" in image_path else ("train2017" if "train2017" in image_path else None)
+            if split is not None:
+                ann_path = os.path.join("./datasets/coco/annotations", f"instances_{split}.json")
+                if os.path.isfile(ann_path):
+                    with open(ann_path, "r") as f:
+                        coco = json.load(f)
+                    cat_id_to_name = {c["id"]: c["name"] for c in coco.get("categories", [])}
+                    name_to_idx = {name: i for i, name in enumerate(COCO80)}
+                    img_rec = next((im for im in coco.get("images", []) if im.get("file_name") == base), None)
+                    if img_rec is not None:
+                        img_id = img_rec.get("id")
+                        anns = [a for a in coco.get("annotations", [])
+                                if a.get("image_id") == img_id and not a.get("iscrowd", 0)]
+                        gts = []
+                        for a in anns:
+                            cname = cat_id_to_name.get(a.get("category_id"))
+                            if cname is None or cname not in name_to_idx:
+                                continue
+                            cls_idx = name_to_idx[cname]
+                            x, y, w, h = a.get("bbox", [0, 0, 0, 0])
+                            gts.append({"cls": int(cls_idx),
+                                        "bbox": [float(x), float(y), float(x + w), float(y + h)]})
+                        gt_objs = gts
+                        print(f"Loaded GT from COCO annotations: {ann_path} (image: {base}, objects: {len(gt_objs)})")
+                        gt_loaded = True
+        except Exception as e:
+            print(f"COCO GT auto-discovery failed: {e}")
+
+    # 6) Evaluate if GT available
+    if gt_loaded:
         det_list = [{"cls": int(cls_ids[i]), "bbox": boxes[i].tolist(), "score": float(scores[i])}
                     for i in range(len(boxes))]
         metrics = eval_ap50(det_list, gt_objs)
@@ -555,9 +575,48 @@ def run(image_path: str, gt_json: str = None) -> None:
     else:
         print("GT not provided. Skipping accuracy. Provide JSON: {'objects':[{'cls':int,'bbox':[x1,y1,x2,y2]}]}")
 
+def debug_iou_per_det(dets, gts, top_k=10):
+    # dets: [{'cls':int,'bbox':[x1,y1,x2,y2],'score':float}]
+    # gts : [{'cls':int,'bbox':[x1,y1,x2,y2]}]
+    def iou(a,b):
+        x1=max(a[0],b[0]); y1=max(a[1],b[1])
+        x2=min(a[2],b[2]); y2=min(a[3],b[3])
+        inter=max(0.0,x2-x1)*max(0.0,y2-y1)
+        ua=(a[2]-a[0])*(a[3]-a[1]); ub=(b[2]-b[0])*(b[3]-b[1])
+        return inter/max(ua+ub-inter,1e-9)
+
+    for i,d in enumerate(sorted(dets, key=lambda x: x['score'], reverse=True)[:top_k]):
+        same_cls = [g for g in gts if g['cls']==d['cls']]
+        ious = [iou(d['bbox'], g['bbox']) for g in same_cls] if same_cls else []
+        best_iou = max(ious) if ious else 0.0
+        print(f"[DBG] det#{i:02d} cls={d['cls']} score={d['score']:.3f} best_IoU_same_cls={best_iou:.3f}  "
+              f"bbox={d['bbox']}")
+
+def debug_matches(boxes, scores, cls_ids, gt_objs, top_k=15):
+    def iou(a,b):
+        x1=max(a[0],b[0]); y1=max(a[1],b[1])
+        x2=min(a[2],b[2]); y2=min(a[3],b[3])
+        inter=max(0.0,x2-x1)*max(0.0,y2-y1)
+        ua=(a[2]-a[0])*(a[3]-a[1]); ub=(b[2]-b[0])*(b[3]-b[1])
+        return inter/max(ua+ub-inter,1e-9)
+
+    order = np.argsort(-scores)
+    for k,i in enumerate(order[:top_k]):
+        bb = boxes[i].tolist(); pc = int(cls_ids[i])
+        # best IoU ignoring class
+        j_best, best_iou = -1, 0.0
+        for j, g in enumerate(gt_objs):
+            ii = iou(bb, g["bbox"])
+            if ii > best_iou: j_best, best_iou = j, ii
+        gt_cls = gt_objs[j_best]["cls"] if j_best>=0 else -1
+        same = (gt_cls == pc)
+        pred_name = COCO80[pc] if 0 <= pc < len(COCO80) else str(pc)
+        gt_name   = COCO80[gt_cls] if 0 <= gt_cls < len(COCO80) else "-"
+        print(f"[MATCH] #{k:02d} pred={pred_name:12s} vs gt={gt_name:12s}  IoU={best_iou:.3f}  same_cls={same}")
+
 if __name__ == "__main__":
-    TEST_IMAGE = "./datasets/coco/val2017/000000000139.jpg"  # <-- change this
-    GT_JSON    = None
+    TEST_IMAGE = "./datasets/coco/val2017/000000000139.jpg"
+    GT_JSON    = None  # or custom GT json path
     if not os.path.exists(TEST_IMAGE):
         raise FileNotFoundError("Set TEST_IMAGE to a valid path.")
     run(TEST_IMAGE, GT_JSON)
