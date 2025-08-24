@@ -13,6 +13,12 @@ from typing import List, Tuple, Dict, Any, Optional
 import numpy as np
 import cv2
 import onnxruntime as ort
+# Import helpers from the CPU reference implementation for updated YOLOv3 outputs
+try:
+    import yolo_model_trans as ymt
+    HAS_YMT = True
+except Exception:
+    HAS_YMT = False
 
 # Optional: COCO evaluation
 try:
@@ -25,7 +31,7 @@ except Exception:
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_RESULTS_DIR = os.path.join(REPO_ROOT, "results")
 DEFAULT_DATA_DIR = os.path.join(REPO_ROOT, "datasets", "coco")
-YOLO_MODEL_PATH = os.path.join(REPO_ROOT, "models", "yolov3_big", "model", "yolov3_big.onnx")
+YOLO_MODEL_PATH = os.path.join(REPO_ROOT, "models", "yolov3_small", "model", "yolov3_small.onnx")
 
 # COCO 2017 val URLs
 COCO_VAL_IMAGES_URL = "http://images.cocodataset.org/zips/val2017.zip"
@@ -284,7 +290,7 @@ def evaluate_coco(dets: List[Dict[str, Any]], ann_json: str, img_ids_subset: Opt
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Evaluate YOLOv3 model on COCO 2017 val using CPU or NPU.")
+    parser = argparse.ArgumentParser(description="Evaluate YOLOv3 model on COCO 2017 val using CPU.")
     parser.add_argument("--model", type=str, default=YOLO_MODEL_PATH, help="Path to YOLOv3 ONNX model (CPU path)")
     parser.add_argument("--data-dir", type=str, default=DEFAULT_DATA_DIR, help="COCO data root directory")
     parser.add_argument("--results-dir", type=str, default=DEFAULT_RESULTS_DIR, help="Directory to store logs/results")
@@ -294,9 +300,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--iou-thr", type=float, default=0.5, help="IoU threshold for NMS")
     parser.add_argument("--threads", type=int, default=1, help="Number of intra/inter op threads for ORT (CPU only)")
     parser.add_argument("--save-dets", action="store_true", help="Save detection JSON for COCO eval")
-    parser.add_argument("--device", type=str, choices=["cpu", "npu", "both"], default="cpu", help="Device to run inference on: cpu, npu, or both (sequential)")
-    parser.add_argument("--npu-id", type=int, default=0, help="NPU device ID (default: 0)")
-    parser.add_argument("--npu-onnx", type=str, default=None, help="Path to combined quantized YOLOv3 ONNX for NPU (no partitions). If not provided, a default path is used.")
+    # NPU code path disabled per request; device is forced to CPU
+    parser.add_argument("--device", type=str, choices=["cpu"], default="cpu", help="Device to run inference on: cpu only (NPU disabled)")
 
     args = parser.parse_args(argv)
 
@@ -330,7 +335,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         img_ids_subset = None
 
     # Special mode: run both CPU and NPU sequentially and write combined results
-    if args.device == "both":
+    # NPU/BOTH execution disabled per request; keeping code for reference but not reachable
+    if False and args.device == "both":
         run_ts = _timestamp()
 
         def run_cpu_eval() -> Dict[str, Any]:
@@ -707,7 +713,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     pre_times: List[float] = []
     post_times: List[float] = []
 
-    if args.device == "cpu":
+    if True:  # CPU path only (NPU disabled)
         if not os.path.isfile(args.model):
             write_log_line(log_path, f"[ERROR] Model not found at {args.model}")
             return 1
@@ -729,23 +735,79 @@ def main(argv: Optional[List[str]] = None) -> int:
                 write_log_line(log_path, f"[WARN] Failed to read image: {img_path}")
                 continue
             t_pre0 = time.time()
-            inp, meta = preprocess(img0, (input_w, input_h))
+            if HAS_YMT:
+                # Use unified preprocessing from yolo_model_trans (includes letterbox and meta fields)
+                try:
+                    inp, meta2 = ymt.preprocess(img_path)
+                    meta = None  # not used in HAS_YMT branch
+                except Exception:
+                    # Fallback to local preprocess if anything goes wrong
+                    inp, meta = preprocess(img0, (input_w, input_h))
+                    meta2 = {
+                        "orig_w": int(meta["orig_shape"][1]),
+                        "orig_h": int(meta["orig_shape"][0]),
+                        "ratio": float(meta["ratio"]),
+                        "pad_w": int(meta["pad"][0]),
+                        "pad_h": int(meta["pad"][1]),
+                    }
+            else:
+                inp, meta = preprocess(img0, (input_w, input_h))
+                meta2 = {
+                    "orig_w": int(meta["orig_shape"][1]),
+                    "orig_h": int(meta["orig_shape"][0]),
+                    "ratio": float(meta["ratio"]),
+                    "pad_w": int(meta["pad"][0]),
+                    "pad_h": int(meta["pad"][1]),
+                }
             t_pre1 = time.time()
             pre_times.append((t_pre1 - t_pre0) * 1000)
 
+            # Set thresholds in yolo_model_trans if available
+            if HAS_YMT:
+                try:
+                    ymt.CONF_THRES = float(args.conf_thr)
+                    ymt.IOU_THRES = float(args.iou_thr)
+                except Exception:
+                    pass
+
+            # Build input feed using yolo_model_trans if available
+            feeds = {input_name: inp}
+            if HAS_YMT:
+                try:
+                    feeds = ymt.build_input_feed(session, inp, meta2)
+                except Exception:
+                    feeds = {input_name: inp}
+
             t_inf0 = time.time()
-            outputs = session.run(None, {input_name: inp})
+            out_names = [o.name for o in session.get_outputs()]
+            outputs = session.run(out_names, feeds)
             t_inf1 = time.time()
             inf_times.append((t_inf1 - t_inf0) * 1000)
 
             t_post0 = time.time()
-            dets = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
+            dets_list = []
+            if HAS_YMT:
+                try:
+                    boxes, scores, cls_ids, already_scaled = ymt.parse_outputs(session, outputs)
+                    if boxes.shape[0] > 0 and not already_scaled:
+                        boxes = ymt.deletterbox_boxes(boxes, meta2)
+                    for bi in range(len(boxes)):
+                        x1, y1, x2, y2 = boxes[bi].tolist()
+                        dets_list.append((x1, y1, x2, y2, float(scores[bi]), int(cls_ids[bi])))
+                except Exception:
+                    # Fallback to legacy detector if parsing fails
+                    if 'meta' in locals() and meta is not None:
+                        dets_list = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
+                    else:
+                        dets_list = []
+            else:
+                dets_list = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
             t_post1 = time.time()
             post_times.append((t_post1 - t_post0) * 1000)
 
             if HAS_COCO and fname in img_id_map:
                 image_id = img_id_map[fname]
-                for x1, y1, x2, y2, score, cls_idx in dets:
+                for x1, y1, x2, y2, score, cls_idx in dets_list:
                     w = x2 - x1
                     h = y2 - y1
                     cat_id = COCO80_TO_COCO91_CLASS[cls_idx] if 0 <= cls_idx < len(COCO80_TO_COCO91_CLASS) else 1
