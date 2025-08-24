@@ -251,6 +251,9 @@ def build_session(model_path: str, intra_op: int = 1, inter_op: int = 1) -> ort.
     so = ort.SessionOptions()
     so.intra_op_num_threads = intra_op
     so.inter_op_num_threads = inter_op
+    # Reduce ORT log verbosity to suppress benign shape merge warnings from YOLO NMS graph
+    # 0=VERBOSE,1=INFO,2=WARNING,3=ERROR,4=FATAL
+    so.log_severity_level = 3
     providers = ["CPUExecutionProvider"]
     return ort.InferenceSession(model_path, sess_options=so, providers=providers)
 

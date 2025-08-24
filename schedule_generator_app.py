@@ -504,12 +504,16 @@ class ONNXProfilerApp(QMainWindow):
         except Exception as e:
             self.log_message(f"[Warn] resnet50_preprocess_local timing failed: {e}")
         try:
-            avg3 = avg_time_ms(yolo_postprocess_cpu, yolo_cpu_output, raw_img.copy(), img_w, img_h)
+            # Wrap CPU output to include batch dimension and build meta with no letterbox
+            cpu_out_wrapped = [yolo_cpu_output0[None, ...]]
+            meta_dummy = {"orig_w": img_w, "orig_h": img_h, "ratio": 1.0, "pad": (0, 0), "input_size": (608, 608)}
+            avg3 = avg_time_ms(yolo_postprocess_cpu, cpu_out_wrapped, raw_img.copy(), meta_dummy)
             results.append(("yolo_postprocess_cpu", avg3))
         except Exception as e:
             self.log_message(f"[Warn] yolo_postprocess_cpu timing failed: {e}")
         try:
-            avg4 = avg_time_ms(yolo_postprocess_npu, yolo_npu_output, raw_img.copy(), img_w, img_h)
+            meta_dummy = {"orig_w": img_w, "orig_h": img_h, "ratio": 1.0, "pad": (0, 0), "input_size": (608, 608)}
+            avg4 = avg_time_ms(yolo_postprocess_npu, yolo_npu_output, raw_img.copy(), meta_dummy)
             results.append(("yolo_postprocess_npu", avg4))
         except Exception as e:
             self.log_message(f"[Warn] yolo_postprocess_npu timing failed: {e}")

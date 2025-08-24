@@ -10,7 +10,7 @@ import onnxruntime as ort
 import queue
 from datetime import datetime
 
-import npu
+# import npu
 
 # Import local modules
 from image_processing import (
@@ -75,7 +75,59 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
         # Load the YOLO model
         print(f"[YOLO CPU] Loading model...")
         load_start = time.time()
-        session = ort.InferenceSession("models/yolov3_small/model/yolov3_small.onnx")
+        # Create ONNX Runtime session with reduced log verbosity to suppress shape merge warnings
+        so = ort.SessionOptions()
+        # 0=VERBOSE,1=INFO,2=WARNING,3=ERROR,4=FATAL
+        so.log_severity_level = 3
+        try:
+            session = ort.InferenceSession(
+                "models/yolov3_small/model/yolov3_small.onnx",
+                sess_options=so,
+                providers=["CPUExecutionProvider"]
+            )
+        except TypeError:
+            # Fallback for older onnxruntime without providers argument
+            session = ort.InferenceSession(
+                "models/yolov3_small/model/yolov3_small.onnx",
+                sess_options=so
+            )
+        # Determine input/output dynamically
+        try:
+            inputs = session.get_inputs()
+            # Pick the 4D tensor input as image input if available
+            img_input = None
+            for inp in inputs:
+                shp = inp.shape
+                if isinstance(shp, (list, tuple)) and len(shp) == 4:
+                    img_input = inp
+                    break
+            if img_input is None and inputs:
+                img_input = inputs[0]
+            input_name = img_input.name if img_input else "images"
+            in_shape = img_input.shape if img_input else [1, 3, 608, 608]
+            # expect NCHW by default
+            input_w = int(in_shape[3]) if len(in_shape) == 4 and isinstance(in_shape[3], int) else 608
+            input_h = int(in_shape[2]) if len(in_shape) == 4 and isinstance(in_shape[2], int) else 608
+            # Detect optional image_shape input
+            image_shape_input = None
+            image_shape_dtype = np.float32
+            for inp in inputs:
+                if 'image_shape' in inp.name:
+                    image_shape_input = inp
+                    # map ORT type string to numpy dtype
+                    t = (inp.type or '').lower()
+                    if 'int64' in t:
+                        image_shape_dtype = np.int64
+                    elif 'int32' in t:
+                        image_shape_dtype = np.int32
+                    else:
+                        image_shape_dtype = np.float32
+                    break
+        except Exception:
+            input_name = "images"
+            input_w, input_h = 608, 608
+            image_shape_input = None
+            image_shape_dtype = np.float32
         load_end = time.time()
         load_time_ms = (load_end - load_start) * 1000.0
         print(f"[YOLO CPU] Model loaded successfully")
@@ -103,19 +155,26 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
             pre_s = time.time()
             # Waiting time until preprocessing begins
             wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            input_tensor, (w, h) = yolo_preprocess_local(frame)
+            input_tensor, meta = yolo_preprocess_local(frame, (input_w, input_h))
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
             
             try:
+                # Build input feed dict, include image_shape if required by model
+                feeds = {input_name: input_tensor}
+                if image_shape_input is not None:
+                    h0 = int(meta.get('orig_h', frame.shape[0]))
+                    w0 = int(meta.get('orig_w', frame.shape[1]))
+                    img_shape_val = np.array([[h0, w0]], dtype=image_shape_dtype)
+                    feeds[image_shape_input.name] = img_shape_val
                 infer_start = time.time()
-                output = session.run(None, {"images": input_tensor})
+                output = session.run(None, feeds)
                 infer_end = time.time()
                 
                 infer_time_ms = (infer_end - infer_start) * 1000.0
                 
                 post_s = time.time()
-                result = yolo_postprocess_cpu(output, frame, w, h)
+                result = yolo_postprocess_cpu(output, frame, meta)
                 post_e = time.time()
                 post_ms = (post_e - post_s) * 1000.0
 
@@ -315,7 +374,15 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
             pre_s = time.time()
             # Waiting time until preprocessing begins
             wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            input_tensor, (w, h) = yolo_preprocess_local(frame)
+            # Determine input size from front_sess
+            try:
+                finp = front_sess.get_inputs()[0]
+                fshape = finp.shape if finp else [1,3,608,608]
+                f_w = int(fshape[3]) if len(fshape)==4 and isinstance(fshape[3], int) else 608
+                f_h = int(fshape[2]) if len(fshape)==4 and isinstance(fshape[2], int) else 608
+            except Exception:
+                f_w, f_h = 608, 608
+            input_tensor, meta = yolo_preprocess_local(frame, (f_w, f_h))
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
             infer_start = time.time()
@@ -330,7 +397,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
 
             try:
                 # Data transfer to/from NPU
-                raw_outputs = send_receive_data_npu(driver, input_data, 3 * 608 * 608)
+                raw_outputs = send_receive_data_npu(driver, input_data, 3 * f_w * f_h)
                 output_data = [np.frombuffer(buf, dtype=np.uint8) for buf in raw_outputs]
             except Exception as e:
                 print(f"[YOLO NPU DATA TRANSFER ERROR] send/receive failed: {e}")
@@ -369,7 +436,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
 
             infer_end = time.time()
             post_s = time.time()
-            result_img, drawn_boxes = yolo_postprocess_npu(output, frame, w, h)
+            result_img, drawn_boxes = yolo_postprocess_npu(output, frame, meta)
             post_e = time.time()
             post_ms = (post_e - post_s) * 1000.0
             
