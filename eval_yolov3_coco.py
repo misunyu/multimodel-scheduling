@@ -405,7 +405,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         dtype = np.int64 if "int64" in onnx_type else np.float32
                         shape = list(getattr(im_inp, "shape", []))
                         val = np.array([h0, w0], dtype=dtype)
-                        if len(shape) == 2 and (shape[0] in (1, "1", None, "None") and shape[1] in (2, "2", None, "None")):
+                        if len(shape) == 2:
                             val = val.reshape(1, 2)
                         feeds["image_shape"] = val
                 except Exception:
@@ -840,6 +840,29 @@ def main(argv: Optional[List[str]] = None) -> int:
                     feeds = ymt.build_input_feed(session, inp, meta2)
                 except Exception:
                     feeds = {input_name: inp}
+            # Auto-add 'image_shape' if the session requires it and it's missing
+            try:
+                input_meta = {i.name: i for i in session.get_inputs()}
+                if "image_shape" in input_meta and "image_shape" not in feeds:
+                    im_inp = input_meta["image_shape"]
+                    if "orig_w" in meta2 and "orig_h" in meta2:
+                        h0, w0 = int(meta2["orig_h"]), int(meta2["orig_w"])
+                    elif 'meta' in locals() and meta is not None:
+                        h0, w0 = int(meta["orig_shape"][0]), int(meta["orig_shape"][1])
+                    else:
+                        # fallback to input tensor size
+                        h0, w0 = int(inp.shape[2]), int(inp.shape[3]) if inp.ndim == 4 else (input_h, input_w)
+                    # onnxruntime input info may have a type string like 'tensor(int64)' or 'tensor(float)'
+                    onnx_type = getattr(im_inp, "type", "tensor(float)")
+                    dtype = np.int64 if "int64" in onnx_type else np.float32
+                    shape = list(getattr(im_inp, "shape", []))
+                    val = np.array([h0, w0], dtype=dtype)
+                    if len(shape) == 2:
+                        val = val.reshape(1, 2)
+                    feeds["image_shape"] = val
+            except Exception:
+                # best-effort; ignore if anything unexpected
+                pass
 
             t_inf0 = time.time()
             out_names = [o.name for o in session.get_outputs()]
