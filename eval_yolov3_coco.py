@@ -3,7 +3,6 @@ import os
 import sys
 import json
 import time
-import math
 import argparse
 import shutil
 import zipfile
@@ -297,7 +296,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--model", type=str, default=YOLO_MODEL_PATH, help="Path to YOLOv3 ONNX model (CPU path)")
     parser.add_argument("--data-dir", type=str, default=DEFAULT_DATA_DIR, help="COCO data root directory")
     parser.add_argument("--results-dir", type=str, default=DEFAULT_RESULTS_DIR, help="Directory to store logs/results")
-    parser.add_argument("--batch-size", type=int, default=1, help="Batch size (currently images processed one by one)")
     parser.add_argument("--max-images", type=int, default=100, help="Max number of images to evaluate (use 0 for all)")
     parser.add_argument("--conf-thr", type=float, default=0.3, help="Confidence threshold")
     parser.add_argument("--iou-thr", type=float, default=0.5, help="IoU threshold for NMS")
