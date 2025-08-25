@@ -377,13 +377,71 @@ def main(argv: Optional[List[str]] = None) -> int:
                 t_pre1 = time.time()
                 pre_times.append((t_pre1 - t_pre0) * 1000)
 
+                # Build input feed; include auxiliary inputs like 'image_shape' if required
+                feeds = {input_name: inp}
+                try:
+                    # If yolo_model_trans is available, let it build the feed
+                    if HAS_YMT:
+                        # Build meta2 consistent with cpu path
+                        meta2 = {
+                            "orig_w": int(meta["orig_shape"][1]),
+                            "orig_h": int(meta["orig_shape"][0]),
+                            "ratio": float(meta["ratio"]),
+                            "pad_w": int(meta["pad"][0]),
+                            "pad_h": int(meta["pad"][1]),
+                        }
+                        feeds = ymt.build_input_feed(session, inp, meta2)
+                except Exception:
+                    pass
+                if feeds is None or not isinstance(feeds, dict) or input_name not in feeds:
+                    feeds = {input_name: inp}
+                # Auto-add 'image_shape' if the session requires it
+                try:
+                    input_meta = {i.name: i for i in session.get_inputs()}
+                    if "image_shape" in input_meta and "image_shape" not in feeds:
+                        im_inp = input_meta["image_shape"]
+                        h0, w0 = int(meta["orig_shape"][0]), int(meta["orig_shape"][1])
+                        onnx_type = getattr(im_inp, "type", "tensor(float)")
+                        dtype = np.int64 if "int64" in onnx_type else np.float32
+                        shape = list(getattr(im_inp, "shape", []))
+                        val = np.array([h0, w0], dtype=dtype)
+                        if len(shape) == 2 and (shape[0] in (1, "1", None, "None") and shape[1] in (2, "2", None, "None")):
+                            val = val.reshape(1, 2)
+                        feeds["image_shape"] = val
+                except Exception:
+                    # best-effort; ignore if anything unexpected
+                    pass
+
                 t_inf0 = time.time()
-                outputs = session.run(None, {input_name: inp})
+                out_names = [o.name for o in session.get_outputs()]
+                outputs = session.run(out_names, feeds)
                 t_inf1 = time.time()
                 inf_times.append((t_inf1 - t_inf0) * 1000)
 
                 t_post0 = time.time()
-                dets = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
+                dets: List[Tuple[float, float, float, float, float, int]] = []
+                if HAS_YMT:
+                    try:
+                        # Ensure thresholds are in sync with args
+                        try:
+                            ymt.CONF_THRES = float(args.conf_thr)
+                            ymt.IOU_THRES = float(args.iou_thr)
+                        except Exception:
+                            pass
+                        boxes, scores, cls_ids, already_scaled = ymt.parse_outputs(session, outputs)
+                        if boxes.shape[0] > 0 and not already_scaled:
+                            boxes = ymt.deletterbox_boxes(boxes, meta2)
+                        for bi in range(len(boxes)):
+                            x1, y1, x2, y2 = boxes[bi].tolist()
+                            dets.append((float(x1), float(y1), float(x2), float(y2), float(scores[bi]), int(cls_ids[bi])))
+                    except Exception:
+                        # Fallback to legacy parser
+                        if 'meta' in locals() and meta is not None:
+                            dets = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
+                        else:
+                            dets = []
+                else:
+                    dets = detect_from_model_outputs(outputs, (input_w, input_h), meta, args.conf_thr, args.iou_thr)
                 t_post1 = time.time()
                 post_times.append((t_post1 - t_post0) * 1000)
 
@@ -1054,6 +1112,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(acc_path, "w", encoding="utf-8") as f:
         json.dump(acc_record, f, ensure_ascii=False, indent=2)
     write_log_line(log_path, f"[INFO] Saved accuracy summary to {acc_path}")
+
+    # Ensure a final accuracy line is printed at the very end for CPU runs, like on NPU
+    if args.device == "cpu":
+        mAP = metrics.get("mAP@[.5:.95]") if metrics else None
+        mAP50 = metrics.get("mAP@0.5") if metrics else None
+        if (mAP is not None) or (mAP50 is not None):
+            parts = []
+            if mAP is not None:
+                parts.append(f"mAP@[.5:.95]={mAP:.4f}")
+            if mAP50 is not None:
+                parts.append(f"mAP@0.5={mAP50:.4f}")
+            write_log_line(log_path, "[RESULT] Accuracy: " + ", ".join(parts))
 
     write_log_line(log_path, "[INFO] Evaluation finished.")
     return 0
