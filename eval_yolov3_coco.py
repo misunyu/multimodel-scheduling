@@ -341,7 +341,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Special mode: run both CPU and NPU sequentially and write combined results
     # NPU/BOTH execution disabled per request; keeping code for reference but not reachable
-    if args.device == "both": 
+    if args.device == "both":
         run_ts = _timestamp()
 
         def run_cpu_eval() -> Dict[str, Any]:
