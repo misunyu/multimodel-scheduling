@@ -10,15 +10,15 @@ input_width = input_height = 608
 
 # COCO class labels
 coco_classes = [
-    "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat","traffic light",
-    "fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow",
-    "elephant","bear","zebra","giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee",
-    "skis","snowboard","sports ball","kite","baseball bat","baseball glove","skateboard","surfboard",
-    "tennis racket","bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
-    "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair","couch",
-    "potted plant","bed","dining table","toilet","tv","laptop","mouse","remote","keyboard","cell phone",
-    "microwave","oven","toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear",
-    "hair drier","toothbrush"
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
+    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
+    "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+    "hair drier", "toothbrush"
 ]
 
 
@@ -384,7 +384,24 @@ def yolo_postprocess_npu(output, original_img, meta, confidence_thres=0.5, iou_t
                 x2 = (x2 - dw) / r; y2 = (y2 - dh) / r
                 x1 = np.clip(x1, 0, w0); y1 = np.clip(y1, 0, h0)
                 x2 = np.clip(x2, 0, w0); y2 = np.clip(y2, 0, h0)
-                box = [int(x1), int(y1), int(x2 - x1), int(y2 - y1)]
+
+                # Validate box to avoid drawing abnormal long thin lines
+                w = float(x2 - x1)
+                h = float(y2 - y1)
+                # minimum size in pixels (post de-letterbox)
+                min_sz = 4.0
+                # reject if too small in either dimension
+                if w < min_sz or h < min_sz:
+                    continue
+                # reject boxes that span (almost) the whole image in one dimension
+                if w > 0.98 * w0 or h > 0.98 * h0:
+                    continue
+                # reject extreme aspect ratios (e.g., long horizontal/vertical lines)
+                ar = w / (h + 1e-6)
+                if ar > 25.0 or ar < 1.0/25.0:
+                    continue
+
+                box = [int(x1), int(y1), int(w), int(h)]
                 draw_detection_boxes(original_img, box, float(s[j]), int(class_ids[j]))
                 drawn_boxes.append(box)
 
