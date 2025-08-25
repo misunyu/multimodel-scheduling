@@ -303,8 +303,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--iou-thr", type=float, default=0.5, help="IoU threshold for NMS")
     parser.add_argument("--threads", type=int, default=1, help="Number of intra/inter op threads for ORT (CPU only)")
     parser.add_argument("--save-dets", action="store_true", help="Save detection JSON for COCO eval")
-    # NPU code path disabled per request; device is forced to CPU
-    parser.add_argument("--device", type=str, choices=["cpu"], default="cpu", help="Device to run inference on: cpu only (NPU disabled)")
+    # Device selection (CPU, NPU, or BOTH)
+    parser.add_argument("--device", type=str, choices=["cpu", "npu", "both"], default="cpu", help="Device to run inference on: cpu, npu, or both")
+    parser.add_argument("--npu-id", type=int, default=0, help="NPU device ID to use (for NPU modes)")
+    parser.add_argument("--npu-onnx", type=str, default=None, help="Path to NPU-specific ONNX model (optional; if not set, use built-in default)")
 
     args = parser.parse_args(argv)
 
@@ -339,7 +341,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Special mode: run both CPU and NPU sequentially and write combined results
     # NPU/BOTH execution disabled per request; keeping code for reference but not reachable
-    if False and args.device == "both":
+    if args.device == "both": 
         run_ts = _timestamp()
 
         def run_cpu_eval() -> Dict[str, Any]:
@@ -716,7 +718,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     pre_times: List[float] = []
     post_times: List[float] = []
 
-    if True:  # CPU path only (NPU disabled)
+    if args.device == "cpu":
         if not os.path.isfile(args.model):
             write_log_line(log_path, f"[ERROR] Model not found at {args.model}")
             return 1

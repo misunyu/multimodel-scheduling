@@ -7,6 +7,8 @@ import numpy as np
 import onnxruntime as ort
 import queue
 
+import npu
+
 # Import local modules
 from image_processing import (
     yolo_preprocess_local, 
