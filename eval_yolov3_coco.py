@@ -557,49 +557,63 @@ def main(argv: Optional[List[str]] = None) -> int:
             drv_t1 = time.time()
             write_log_line(log_npu, f"[TIME] NPU memory load: {(drv_t1 - drv_t0)*1000:.1f} ms")
 
-            def npu_preprocess(img_bgr: np.ndarray) -> Tuple[np.ndarray, Tuple[int,int]]:
-                img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-                img = cv2.resize(img, (input_w, input_h))
-                image_data = (img.astype(np.float32) / 255.0).transpose(2,0,1)[None, ...]
-                return image_data, (img_bgr.shape[1], img_bgr.shape[0])
+            def npu_preprocess(img_bgr: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
+                # Use the same letterbox-based preprocess as CPU path to obtain meta
+                inp, meta = preprocess(img_bgr, (input_w, input_h))
+                meta2 = {
+                    "orig_w": int(meta["orig_shape"][1]),
+                    "orig_h": int(meta["orig_shape"][0]),
+                    "ratio": float(meta["ratio"]),
+                    "pad": (int(meta["pad"][0]), int(meta["pad"][1])),
+                }
+                return inp, meta2
 
-            def npu_postprocess_to_dets(output: List[np.ndarray], orig_wh: Tuple[int,int], conf_thr: float, iou_thr: float) -> List[Tuple[float,float,float,float,float,int]]:
+            def npu_postprocess_to_dets(output: List[np.ndarray], meta2: Dict[str, Any], conf_thr: float, iou_thr: float) -> List[Tuple[float,float,float,float,float,int]]:
+                # Apply filtering logic equivalent to image_processing.yolo_postprocess_npu
                 output_box = np.squeeze(output[0])
                 output_label = np.squeeze(output[1])
                 rows = output_box.shape[0]
-                ow, oh = orig_wh
-                x_factor = ow / 608.0
-                y_factor = oh / 608.0
-                boxes = []
+                boxes_xyxy = []
                 scores = []
-                clses = []
+                class_ids = []
                 for i in range(rows):
                     conf = float(output_box[i][4])
                     if conf >= conf_thr:
                         left, top, right, bottom = output_box[i][:4]
-                        w = (right - left) * x_factor
-                        h = (bottom - top) * y_factor
-                        x1 = left * x_factor
-                        y1 = top * y_factor
-                        if w <= 0 or h <= 0 or w > 2000 or h > 2000:
-                            continue
-                        if x1 < -100 or y1 < -100 or x1 > 3000 or y1 > 3000:
-                            continue
-                        boxes.append([x1, y1, x1 + w, y1 + h])
+                        boxes_xyxy.append([left, top, right, bottom])
                         scores.append(conf)
-                        clses.append(int(output_label[i]))
-                if not boxes:
-                    return []
-                boxes = np.array(boxes, dtype=np.float32)
-                scores = np.array(scores, dtype=np.float32)
-                clses = np.array(clses, dtype=np.int32)
+                        class_ids.append(int(output_label[i]))
                 dets: List[Tuple[float,float,float,float,float,int]] = []
-                for c in np.unique(clses):
-                    inds = np.where(clses == c)[0]
-                    keep = nms_boxes(boxes[inds], scores[inds], iou_thr)
-                    for j in keep:
-                        x1, y1, x2, y2 = boxes[inds][j]
-                        dets.append((float(x1), float(y1), float(x2), float(y2), float(scores[inds][j]), int(c)))
+                if boxes_xyxy:
+                    b = np.array(boxes_xyxy, dtype=np.float32)
+                    s = np.array(scores, dtype=np.float32)
+                    # OpenCV NMS uses [x,y,w,h]
+                    b_xywh = np.stack([b[:,0], b[:,1], b[:,2]-b[:,0], b[:,3]-b[:,1]], axis=1)
+                    keep = cv2.dnn.NMSBoxes(b_xywh.tolist(), s.tolist(), conf_thr, iou_thr)
+                    if keep is not None and len(keep) > 0:
+                        keep = [int(k) if isinstance(k, (int, np.integer)) else int(k[0]) for k in keep]
+                        dw, dh = meta2["pad"]
+                        r = meta2["ratio"]
+                        w0, h0 = meta2["orig_w"], meta2["orig_h"]
+                        for j in keep:
+                            x1, y1, x2, y2 = b[j]
+                            # de-letterbox
+                            x1 = (x1 - dw) / r; y1 = (y1 - dh) / r
+                            x2 = (x2 - dw) / r; y2 = (y2 - dh) / r
+                            x1 = float(np.clip(x1, 0, w0)); y1 = float(np.clip(y1, 0, h0))
+                            x2 = float(np.clip(x2, 0, w0)); y2 = float(np.clip(y2, 0, h0))
+                            # Additional filters mirroring yolo_postprocess_npu
+                            w = x2 - x1
+                            h = y2 - y1
+                            min_sz = 4.0
+                            if w < min_sz or h < min_sz:
+                                continue
+                            if w > 0.98 * w0 or h > 0.98 * h0:
+                                continue
+                            ar = w / (h + 1e-6)
+                            if ar > 25.0 or ar < 1.0/25.0:
+                                continue
+                            dets.append((x1, y1, x2, y2, float(s[j]), int(class_ids[j])))
                 return dets
 
             det_json: List[Dict[str, Any]] = []
@@ -614,7 +628,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         write_log_line(log_npu, f"[WARN] Failed to read image: {img_path}")
                         continue
                     t_pre0 = time.time()
-                    inp, (ow, oh) = npu_preprocess(img0)
+                    inp, meta2 = npu_preprocess(img0)
                     t_pre1 = time.time()
                     pre_times.append((t_pre1 - t_pre0) * 1000)
 
@@ -648,7 +662,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     inf_times.append((t_inf1 - t_inf0) * 1000)
 
                     t_post0 = time.time()
-                    dets = npu_postprocess_to_dets(outputs, (ow, oh), args.conf_thr, args.iou_thr)
+                    dets = npu_postprocess_to_dets(outputs, meta2, args.conf_thr, args.iou_thr)
                     t_post1 = time.time()
                     post_times.append((t_post1 - t_post0) * 1000)
 
@@ -937,51 +951,63 @@ def main(argv: Optional[List[str]] = None) -> int:
         drv_t1 = time.time()
         write_log_line(log_path, f"[TIME] NPU memory load: {(drv_t1 - drv_t0)*1000:.1f} ms")
 
-        def npu_preprocess(img_bgr: np.ndarray) -> Tuple[np.ndarray, Tuple[int,int]]:
-            img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            img = cv2.resize(img, (input_w, input_h))
-            image_data = (img.astype(np.float32) / 255.0).transpose(2,0,1)[None, ...]
-            return image_data, (img_bgr.shape[1], img_bgr.shape[0])
+        def npu_preprocess(img_bgr: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
+            # Use the same letterbox-based preprocess as CPU path to obtain meta
+            inp, meta = preprocess(img_bgr, (input_w, input_h))
+            meta2 = {
+                "orig_w": int(meta["orig_shape"][1]),
+                "orig_h": int(meta["orig_shape"][0]),
+                "ratio": float(meta["ratio"]),
+                "pad": (int(meta["pad"][0]), int(meta["pad"][1])),
+            }
+            return inp, meta2
 
-        def npu_postprocess_to_dets(output: List[np.ndarray], orig_wh: Tuple[int,int], conf_thr: float, iou_thr: float) -> List[Tuple[float,float,float,float,float,int]]:
-            # Replicate logic from image_processing.yolo_postprocess_npu but return dets
+        def npu_postprocess_to_dets(output: List[np.ndarray], meta2: Dict[str, Any], conf_thr: float, iou_thr: float) -> List[Tuple[float,float,float,float,float,int]]:
+            # Apply filtering logic equivalent to image_processing.yolo_postprocess_npu
             output_box = np.squeeze(output[0])
             output_label = np.squeeze(output[1])
             rows = output_box.shape[0]
-            ow, oh = orig_wh
-            x_factor = ow / 608.0
-            y_factor = oh / 608.0
-            boxes = []
+            boxes_xyxy = []
             scores = []
-            clses = []
+            class_ids = []
             for i in range(rows):
                 conf = float(output_box[i][4])
                 if conf >= conf_thr:
                     left, top, right, bottom = output_box[i][:4]
-                    w = (right - left) * x_factor
-                    h = (bottom - top) * y_factor
-                    x1 = left * x_factor
-                    y1 = top * y_factor
-                    # filter abnormal
-                    if w <= 0 or h <= 0 or w > 2000 or h > 2000:
-                        continue
-                    if x1 < -100 or y1 < -100 or x1 > 3000 or y1 > 3000:
-                        continue
-                    boxes.append([x1, y1, x1 + w, y1 + h])
+                    boxes_xyxy.append([left, top, right, bottom])
                     scores.append(conf)
-                    clses.append(int(output_label[i]))
-            if not boxes:
-                return []
-            boxes = np.array(boxes, dtype=np.float32)
-            scores = np.array(scores, dtype=np.float32)
-            clses = np.array(clses, dtype=np.int32)
+                    class_ids.append(int(output_label[i]))
             dets: List[Tuple[float,float,float,float,float,int]] = []
-            for c in np.unique(clses):
-                inds = np.where(clses == c)[0]
-                keep = nms_boxes(boxes[inds], scores[inds], iou_thr)
-                for j in keep:
-                    x1, y1, x2, y2 = boxes[inds][j]
-                    dets.append((float(x1), float(y1), float(x2), float(y2), float(scores[inds][j]), int(c)))
+            if boxes_xyxy:
+                b = np.array(boxes_xyxy, dtype=np.float32)
+                s = np.array(scores, dtype=np.float32)
+                # OpenCV NMS uses [x,y,w,h]
+                b_xywh = np.stack([b[:,0], b[:,1], b[:,2]-b[:,0], b[:,3]-b[:,1]], axis=1)
+                keep = cv2.dnn.NMSBoxes(b_xywh.tolist(), s.tolist(), conf_thr, iou_thr)
+                if keep is not None and len(keep) > 0:
+                    keep = [int(k) if isinstance(k, (int, np.integer)) else int(k[0]) for k in keep]
+                    dw, dh = meta2["pad"]
+                    r = meta2["ratio"]
+                    w0, h0 = meta2["orig_w"], meta2["orig_h"]
+                    for j in keep:
+                        x1, y1, x2, y2 = b[j]
+                        # de-letterbox
+                        x1 = (x1 - dw) / r; y1 = (y1 - dh) / r
+                        x2 = (x2 - dw) / r; y2 = (y2 - dh) / r
+                        x1 = float(np.clip(x1, 0, w0)); y1 = float(np.clip(y1, 0, h0))
+                        x2 = float(np.clip(x2, 0, w0)); y2 = float(np.clip(y2, 0, h0))
+                        # Additional filters mirroring yolo_postprocess_npu
+                        w = x2 - x1
+                        h = y2 - y1
+                        min_sz = 4.0
+                        if w < min_sz or h < min_sz:
+                            continue
+                        if w > 0.98 * w0 or h > 0.98 * h0:
+                            continue
+                        ar = w / (h + 1e-6)
+                        if ar > 25.0 or ar < 1.0/25.0:
+                            continue
+                        dets.append((x1, y1, x2, y2, float(s[j]), int(class_ids[j])))
             return dets
 
         try:
@@ -992,7 +1018,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     write_log_line(log_path, f"[WARN] Failed to read image: {img_path}")
                     continue
                 t_pre0 = time.time()
-                inp, (ow, oh) = npu_preprocess(img0)
+                inp, meta2 = npu_preprocess(img0)
                 t_pre1 = time.time()
                 pre_times.append((t_pre1 - t_pre0) * 1000)
 
@@ -1029,7 +1055,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 inf_times.append((t_inf1 - t_inf0) * 1000)
 
                 t_post0 = time.time()
-                dets = npu_postprocess_to_dets(outputs, (ow, oh), args.conf_thr, args.iou_thr)
+                dets = npu_postprocess_to_dets(outputs, meta2, args.conf_thr, args.iou_thr)
                 t_post1 = time.time()
                 post_times.append((t_post1 - t_post0) * 1000)
 
