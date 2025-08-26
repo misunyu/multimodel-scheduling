@@ -7,7 +7,7 @@ import numpy as np
 import onnxruntime as ort
 import queue
 
-import npu
+# import npu
 
 # Import local modules
 from image_processing import (
@@ -304,7 +304,7 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
     except Exception as e:
         print(f"[ResNet CPU Process ERROR] {e}")
 
-def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, view_name=None):
+def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, view_name=None, model_name="yolov3_small"):
     """
     Process for running YOLO model on NPU.
     
@@ -338,7 +338,12 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
 
         try:
             npu_load_s = time.time()
-            driver = initialize_driver(npu_id, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+            # Select NPU binary based on the requested model
+            if model_name == "yolov3_big":
+                npu_o_path = "./models/yolov3_big/npu_code/yolov3_big_neubla_p1.o"
+            else:
+                npu_o_path = "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o"
+            driver = initialize_driver(npu_id, npu_o_path)
             npu_load_e = time.time()
             npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
         except Exception as e:
@@ -350,7 +355,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
             pipeline="yolo",
             device=f"NPU{npu_id}",
             view=view_name,
-            model="yolov3_small",
+            model=model_name,
             model_load_time_ms=host_model_load_ms,
             npu_memory_load_time_ms=npu_memory_load_time_ms,
         )
@@ -443,7 +448,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
                     pipeline="yolo",
                     device=f"NPU{npu_id}",
                     view=view_name,
-                    model="yolov3_small",
+                    model=model_name,
                     preprocess_time_ms=pre_ms,
                     inference_time_ms=infer_time_ms,
                     postprocess_time_ms=post_ms,

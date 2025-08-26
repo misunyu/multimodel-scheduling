@@ -355,7 +355,7 @@ class UnifiedViewer(QMainWindow):
                 print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
                 process = Process(
                     target=run_yolo_npu_process,
-                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name),
+                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
                 )
             else:
                 print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
