@@ -25,13 +25,13 @@ import cv2
 import onnxruntime as ort
 
 # Reuse repo's preprocessing for consistency with provided models
-from image_processing import resnet50_preprocess_local
+from image_processing import resnet50_preprocess_local, letterbox
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 IMAGES_DIR = os.path.join(REPO_ROOT, "imagenet-sample-images")
 CLASSES_TXT = os.path.join(REPO_ROOT, "imagenet_classes.txt")
 GROUND_TRUTH_CSV = os.path.join(IMAGES_DIR, "ground_truth.csv")
-MODEL_PATH = os.path.join(REPO_ROOT, "models", "resnet50_big", "model", "resnet50_big.onnx")
+MODEL_PATH = "./models/resnet50_big/model/resnet50_big.onnx"
 
 # Logging helpers
 RUN_TS = time.strftime("%Y%m%d_%H%M%S")
@@ -116,15 +116,24 @@ def build_ground_truth(images_dir: str, classes_txt: str, output_csv: str) -> Tu
     return classes, filename_to_index
 
 
-def load_images_preprocessed(images_dir: str, selected_filenames: List[str]) -> List[Tuple[str, np.ndarray]]:
+def load_images_preprocessed(images_dir: str, selected_filenames: List[str], preprocessor=None, tta: str = "none") -> List[Tuple[str, np.ndarray]]:
     data = []
+    if preprocessor is None:
+        preprocessor = resnet50_preprocess_local
+    tta = (tta or "none").lower()
     for fname in selected_filenames:
         path = os.path.join(images_dir, fname)
         img_bgr = cv2.imread(path, cv2.IMREAD_COLOR)
         if img_bgr is None:
             print(f"[WARN] Failed to read image: {path}")
             continue
-        inp = resnet50_preprocess_local(img_bgr)  # shape (1,3,224,224), float32 in [0,1]
+        base = preprocessor(img_bgr)  # (1,3,224,224)
+        if tta == "hflip":
+            img_flip = cv2.flip(img_bgr, 1)
+            flip = preprocessor(img_flip)  # (1,3,224,224)
+            inp = np.concatenate([base, flip], axis=0)  # (2,3,224,224)
+        else:
+            inp = base
         data.append((fname, inp))
     return data
 
@@ -182,9 +191,12 @@ def run_onnx_inference_cpu(
             feed_inp = np.transpose(inp, (0, 2, 3, 1)) if layout == "NHWC" else inp
             outputs = session.run([output_name] if output_name else None, {input_name: feed_inp})
             logits = outputs[0]
-            # logits may be (1,1000) or (1000,), ensure shape
+            # logits may be (N,1000), (1,1000) or (1000,). If N>1 (e.g., TTA), average over batch.
             if logits.ndim == 2:
-                logits_arr = logits[0]
+                if logits.shape[0] > 1:
+                    logits_arr = logits.mean(axis=0)
+                else:
+                    logits_arr = logits[0]
             else:
                 logits_arr = logits
             pred_idx = int(np.argmax(logits_arr))
@@ -259,6 +271,83 @@ def compute_accuracy(preds: Dict[str, int], gt: Dict[str, int], top5: Optional[D
         top5_acc = float('nan')
 
     return top1, top5_acc
+
+# ===================== Configurable Preprocessing (CLI) =====================
+import argparse
+from typing import Callable
+
+CLI_ARGS = None  # populated in __main__
+
+def _parse_csv_floats(text: str) -> list[float]:
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    return [float(p) for p in parts]
+
+def build_preprocessor_from_args(args) -> Callable[[np.ndarray], np.ndarray]:
+    target = (224, 224)
+    interp_map = {
+        "nearest": cv2.INTER_NEAREST,
+        "linear": cv2.INTER_LINEAR,
+        "cubic": cv2.INTER_CUBIC,
+        "area": cv2.INTER_AREA,
+        "lanczos4": cv2.INTER_LANCZOS4,
+    }
+    interp = interp_map.get(args.interp, cv2.INTER_LINEAR)
+
+    # Mean/std handling
+    mean = None
+    std = None
+    if args.imagenet_norm:
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+    else:
+        if args.mean:
+            mean = _parse_csv_floats(args.mean)
+        if args.std:
+            std = _parse_csv_floats(args.std)
+
+    def preprocess(img_bgr: np.ndarray) -> np.ndarray:
+        img = img_bgr
+        # Resize/crop pipeline
+        if args.pp_mode == "letterbox":
+            img, _, _ = letterbox(img, target)
+        elif args.pp_mode == "resize":
+            img = cv2.resize(img, target, interpolation=interp)
+        elif args.pp_mode == "center-crop":
+            short = int(args.short_side)
+            h, w = img.shape[:2]
+            scale = short / min(h, w)
+            new_w, new_h = int(round(w * scale)), int(round(h * scale))
+            img = cv2.resize(img, (new_w, new_h), interpolation=interp)
+            # center crop to target
+            y0 = max(0, (new_h - target[1]) // 2)
+            x0 = max(0, (new_w - target[0]) // 2)
+            img = img[y0:y0 + target[1], x0:x0 + target[0]]
+            if img.shape[0] != target[1] or img.shape[1] != target[0]:
+                img = cv2.resize(img, target, interpolation=interp)
+        else:
+            # fallback: plain resize
+            img = cv2.resize(img, target, interpolation=interp)
+
+        # Color
+        if args.rgb:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Scaling
+        img = img.astype(np.float32)
+        if args.scale_255:
+            img = img / 255.0
+
+        # Normalize
+        if mean is not None and std is not None:
+            m = np.array(mean, dtype=np.float32).reshape(1, 1, 3)
+            s = np.array(std, dtype=np.float32).reshape(1, 1, 3)
+            img = (img - m) / s
+
+        # To NCHW
+        img = np.transpose(img, (2, 0, 1))[None, ...]
+        return img
+
+    return preprocess
 
 
 def main():
@@ -370,11 +459,13 @@ def run_resnet_inference_npu(
     classes: Optional[List[str]] = None,
     log_path: Optional[str] = None,
     npu_id: int = 1,
+    tta: str = "none",
 ) -> Tuple[Dict[str, int], float, Optional[Dict[str, List[int]]]]:
     """
     Run ResNet50 on NPU exactly like run_resnet_npu_process in model_processors.py.
     Do NOT use partitions/*.onnx. Instead, use npu.resnet50_prepare_onnx_model to get front_sess
     and quantization params, and perform the manual FC fallback when needed.
+    Supports simple TTA (e.g., hflip) by averaging logits over views.
     Returns (pred_by_filename, elapsed_seconds, top5_indices_by_filename)
     """
     if npu_mod is None:
@@ -408,34 +499,42 @@ def run_resnet_inference_npu(
         correct_so_far_top1 = 0
         correct_so_far_top5 = 0
 
-        for i, (fname, img_bgr) in enumerate(batch_inputs_raw, start=1):
+        tta_mode = (tta or "none").lower()
+
+        def single_view_logits(img_bgr: np.ndarray) -> np.ndarray:
             # Preprocess and run front onnx (quantization)
             pre_inp = npu_mod.resnet50_preprocess(img_bgr)
             front_out = front_sess.run(None, {"input": pre_inp})[0]
             input_bytes = front_out.tobytes()
-
             # Send to NPU and receive intermediate
             raw_outputs = npu_mod.send_receive_data_npu(driver, input_bytes, 3 * 224 * 224)
             output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
-
             # Try back_sess first (if available), else manual FC computation
             try:
                 if back_sess is not None:
                     back_output = back_sess.run(None, {"input": output_data.reshape(1, -1)})
-                    logits_arr = back_output[0]
+                    logits_arr_local = back_output[0]
                 else:
                     raise RuntimeError("Back session not available")
             except Exception:
-                # Manual quantized FC as in run_resnet_npu_process
                 out = np.matmul(output_data.astype(np.int32), weight_q)
                 out -= zp_act * np.sum(weight_q, axis=0)
                 out -= zp_w * np.sum(output_data, axis=0)
                 out += zp_act * zp_w
                 out = np.round(out * scale / scale_out) + zp_out
-                # For argmax and top-5, cast to uint8-like range consistent with code
-                logits_arr = out.astype(np.uint8)
+                logits_arr_local = out.astype(np.uint8)
+            return logits_arr_local
 
-            # Compute prediction and top-5
+        for i, (fname, img_bgr) in enumerate(batch_inputs_raw, start=1):
+            # Compute logits for 1 or more TTA views, then average
+            logits_arr = single_view_logits(img_bgr)
+            if tta_mode == "hflip":
+                img_flip = cv2.flip(img_bgr, 1)
+                logits_flip = single_view_logits(img_flip)
+                # Cast to float32 before averaging to avoid uint8 wrap-around
+                logits_arr = logits_arr.astype(np.float32) + logits_flip.astype(np.float32)
+                logits_arr = logits_arr / 2.0
+            # Compute prediction and top-5 from averaged logits
             pred_idx = int(np.argmax(logits_arr))
             top5_idx = np.argsort(logits_arr)[-5:][::-1].astype(int).tolist()
             preds[fname] = pred_idx
@@ -480,10 +579,34 @@ def run_resnet_inference_npu(
 
 
 def main():
+    global CLI_ARGS
     # Prepare log file path for CPU part (kept for compatibility)
     log_filename = f"eval_resnet50_imagenet_cpu_{RUN_TS}.log"
     log_path = os.path.join(DEFAULT_LOG_DIR, log_filename)
     write_log_line(log_path, f"[START] ResNet50 ImageNet evaluation @ {RUN_TS}")
+
+    # Ensure variable exists even if NPU eval is skipped
+    npu_last_result = None  # (model_key, top1, top5, elapsed, images)
+
+    # Log selected preprocessing/runtime options
+    if CLI_ARGS is not None:
+        sel = [
+            f"pp_mode={CLI_ARGS.pp_mode}",
+            f"interp={CLI_ARGS.interp}",
+            f"rgb={CLI_ARGS.rgb}",
+            f"scale_255={CLI_ARGS.scale_255}",
+            f"imagenet_norm={CLI_ARGS.imagenet_norm}",
+            f"mean={CLI_ARGS.mean}",
+            f"std={CLI_ARGS.std}",
+            f"short_side={CLI_ARGS.short_side}",
+            f"tta={CLI_ARGS.tta}",
+        ]
+        log_line = "[CONFIG] " + ", ".join(sel)
+        print(log_line)
+        write_log_line(log_path, log_line)
+        preprocessor = build_preprocessor_from_args(CLI_ARGS)
+    else:
+        preprocessor = None
 
     print("[STEP 1] Building ground-truth from filenames...")
     write_log_line(log_path, "[STEP 1] Building ground-truth from filenames...")
@@ -492,7 +615,7 @@ def main():
     print("[STEP 2] Loading and preprocessing images (once)...")
     write_log_line(log_path, "[STEP 2] Loading and preprocessing images (once)...")
     image_filenames = sorted(filename_to_index.keys())
-    preprocessed = load_images_preprocessed(IMAGES_DIR, image_filenames)
+    preprocessed = load_images_preprocessed(IMAGES_DIR, image_filenames, preprocessor=preprocessor, tta=(CLI_ARGS.tta if CLI_ARGS is not None else "none"))
     if not preprocessed:
         err = "[ERROR] No images preprocessed; aborting."
         print(err)
@@ -519,6 +642,7 @@ def main():
                     classes=classes,
                     log_path=npu_log_path,
                     npu_id=1,
+                    tta=(CLI_ARGS.tta if CLI_ARGS is not None else "none"),
                 )
                 npu_top1, npu_top5_acc = compute_accuracy(npu_preds, filename_to_index, top5=npu_top5)
 
@@ -608,4 +732,18 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Evaluate ResNet50 ONNX on ImageNet sample set (CPU), with configurable preprocessing.")
+    parser.add_argument("--pp-mode", choices=["letterbox", "resize", "center-crop"], default="center-crop", help="Preprocess mode: letterbox (keep aspect), resize (direct), or center-crop (short-side resize then crop to 224)")
+    parser.add_argument("--interp", choices=["nearest", "linear", "cubic", "area", "lanczos4"], default="cubic", help="Interpolation method for resizing")
+    parser.add_argument("--rgb", action="store_true", default=True, help="Use RGB color order (BGR->RGB). Default: True")
+    parser.add_argument("--no-rgb", action="store_false", dest="rgb")
+    parser.add_argument("--scale-255", action="store_true", default=True, help="Divide by 255.0 to scale to [0,1]. Default: True")
+    parser.add_argument("--no-scale-255", action="store_false", dest="scale_255")
+    parser.add_argument("--imagenet-norm", action="store_true", default=True, help="Apply ImageNet mean/std normalization. Default: True")
+    parser.add_argument("--no-imagenet-norm", action="store_false", dest="imagenet_norm")
+    parser.add_argument("--mean", type=str, default="", help="Comma-separated per-channel mean (RGB order if --rgb) e.g. 0.485,0.456,0.406")
+    parser.add_argument("--std", type=str, default="", help="Comma-separated per-channel std e.g. 0.229,0.224,0.225")
+    parser.add_argument("--short-side", type=int, default=256, help="Shorter-side length used before center-crop when pp-mode=center-crop")
+    parser.add_argument("--tta", type=str, choices=["none", "hflip"], default="none", help="Test-time augmentation: none or horizontal flip averaging")
+    CLI_ARGS = parser.parse_args()
     main()
