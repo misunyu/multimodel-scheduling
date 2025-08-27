@@ -873,9 +873,10 @@ def run_resnet_cpu_p0_then_npu_p1(
             logits_arr: np.ndarray
             used_manual_fc = False
             if out0.size == 1000:
+                # Already logits
                 logits_arr = out0
-            elif expected_out_elems is not None and out0.size == expected_out_elems and fc_params is not None:
-                # Likely feature vector before FC (e.g., 2048). Run quantized FC.
+            elif (out0.size == 2048) and fc_params is not None:
+                # Recognized pre-FC feature length for ResNet50; run quantized FC
                 try:
                     scale = fc_params['/0/avgpool/GlobalAveragePool_output_0_scale'] * fc_params['0.fc.weight_scale']
                     zp_act = fc_params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
@@ -897,6 +898,35 @@ def run_resnet_cpu_p0_then_npu_p1(
                     print(warn)
                     write_log_line(log_path, warn)
                     logits_arr = out0
+            elif expected_out_elems is not None and out0.size == expected_out_elems and fc_params is not None:
+                # Likely feature vector before FC (e.g., 2048). Run quantized FC using ref shape match
+                try:
+                    scale = fc_params['/0/avgpool/GlobalAveragePool_output_0_scale'] * fc_params['0.fc.weight_scale']
+                    zp_act = fc_params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
+                    zp_w = fc_params['0.fc.weight_zero_point']
+                    scale_out = fc_params['/0/fc/Gemm_output_0_scale']
+                    zp_out = fc_params['/0/fc/Gemm_output_0_zero_point']
+                    weight_q = fc_params['0.fc.weight_quantized'].T.astype(np.int32)
+
+                    x = out0.astype(np.int32)
+                    out = np.matmul(x, weight_q)
+                    out -= zp_act * np.sum(weight_q, axis=0)
+                    out -= zp_w * np.sum(x, axis=0)
+                    out += zp_act * zp_w
+                    out = np.round(out * scale / scale_out) + zp_out
+                    logits_arr = out.astype(np.uint8)
+                    used_manual_fc = True
+                except Exception as e:
+                    warn = f"[WARN] Manual FC failed: {e}. Falling back to argmax on NPU output."
+                    print(warn)
+                    write_log_line(log_path, warn)
+                    logits_arr = out0
+            elif out0.size == 2048:
+                # Recognized feature size but no FC params available; avoid warning
+                info_msg = "[INFO] NPU output size 2048 detected (pre-FC features); FC params unavailable – using argmax on features."
+                print(info_msg)
+                write_log_line(log_path, info_msg)
+                logits_arr = out0
             else:
                 # Unknown size; treat as logits for argmax but log it
                 warn_msg = f"[WARN] Unexpected NPU output size {out0.size}; treating as logits for argmax."
@@ -968,6 +998,7 @@ def main():
             f"short_side={CLI_ARGS.short_side}",
             f"limit_images={CLI_ARGS.limit_images}",
             f"npu_id={CLI_ARGS.npu_id}",
+            f"cpu_npu_only={getattr(CLI_ARGS, 'cpu_npu_only', False)}",
         ]
         log_line = "[CONFIG] " + ", ".join(sel)
         print(log_line)
@@ -998,37 +1029,43 @@ def main():
         return
 
     # ===== CPU-only evaluation (partitioned p0->p1->p2 ONNX on CPU) =====
-    print("[STEP 3] Running partitioned ONNX models on CPU (p0 -> p1 -> p2, 1x per image) with live progress...")
-    write_log_line(log_path, "[STEP 3] Running partitioned ONNX models on CPU (p0 -> p1 -> p2, 1x per image) with live progress...")
-    p0_stage_path = CLI_ARGS.p0_model if (CLI_ARGS and CLI_ARGS.p0_model) else P0_MODEL_PATH
-    p1_stage_path = CLI_ARGS.p1_model if (CLI_ARGS and CLI_ARGS.p1_model) else P1_MODEL_PATH
-    p2_stage_path = CLI_ARGS.p2_model if (CLI_ARGS and CLI_ARGS.p2_model) else P2_MODEL_PATH
-    preds_cpu, elapsed_cpu, top5_cpu = run_onnx_inference_cpu_partitioned_three(
-        p0_stage_path,
-        p1_stage_path,
-        p2_stage_path,
-        preprocessed,
-        gt_lookup=filename_to_index,
-        classes=classes,
-        log_path=log_path,
-    )
+    top1_cpu = float('nan'); top5acc_cpu = float('nan'); elapsed_cpu = float('nan')
+    if not (CLI_ARGS is not None and getattr(CLI_ARGS, 'cpu_npu_only', False)):
+        print("[STEP 3] Running partitioned ONNX models on CPU (p0 -> p1 -> p2, 1x per image) with live progress...")
+        write_log_line(log_path, "[STEP 3] Running partitioned ONNX models on CPU (p0 -> p1 -> p2, 1x per image) with live progress...")
+        p0_stage_path = CLI_ARGS.p0_model if (CLI_ARGS and CLI_ARGS.p0_model) else P0_MODEL_PATH
+        p1_stage_path = CLI_ARGS.p1_model if (CLI_ARGS and CLI_ARGS.p1_model) else P1_MODEL_PATH
+        p2_stage_path = CLI_ARGS.p2_model if (CLI_ARGS and CLI_ARGS.p2_model) else P2_MODEL_PATH
+        preds_cpu, elapsed_cpu, top5_cpu = run_onnx_inference_cpu_partitioned_three(
+            p0_stage_path,
+            p1_stage_path,
+            p2_stage_path,
+            preprocessed,
+            gt_lookup=filename_to_index,
+            classes=classes,
+            log_path=log_path,
+        )
 
-    print("[STEP 4] Computing CPU-only accuracy...")
-    write_log_line(log_path, "[STEP 4] Computing CPU-only accuracy...")
-    top1_cpu, top5acc_cpu = compute_accuracy(preds_cpu, filename_to_index, top5=top5_cpu)
+        print("[STEP 4] Computing CPU-only accuracy...")
+        write_log_line(log_path, "[STEP 4] Computing CPU-only accuracy...")
+        top1_cpu, top5acc_cpu = compute_accuracy(preds_cpu, filename_to_index, top5=top5_cpu)
 
-    cpu_summary = [
-        "",
-        "===== CPU-only Evaluation Result =====",
-        f"Images evaluated: {len(preprocessed)}",
-        f"Model repeats: 1",
-        f"Elapsed: {elapsed_cpu:.2f}s",
-        f"Top-1 accuracy: {top1_cpu*100:.2f}%",
-        f"Top-5 accuracy: {top5acc_cpu*100:.2f}%" if not np.isnan(top5acc_cpu) else "Top-5 accuracy: N/A",
-    ]
-    for line in cpu_summary:
-        print(line)
-        write_log_line(log_path, line)
+        cpu_summary = [
+            "",
+            "===== CPU-only Evaluation Result =====",
+            f"Images evaluated: {len(preprocessed)}",
+            f"Model repeats: 1",
+            f"Elapsed: {elapsed_cpu:.2f}s",
+            f"Top-1 accuracy: {top1_cpu*100:.2f}%",
+            f"Top-5 accuracy: {top5acc_cpu*100:.2f}%" if not np.isnan(top5acc_cpu) else "Top-5 accuracy: N/A",
+        ]
+        for line in cpu_summary:
+            print(line)
+            write_log_line(log_path, line)
+    else:
+        msg = "[STEP 3] Skipping CPU-only evaluation (--cpu-npu-only)"
+        print(msg)
+        write_log_line(log_path, msg)
 
     # ===== Hybrid evaluation: CPU p0 ONNX -> quantize -> NPU p1.o =====
     npu_o_path = CLI_ARGS.npu_o if (CLI_ARGS and CLI_ARGS.npu_o) else os.path.join(REPO_ROOT, "model_partitions", "partition1", "resnet50_npu_1", "p1.o")
@@ -1069,9 +1106,15 @@ def main():
     try:
         with open(log_path, "r", encoding="utf-8") as f:
             original = f.read()
+        if not np.isnan(top1_cpu):
+            cpu_header = (
+                f"[FINAL] CPU-only Top-1: {top1_cpu*100:.2f}%\n"
+                + (f"[FINAL] CPU-only Top-5: {top5acc_cpu*100:.2f}%\n" if not np.isnan(top5acc_cpu) else "[FINAL] CPU-only Top-5: N/A\n")
+            )
+        else:
+            cpu_header = "[FINAL] CPU-only: SKIPPED (--cpu-npu-only)\n"
         header = (
-            f"[FINAL] CPU-only Top-1: {top1_cpu*100:.2f}%\n"
-            + (f"[FINAL] CPU-only Top-5: {top5acc_cpu*100:.2f}%\n" if not np.isnan(top5acc_cpu) else "[FINAL] CPU-only Top-5: N/A\n")
+            cpu_header
             + f"[FINAL] CPU+NPU Top-1: {top1_hyb*100:.2f}%\n"
             + (f"[FINAL] CPU+NPU Top-5: {top5acc_hyb*100:.2f}%\n" if not np.isnan(top5acc_hyb) else "[FINAL] CPU+NPU Top-5: N/A\n")
         )
@@ -1106,6 +1149,8 @@ if __name__ == "__main__":
     parser.add_argument("--npu-o", type=str, default="", help="Path to NPU p1 compiled object (.o)")
     parser.add_argument("--ref-p1-onnx", type=str, default="", help="Path to reference p1 ONNX that p1.o was compiled from")
     parser.add_argument("--npu-id", type=int, default=1, help="NPU device id")
+    # Mode control
+    parser.add_argument("--cpu-npu-only", action="store_true", help="Skip CPU-only partitions and run only the CPU->NPU hybrid pipeline")
 
     CLI_ARGS = parser.parse_args()
     main()
