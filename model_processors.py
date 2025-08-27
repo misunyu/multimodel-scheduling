@@ -2,6 +2,7 @@
 Model processing functions for the multimodel scheduling application.
 """
 import time
+import os
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -207,13 +208,35 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
         view_name: Optional view identifier for logging
     """
     try:
-        # Load the ResNet model
+        # Load the ResNet model (CPU), align with eval_resnet50_imagenet.py
         load_start = time.time()
-        session = ort.InferenceSession("models/resnet50_small/model/resnet50_small.onnx")
+        so = ort.SessionOptions()
+        # be less chatty
+        try:
+            so.log_severity_level = 3
+        except Exception:
+            pass
+        # use reasonable threads on CPU
+        try:
+            so.intra_op_num_threads = max(1, (os.cpu_count() or 1))
+        except Exception:
+            pass
+        try:
+            session = ort.InferenceSession(
+                "models/resnet50_big/model/resnet50_big.onnx",
+                sess_options=so,
+                providers=["CPUExecutionProvider"],
+            )
+        except TypeError:
+            # Fallback for older onnxruntime without providers argument
+            session = ort.InferenceSession(
+                "models/resnet50_big/model/resnet50_big.onnx",
+                sess_options=so,
+            )
         load_end = time.time()
         load_time_ms = (load_end - load_start) * 1000.0
 
-        # Determine input/output names and expected layout dynamically
+        # Determine input/output names and expected layout dynamically (match eval script)
         try:
             inputs = session.get_inputs()
             outputs = session.get_outputs()
@@ -225,9 +248,9 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
             if isinstance(input_shape, (list, tuple)) and len(input_shape) == 4:
                 c_dim = input_shape[1]
                 last_dim = input_shape[3]
-                if last_dim == 3 or (isinstance(last_dim, str) and last_dim.upper() in ("C", "CHANNEL", "CHANNELS")):
+                if last_dim == 3 or (isinstance(last_dim, str) and str(last_dim).upper() in ("C", "CHANNEL", "CHANNELS")):
                     layout = "NHWC"
-                elif c_dim == 3 or (isinstance(c_dim, str) and c_dim.upper() in ("C", "CHANNEL", "CHANNELS")):
+                elif c_dim == 3 or (isinstance(c_dim, str) and str(c_dim).upper() in ("C", "CHANNEL", "CHANNELS")):
                     layout = "NCHW"
             print(f"[ResNet CPU] Model IO - input_name={input_name}, output_name={output_name}, input_shape={input_shape}, layout={layout}")
         except Exception as e:
@@ -241,7 +264,7 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
             pipeline="resnet50",
             device="CPU",
             view=view_name,
-            model="resnet50_small",
+            model="resnet50_big",
             model_load_time_ms=load_time_ms,
         )
         while not shutdown_event.is_set():
@@ -276,8 +299,15 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
                 
                 post_s = time.time()
                 logits = outputs[0]
-                logits = np.squeeze(logits)
-                class_id = int(np.argmax(logits))
+                # Handle shapes like (N,1000), (1,1000), or (1000,)
+                if logits.ndim == 2:
+                    if logits.shape[0] > 1:
+                        logits_arr = logits.mean(axis=0)
+                    else:
+                        logits_arr = logits[0]
+                else:
+                    logits_arr = np.squeeze(logits)
+                class_id = int(np.argmax(logits_arr))
                 class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
                 cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 post_e = time.time()
@@ -288,7 +318,7 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
                     pipeline="resnet50",
                     device="CPU",
                     view=view_name,
-                    model="resnet50_small",
+                    model="resnet50_big",
                     preprocess_time_ms=pre_ms,
                     inference_time_ms=infer_time_ms,
                     postprocess_time_ms=post_ms,
