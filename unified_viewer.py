@@ -764,8 +764,20 @@ class UnifiedViewer(QMainWindow):
         self.prev_cpu_stats = current
     
     def save_throughput_data(self):
-        """Save the current throughput of each model and the total throughput to result_throughput.json."""
+        """Save the current throughput of each model and the total throughput to a unique JSON under results/ starting with performance_."""
         try:
+            # Prepare results directory and file path
+            results_dir = os.path.join(os.getcwd(), "results")
+            os.makedirs(results_dir, exist_ok=True)
+            results_path = getattr(self, 'results_path', None)
+            if not results_path:
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                results_path = os.path.join(results_dir, f"performance_{timestamp_str}.json")
+                # Persist for potential subsequent calls within same viewer instance
+                try:
+                    self.results_path = results_path
+                except Exception:
+                    pass
             # Get model and execution mode for each view
             view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
             view1_mode = self.model_settings.get("view1", {}).get("execution", "cpu").upper()
@@ -877,8 +889,8 @@ class UnifiedViewer(QMainWindow):
             results = []
             if not is_first_schedule:
                 try:
-                    if os.path.exists("result_throughput.json"):
-                        with open("result_throughput.json", "r", encoding="utf-8") as rf:
+                    if os.path.exists(results_path):
+                        with open(results_path, "r", encoding="utf-8") as rf:
                             loaded = json.load(rf)
                             if isinstance(loaded, list):
                                 results = loaded
@@ -892,14 +904,14 @@ class UnifiedViewer(QMainWindow):
                     results = []
             else:
                 # Explicitly clear previous results when saving the first schedule
-                print("[Save Throughput] First schedule detected. Clearing previous contents of result_throughput.json.")
+                print("[Save Throughput] First schedule detected. Starting a new results file.")
 
             results.append(throughput_data)
 
-            with open("result_throughput.json", "w", encoding="utf-8") as f:
+            with open(results_path, "w", encoding="utf-8") as f:
                 json.dump(results, f, indent=4, ensure_ascii=False)
                 
-            print("[Shutdown] Throughput data appended to result_throughput.json")
+            print(f"[Shutdown] Throughput data saved to {results_path}")
         except Exception as e:
             print(f"[Shutdown ERROR] Failed to save throughput data: {e}")
 

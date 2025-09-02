@@ -46,9 +46,15 @@ class ScheduleExecutor:
         self._index = 0
         if duration is not None:
             self.default_duration = max(1, int(duration))
+        # Prepare a unique results file path for this run
+        results_dir = os.path.join(os.getcwd(), 'results')
+        os.makedirs(results_dir, exist_ok=True)
+        from datetime import datetime
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._results_path = os.path.join(results_dir, f'performance_{ts}.json')
         self._reset_results_file()
         self._set_start_button_enabled(False)
-        print('[Executor] Starting execution from the first schedule.')
+        print(f"[Executor] Starting execution from the first schedule. Results will be saved to {self._results_path}")
         self._run_next()
 
     def stop(self):
@@ -69,16 +75,15 @@ class ScheduleExecutor:
             return []
 
     def _reset_results_file(self):
-        results_path = os.path.join(os.getcwd(), 'result_throughput.json')
+        # Ensure results directory exists and initialize the run file with an empty array
         try:
-            if os.path.exists(results_path):
-                os.remove(results_path)
-                print('[Executor] Existing result_throughput.json removed on Start.')
-            with open(results_path, 'w', encoding='utf-8') as wf:
-                wf.write('[]')  # Empty JSON array for consistent appending
-            print('[Executor] New empty result_throughput.json created.')
+            base_dir = os.path.dirname(getattr(self, '_results_path', '')) or os.path.join(os.getcwd(), 'results')
+            os.makedirs(base_dir, exist_ok=True)
+            with open(self._results_path, 'w', encoding='utf-8') as wf:
+                wf.write('[]')  # Start with empty JSON array for appending
+            print(f"[Executor] Initialized results file: {self._results_path}")
         except Exception as e:
-            print(f"[Executor] Warning: could not reset result_throughput.json on Start: {e}")
+            print(f"[Executor] Warning: could not initialize results file on Start: {e}")
 
     def _set_start_button_enabled(self, enabled: bool):
         try:
@@ -125,6 +130,11 @@ class ScheduleExecutor:
             combination_name=combo,
             info_window=self.info_window,
         )
+        # Pass shared results path to the viewer so all combinations append to the same run file
+        try:
+            self._viewer.results_path = self._results_path
+        except Exception:
+            pass
 
         # Keep info window up-to-date and on top
         try:
@@ -156,9 +166,9 @@ class ScheduleExecutor:
         QTimer.singleShot(300, self._run_next)  # short delay to flush file writes
 
     def _write_best_header(self):
-        """Rewrite result_throughput.json into required object format with best deployment."""
-        results_path = os.path.join(os.getcwd(), 'result_throughput.json')
-        if not os.path.exists(results_path):
+        """Rewrite the run results file into required object format with best deployment."""
+        results_path = getattr(self, '_results_path', None)
+        if not results_path or not os.path.exists(results_path):
             print('[Executor] No results file to annotate with best deployment.')
             return
         try:
@@ -259,14 +269,7 @@ def main():
                         help='Execution duration per schedule in seconds (default: 60)')
     args = parser.parse_args()
 
-    # Legacy pre-clean of results file on launch (kept for compatibility)
-    results_path = os.path.join(os.getcwd(), 'result_throughput.json')
-    if os.path.exists(results_path):
-        try:
-            os.remove(results_path)
-            print('[Main] Existing result_throughput.json removed.')
-        except Exception as e:
-            print(f"[Main] Warning: failed to remove existing result_throughput.json: {e}")
+    # No legacy pre-clean: results are now saved per-run under results/performance_*.json
 
     app = QApplication(sys.argv)
 
