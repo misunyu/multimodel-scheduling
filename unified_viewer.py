@@ -906,12 +906,10 @@ class UnifiedViewer(QMainWindow):
         per_view_stats: dict view -> tuple(..., exec_mode, avg_wait_ms, dropped)
         scheduled_views: list of views considered in this window.
         """
-        # Try detailed metrics first
+        # Compute detailed metrics from timing logs (may be partial)
         detailed = self._compute_device_metrics(devices_used)
-        if isinstance(detailed, dict) and detailed:
-            return detailed
-        # Fallback: estimate from per-view average waits
-        # Build mapping device -> list of waits
+
+        # Always compute fallback estimates from per-view average waits
         dev_waits = {}
         for v in scheduled_views:
             try:
@@ -922,7 +920,7 @@ class UnifiedViewer(QMainWindow):
             if not exec_mode:
                 continue
             dev_waits.setdefault(exec_mode, []).append(float(avg_wait_ms or 0.0))
-        result = {}
+        fallback = {}
         for dev in devices_used:
             key = str(dev).lower()
             waits = dev_waits.get(dev, [])
@@ -930,8 +928,30 @@ class UnifiedViewer(QMainWindow):
             entry = {"queue_wait_ms_p95": round(max_wait, 2)}
             if str(dev).upper().startswith("NPU"):
                 entry["t_preload_ms"] = 0.0
-            result[key] = entry
-        return result
+            fallback[key] = entry
+
+        # If no detailed metrics at all, return fallback
+        if not isinstance(detailed, dict) or not detailed:
+            return fallback
+
+        # Merge device-wise: prefer detailed only if it has meaningful values; otherwise use fallback
+        merged = {}
+        for dev in devices_used:
+            key = str(dev).lower()
+            det = detailed.get(key)
+            fb = fallback.get(key, {"queue_wait_ms_p95": 0.0})
+            if str(dev).upper().startswith("NPU"):
+                fb.setdefault("t_preload_ms", 0.0)
+            if isinstance(det, dict):
+                q = float(det.get("queue_wait_ms_p95", 0.0) or 0.0)
+                tpre = float(det.get("t_preload_ms", 0.0) or 0.0)
+                if (q > 0.0) or (tpre > 0.0):
+                    merged[key] = det
+                else:
+                    merged[key] = fb
+            else:
+                merged[key] = fb
+        return merged
 
     def _compute_device_metrics(self, devices_used):
         """Compute per-device queue p95 and NPU preload time from timing logs for current run.
@@ -957,9 +977,12 @@ class UnifiedViewer(QMainWindow):
             # Filter by run_id if available
             run_id = getattr(self, 'run_id', os.environ.get('RUN_ID', ''))
             if run_id:
-                records = [r for r in records if r.get("run_id", "") == run_id]
-            if not records:
-                return {}
+                records_for_run = [r for r in records if r.get("run_id", "") == run_id]
+            else:
+                records_for_run = list(records)
+            # If there are no records for the current run, we will still try to provide fallback t_preload_ms
+            # by looking at the most recent model_load entries across all records below.
+            # However, queue_waits will be empty in that case.
             # Group waits by device label
             def _norm_dev(d):
                 if not d:
@@ -970,7 +993,7 @@ class UnifiedViewer(QMainWindow):
                     return d
                 return "CPU"
             waits = {}
-            for r in records:
+            for r in records_for_run:
                 if r.get("kind") == "inference":
                     dev = _norm_dev(r.get("device"))
                     if dev not in devices_used:
@@ -988,22 +1011,59 @@ class UnifiedViewer(QMainWindow):
                 k = max(1, int(math.ceil(0.95 * len(vs))))
                 return float(vs[k - 1])
             # Collect preload times for NPUs
-            preload = {}
-            for r in records:
+            # First, from current run (records_for_run)
+            preload_current = {}
+            for r in records_for_run:
                 if r.get("kind") == "model_load":
                     dev = _norm_dev(r.get("device"))
                     if dev and dev.startswith("NPU") and dev in devices_used:
                         t = r.get("npu_memory_load_time_ms")
                         if isinstance(t, (int, float)):
-                            preload.setdefault(dev, []).append(float(t))
+                            preload_current.setdefault(dev, []).append(float(t))
+            # Second, prepare a latest-across-all-records fallback per device
+            latest_preload_all = {}
+            latest_ts_all = {}
+            for r in records:
+                if r.get("kind") == "model_load":
+                    dev = _norm_dev(r.get("device"))
+                    if not (dev and dev.startswith("NPU") and dev in devices_used):
+                        continue
+                    t = r.get("npu_memory_load_time_ms")
+                    if not isinstance(t, (int, float)):
+                        continue
+                    ts = r.get("timestamp")
+                    try:
+                        from datetime import datetime as _dt
+                        tsv = _dt.strptime(ts, "%Y-%m-%d %H:%M:%S") if ts else None
+                    except Exception:
+                        tsv = None
+                    # Track the most recent timestamp for this device
+                    prev = latest_ts_all.get(dev)
+                    if prev is None or (tsv and prev and tsv > prev) or (tsv and prev is None):
+                        latest_ts_all[dev] = tsv
+                        latest_preload_all[dev] = float(t)
             # Build result dict
             result = {}
             for dev in devices_used:
                 key = dev.lower()  # CPU -> cpu, NPU0 -> npu0
                 res = {"queue_wait_ms_p95": round(p95(waits.get(dev, [])), 2)}
                 if dev.startswith("NPU"):
-                    vals = preload.get(dev, [])
-                    res["t_preload_ms"] = round(vals[0], 2) if vals else 0.0
+                    # Priority: current-run value -> latest-across-file -> environment -> 0.0
+                    val = None
+                    vals_cur = preload_current.get(dev, [])
+                    if vals_cur:
+                        val = float(vals_cur[0])
+                    if val is None:
+                        val = latest_preload_all.get(dev)
+                    if val is None:
+                        # Environment variable fallback: NPU0_PRELOAD_MS, NPU1_PRELOAD_MS
+                        try:
+                            val = float(os.environ.get(f"{dev}_PRELOAD_MS", "nan"))
+                        except Exception:
+                            val = None
+                        if val is not None and (val != val):  # NaN check
+                            val = None
+                    res["t_preload_ms"] = round(val, 2) if isinstance(val, (int, float)) else 0.0
                 result[key] = res
             return result
         except Exception as e:

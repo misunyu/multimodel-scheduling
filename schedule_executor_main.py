@@ -182,13 +182,51 @@ class ScheduleExecutor:
                 print('[Executor] No entries found in results; skipping annotation.')
                 return
 
-            def _total(d):
+            # ScheduleExecutor._write_best_header() 내부
+            def _metrics(d):
+                # 1) Total FPS
                 try:
-                    return float(d.get('total', {}).get('total_throughput_fps', 0) or 0)
+                    total_fps = float(d.get('total', {}).get('total_throughput_fps', 0) or 0)
+                except Exception:
+                    total_fps = 0.0
+
+                # 2) 드롭 개수 합산
+                drop = 0
+                try:
+                    models = d.get('models', {}) or {}
+                    for mv in models.values():
+                        drop += int(mv.get('dropped_frames_due_to_full_queue', 0) or 0)
+                        # 다른 드롭 원인도 있으면 같이 더합니다(옵션)
+                        drop += int(mv.get('dropped_frames_due_to_deadline', 0) or 0)
+                        drop += int(mv.get('dropped_frames_cancelled', 0) or 0)
+                except Exception:
+                    drop = 0
+
+                # 3) window_sec으로 나눠 drops/s로 변환
+                window = float(d.get('window_sec', 1.0) or 1.0)
+                drop_rate = drop / window
+
+                # (선택) 투명성 위해 필드 추가
+                d.setdefault('derived', {})['drop_rate_fps'] = round(drop_rate, 4)
+                d['derived']['drop_count'] = int(drop)
+                d['derived']['window_sec'] = window
+
+                return total_fps, drop_rate
+
+            # 점수 계산부
+            for ent in entries:
+                total_fps, drop_rate = _metrics(ent)
+                score = total_fps - 0.2 * drop_rate
+                ent['score'] = round(score, 4)
+
+            # Determine best by highest score
+            def _score(d):
+                try:
+                    return float(d.get('score', 0) or 0)
                 except Exception:
                     return 0.0
 
-            best = max(entries, key=_total)
+            best = max(entries, key=_score)
             best_combo = best.get('combination') or 'unknown'
 
             final_obj = {"best deployment": best_combo, "data": entries}
