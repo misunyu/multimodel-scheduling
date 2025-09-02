@@ -283,6 +283,9 @@ class UnifiedViewer(QMainWindow):
         # Ensure stop_execution is idempotent: save throughput only once per schedule
         self._already_stopped = False
 
+        # Store the requested execution window duration (seconds) for saving into results
+        self.window_duration_sec = None
+
         # Initialize queues and events
         self.video_frame_queue = Queue(maxsize=10)
         self.video_shutdown_event = Event()
@@ -595,6 +598,11 @@ class UnifiedViewer(QMainWindow):
             duration (int): Duration in seconds for the execution to run.
         """
         print(f"Starting execution with duration: {duration} seconds")
+        # Record execution window duration for saving into results
+        try:
+            self.window_duration_sec = float(duration)
+        except Exception:
+            self.window_duration_sec = None
         
         # Reset idempotent stop flag for new run
         self._already_stopped = False
@@ -818,6 +826,7 @@ class UnifiedViewer(QMainWindow):
             # Prepare throughput data including all scheduled views (even if 0 inferences)
             throughput_data = {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "window_sec": float(self.window_duration_sec) if self.window_duration_sec is not None else None,
                 "combination": self.current_combination,
                 "models": {},
                 "total": {
@@ -827,6 +836,7 @@ class UnifiedViewer(QMainWindow):
             }
             
             # Add all scheduled views to the models dictionary (include zeros if no inferences)
+            devices_used = set()
             for v in scheduled_views:
                 avg_fps, avg_time, infer_cnt, model_name, exec_mode, avg_wait_ms, dropped = per_view_stats[v]
                 throughput_data["models"][v] = {
@@ -838,6 +848,14 @@ class UnifiedViewer(QMainWindow):
                     "avg_wait_to_preprocess_ms": round(avg_wait_ms or 0.0, 2),
                     "dropped_frames_due_to_full_queue": int(dropped or 0)
                 }
+                devices_used.add(exec_mode)
+
+            # Compute per-device queue metrics with fallback when timing logs are unavailable
+            try:
+                device_metrics = self._get_device_metrics_default(devices_used, per_view_stats, scheduled_views)
+                throughput_data["devices"] = device_metrics
+            except Exception as e:
+                print(f"[Save Throughput] Warning: failed to compute device metrics: {e}")
             
             # Determine if the current combination is the first schedule in the YAML
             is_first_schedule = False
@@ -881,6 +899,116 @@ class UnifiedViewer(QMainWindow):
             print("[Shutdown] Throughput data appended to result_throughput.json")
         except Exception as e:
             print(f"[Shutdown ERROR] Failed to save throughput data: {e}")
+
+    def _get_device_metrics_default(self, devices_used, per_view_stats, scheduled_views):
+        """Return device metrics using timing logs when available, otherwise fallback to estimates.
+        devices_used: set of exec modes like {"CPU","NPU0","NPU1"}
+        per_view_stats: dict view -> tuple(..., exec_mode, avg_wait_ms, dropped)
+        scheduled_views: list of views considered in this window.
+        """
+        # Try detailed metrics first
+        detailed = self._compute_device_metrics(devices_used)
+        if isinstance(detailed, dict) and detailed:
+            return detailed
+        # Fallback: estimate from per-view average waits
+        # Build mapping device -> list of waits
+        dev_waits = {}
+        for v in scheduled_views:
+            try:
+                _, _, _, _, exec_mode, avg_wait_ms, _ = per_view_stats[v]
+            except Exception:
+                exec_mode = None
+                avg_wait_ms = 0.0
+            if not exec_mode:
+                continue
+            dev_waits.setdefault(exec_mode, []).append(float(avg_wait_ms or 0.0))
+        result = {}
+        for dev in devices_used:
+            key = str(dev).lower()
+            waits = dev_waits.get(dev, [])
+            max_wait = max(waits) if waits else 0.0
+            entry = {"queue_wait_ms_p95": round(max_wait, 2)}
+            if str(dev).upper().startswith("NPU"):
+                entry["t_preload_ms"] = 0.0
+            result[key] = entry
+        return result
+
+    def _compute_device_metrics(self, devices_used):
+        """Compute per-device queue p95 and NPU preload time from timing logs for current run.
+        devices_used: set like {"CPU", "NPU0", "NPU1"}
+        Returns dict like {"cpu": {"queue_wait_ms_p95": x}, "npu0": {"queue_wait_ms_p95": y, "t_preload_ms": z}, ...}
+        """
+        try:
+            path = "result_pre_post_time.json"
+            if not os.path.exists(path):
+                return {}
+            # Load JSON lines
+            with open(path, "r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+            import json as _json
+            records = []
+            for ln in lines:
+                try:
+                    records.append(_json.loads(ln))
+                except Exception:
+                    continue
+            if not records:
+                return {}
+            # Filter by run_id if available
+            run_id = getattr(self, 'run_id', os.environ.get('RUN_ID', ''))
+            if run_id:
+                records = [r for r in records if r.get("run_id", "") == run_id]
+            if not records:
+                return {}
+            # Group waits by device label
+            def _norm_dev(d):
+                if not d:
+                    return None
+                d = str(d).upper()
+                if d.startswith("NPU"):
+                    # keep exact like NPU0/NPU1
+                    return d
+                return "CPU"
+            waits = {}
+            for r in records:
+                if r.get("kind") == "inference":
+                    dev = _norm_dev(r.get("device"))
+                    if dev not in devices_used:
+                        continue
+                    w = r.get("wait_to_preprocess_ms")
+                    if isinstance(w, (int, float)):
+                        waits.setdefault(dev, []).append(float(w))
+            # Percentile helper
+            def p95(vals):
+                if not vals:
+                    return 0.0
+                vs = sorted(vals)
+                # nearest-rank method
+                import math
+                k = max(1, int(math.ceil(0.95 * len(vs))))
+                return float(vs[k - 1])
+            # Collect preload times for NPUs
+            preload = {}
+            for r in records:
+                if r.get("kind") == "model_load":
+                    dev = _norm_dev(r.get("device"))
+                    if dev and dev.startswith("NPU") and dev in devices_used:
+                        t = r.get("npu_memory_load_time_ms")
+                        if isinstance(t, (int, float)):
+                            preload.setdefault(dev, []).append(float(t))
+            # Build result dict
+            result = {}
+            for dev in devices_used:
+                key = dev.lower()  # CPU -> cpu, NPU0 -> npu0
+                res = {"queue_wait_ms_p95": round(p95(waits.get(dev, [])), 2)}
+                if dev.startswith("NPU"):
+                    vals = preload.get(dev, [])
+                    res["t_preload_ms"] = round(vals[0], 2) if vals else 0.0
+                result[key] = res
+            return result
+        except Exception as e:
+            print(f"[Device Metrics] Failed to compute device metrics: {e}")
+            return {}
 
     def save_pre_post_time_average(self):
         """Compute averages for the last run_id and insert a summary line at the top of result_pre_post_time.json (JSON Lines)."""
