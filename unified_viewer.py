@@ -228,7 +228,8 @@ class UnifiedViewer(QMainWindow):
                         if view_name:
                             view_to_model_map[view_name] = {
                                 "model": model_config.get("model", ""),
-                                "execution": model_config.get("execution", "cpu")
+                                "execution": model_config.get("execution", "cpu"),
+                                "infps": model_config.get("infps", None)
                             }
             
             # Assign model configurations to views
@@ -401,17 +402,19 @@ class UnifiedViewer(QMainWindow):
             self.video_frame_queue,
             view_frame_queues,
             self.yolo_views,
-            self.shutdown_flag
+            self.shutdown_flag,
+            model_settings=self.model_settings
         )
         self.video_feeder.start_feed_thread()
 
-        # Start ResNet image feeder at 10 Hz for ResNet views
+        # Start ResNet image feeder honoring per-view infps (defaulting to 2 FPS)
         self.resnet_feeder = ResnetImageFeeder(
             image_dir="./imagenet-sample-images",
             view_frame_queues=view_frame_queues,
             resnet_views=self.resnet_views,
             shutdown_flag=self.shutdown_flag,
-            interval_sec=0.5
+            model_settings=self.model_settings,
+            default_interval_sec=0.5
         )
         self.resnet_feeder.start_feed_thread()
         

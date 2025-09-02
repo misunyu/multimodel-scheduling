@@ -183,9 +183,9 @@ class ResNetViewHandler(ViewHandler):
                 print(f"[{self.view_name} Display ERROR] {e}")
 
 class VideoFeeder:
-    """Class for feeding video frames to model queues."""
+    """Class for feeding video frames to model queues, honoring per-view input FPS (infps)."""
     
-    def __init__(self, video_queue, view_frame_queues, yolo_views, shutdown_flag):
+    def __init__(self, video_queue, view_frame_queues, yolo_views, shutdown_flag, model_settings=None):
         """
         Initialize the video feeder.
         
@@ -194,13 +194,30 @@ class VideoFeeder:
             view_frame_queues: Dictionary mapping view names to frame queues
             yolo_views: Set of views running YOLO models
             shutdown_flag: Flag to signal shutdown
+            model_settings: Dict view_name -> {model, execution, infps}
         """
         self.video_queue = video_queue
         self.view_frame_queues = view_frame_queues
-        self.yolo_views = yolo_views
+        self.yolo_views = set(yolo_views or [])
         self.shutdown_flag = shutdown_flag
+        self.model_settings = model_settings or {}
         # Track dropped frames per view due to full queue
         self.drop_counts = {v: 0 for v in view_frame_queues.keys()}
+        # Compute per-view enqueue intervals from infps
+        self.view_intervals = {}
+        for v in self.yolo_views:
+            try:
+                infps = self.model_settings.get(v, {}).get("infps", None)
+                if infps is None:
+                    interval = None
+                else:
+                    inf = float(infps)
+                    interval = (1.0 / inf) if inf > 0 else None
+                self.view_intervals[v] = interval
+            except Exception:
+                self.view_intervals[v] = None
+        # Last enqueue timestamps per view
+        self.last_enqueue_ts = {v: 0.0 for v in self.yolo_views}
         
     def start_feed_thread(self):
         """Start the thread for feeding video frames to model queues."""
@@ -209,44 +226,44 @@ class VideoFeeder:
         return thread
         
     def feed_queues(self):
-        """Feed video frames to model queues."""
+        """Feed video frames to model queues, enforcing per-view infps intervals when provided."""
         global_exit_flag = False  # This should be passed from the main application
-        fps = 30.0
-        
+        # Source video FPS only limits max rate; per-view infps throttles enqueueing
+        source_fps = 30.0
         try:
             import cv2
             cap = cv2.VideoCapture("./stockholm_1280x720.mp4")
             fps_read = cap.get(cv2.CAP_PROP_FPS)
             if fps_read > 1.0:
-                fps = fps_read
+                source_fps = fps_read
             cap.release()
         except Exception as e:
             print(f"[feed_queues] Failed to read FPS, using default 30.0: {e}")
-
-        frame_delay = 1.0 / fps
+        min_sleep = max(0.001, 1.0 / (source_fps * 2.0))  # small sleep to avoid busy loop
 
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
                 frame = self.video_queue.get(timeout=1)
-                
+                now = time.time()
                 # Feed frames to all views that are running YOLO models
-                for view_name in self.yolo_views:
-                    if view_name in self.view_frame_queues:
+                for view_name in list(self.yolo_views):
+                    if view_name not in self.view_frame_queues:
+                        continue
+                    interval = self.view_intervals.get(view_name)  # None means no throttle (enqueue every frame)
+                    last_ts = self.last_enqueue_ts.get(view_name, 0.0)
+                    if (interval is None) or ((now - last_ts) >= interval):
                         frame_q = self.view_frame_queues[view_name]
                         try:
-                            # Use non-blocking put with enqueue timestamp
-                            frame_q.put_nowait((frame.copy(), time.time()))
+                            frame_q.put_nowait((frame.copy(), now))
+                            self.last_enqueue_ts[view_name] = now
                         except queue.Full:
-                            # Drop frame if the queue is full
                             try:
                                 self.drop_counts[view_name] += 1
                             except Exception:
                                 pass
                         except (EOFError, BrokenPipeError, OSError):
-                            # Queue might be closed during shutdown
                             pass
-                
-                time.sleep(frame_delay)
+                time.sleep(min_sleep)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -255,22 +272,37 @@ class VideoFeeder:
                     break
 
 class ResnetImageFeeder:
-    """Class for feeding image samples to ResNet model input queues at a fixed interval."""
+    """Class for feeding image samples to ResNet model input queues honoring per-view infps."""
 
-    def __init__(self, image_dir, view_frame_queues, resnet_views, shutdown_flag, interval_sec=0.5):
+    def __init__(self, image_dir, view_frame_queues, resnet_views, shutdown_flag, model_settings=None, default_interval_sec=0.5):
         """
         Args:
             image_dir: Directory of sample images to cycle through
             view_frame_queues: Dict view_name -> frame_queue
             resnet_views: Set of view_names that are running ResNet
             shutdown_flag: Event/flag to stop feeding
-            interval_sec: Interval between enqueues per view (default 0.1s)
+            model_settings: Dict view_name -> {model, execution, infps}
+            default_interval_sec: Fallback interval if infps not provided
         """
         self.image_dir = image_dir
         self.view_frame_queues = view_frame_queues
-        self.resnet_views = resnet_views
+        self.resnet_views = set(resnet_views or [])
         self.shutdown_flag = shutdown_flag
-        self.interval_sec = max(0.0, float(interval_sec) if interval_sec else 0.1)
+        self.model_settings = model_settings or {}
+        self.default_interval_sec = max(0.0, float(default_interval_sec) if default_interval_sec else 0.5)
+        # Compute per-view interval from infps
+        self.view_intervals = {}
+        for v in self.resnet_views:
+            try:
+                infps = self.model_settings.get(v, {}).get("infps", None)
+                if infps is None:
+                    interval = self.default_interval_sec
+                else:
+                    inf = float(infps)
+                    interval = (1.0 / inf) if inf > 0 else None
+                self.view_intervals[v] = interval
+            except Exception:
+                self.view_intervals[v] = self.default_interval_sec
         self._images = []
         self._index_map = {}
         try:
@@ -306,27 +338,32 @@ class ResnetImageFeeder:
 
     def feed_queues(self):
         global_exit_flag = False
-        last_time = 0.0
+        # Track last enqueue time per view
+        last_ts = {v: 0.0 for v in self.resnet_views}
+        min_sleep = 0.005
         while not self.shutdown_flag.is_set() and not global_exit_flag:
-            start = time.time()
+            now = time.time()
             try:
                 for view_name in list(self.resnet_views):
                     q = self.view_frame_queues.get(view_name)
                     if q is None:
                         continue
+                    interval = self.view_intervals.get(view_name, self.default_interval_sec)
+                    if interval is None:
+                        # If interval is None (infps <= 0), skip feeding this view
+                        continue
+                    if (now - last_ts.get(view_name, 0.0)) < interval:
+                        continue
                     img = self._next_image(view_name)
                     if img is None:
                         continue
                     try:
-                        q.put_nowait((img, time.time()))
+                        q.put_nowait((img, now))
+                        last_ts[view_name] = now
                     except queue.Full:
                         pass
                     except (EOFError, BrokenPipeError, OSError):
                         pass
             except Exception as e:
                 print(f"[ResnetImageFeeder ERROR] {e}")
-            # Sleep to maintain approximately interval_sec between batches per view
-            elapsed = time.time() - start
-            to_sleep = self.interval_sec - elapsed
-            if to_sleep > 0:
-                time.sleep(to_sleep)
+            time.sleep(min_sleep)
