@@ -648,10 +648,18 @@ class ONNXProfilerApp(QMainWindow):
                 model_id = f"{model}_{device}"
                 
                 # Add the model configuration
+                # Determine default inference FPS based on model type
+                infps = None
+                lname = model.lower()
+                if "resnet50" in lname:
+                    infps = 2
+                elif "yolov3" in lname:
+                    infps = 30
                 schedules[combination_name][model_id] = {
                     "model": model,
                     "execution": device,
-                    "display": f"view{j+1}"  # Assign views in order
+                    "display": f"view{j+1}",  # Assign views in order
+                    **({"infps": infps} if infps is not None else {})
                 }
         
         # Write to model_schedules.yaml

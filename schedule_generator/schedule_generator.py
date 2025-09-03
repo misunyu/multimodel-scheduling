@@ -44,7 +44,7 @@ class ModelProfiler:
         Generate dummy input data for a tensor based on its shape and type.
         
         Args:
-            input_tensor: ONNX tensor info
+            input_tensor: ONNX tensor info (onnxruntime.NodeArg)
             
         Returns:
             Numpy array with appropriate shape and data type
@@ -56,25 +56,49 @@ class ModelProfiler:
             if not isinstance(dim, int) or dim <= 0:
                 if i == 0:  # Batch dimension
                     shape[i] = 1
-                elif "height" in input_tensor.name.lower() or "h" == input_tensor.name.lower():
+                elif "height" in input_tensor.name.lower() or input_tensor.name.lower() in ("h",):
                     shape[i] = 224  # Common image height
-                elif "width" in input_tensor.name.lower() or "w" == input_tensor.name.lower():
+                elif "width" in input_tensor.name.lower() or input_tensor.name.lower() in ("w",):
                     shape[i] = 224  # Common image width
                 else:
                     shape[i] = 128  # Default for other dimensions
         
-        # Create appropriate numpy array based on data type
-        if input_tensor.type == "FLOAT":
-            return np.random.rand(*shape).astype(np.float32)
-        elif input_tensor.type == "INT32":
-            return np.random.randint(0, 10, size=shape).astype(np.int32)
-        elif input_tensor.type == "INT64":
-            return np.random.randint(0, 10, size=shape).astype(np.int64)
-        elif input_tensor.type == "BOOL":
-            return np.random.choice([True, False], size=shape)
-        else:
-            # Default to float32 for other types
-            return np.random.rand(*shape).astype(np.float32)
+        # Map ONNXRuntime type string (e.g., 'tensor(uint8)') to numpy dtype
+        t = str(getattr(input_tensor, 'type', '') or '').lower()
+        # Also handle raw ONNX ElementType names like 'FLOAT', 'INT32'
+        def rand_float(dtype, low=0.0, high=1.0):
+            arr = np.random.rand(*shape).astype(np.float32)
+            if low != 0.0 or high != 1.0:
+                arr = (arr * (high - low)) + low
+            return arr.astype(dtype, copy=False)
+        if 'uint8' in t:
+            return np.random.randint(0, 256, size=shape, dtype=np.uint8)
+        if 'int8' in t:
+            return np.random.randint(-128, 128, size=shape, dtype=np.int8)
+        if 'uint16' in t:
+            return np.random.randint(0, 65536, size=shape, dtype=np.uint16)
+        if 'int16' in t:
+            return np.random.randint(-32768, 32768, size=shape, dtype=np.int16)
+        if 'uint32' in t:
+            return np.random.randint(0, np.iinfo(np.uint32).max, size=shape, dtype=np.uint32)
+        if 'int32' in t:
+            return np.random.randint(-2**31, 2**31 - 1, size=shape, dtype=np.int32)
+        if 'uint64' in t:
+            return np.random.randint(0, 2**32 - 1, size=shape, dtype=np.uint64)  # limit to 32-bit range for randint
+        if 'int64' in t:
+            # numpy randint upper bound limited for int64; use 32-bit range to avoid overflow
+            return np.random.randint(-2**31, 2**31 - 1, size=shape, dtype=np.int64)
+        if 'bool' in t:
+            return np.random.choice([True, False], size=shape).astype(np.bool_)
+        if 'float16' in t or 'fp16' in t:
+            return rand_float(np.float16)
+        if 'float' in t or t == 'float' or t == 'tensor(float)':
+            return rand_float(np.float32)
+        if 'double' in t or 'float64' in t:
+            return rand_float(np.float64)
+        
+        # Fallback to float32
+        return rand_float(np.float32)
     
     def profile_model_cpu(self, model_path: str) -> Tuple[float, float, Dict[str, Any]]:
         """
