@@ -239,10 +239,10 @@ class ScheduleExecutor:
             best = max(entries, key=_score)
             best_combo = best.get('combination') or 'unknown'
 
-            final_obj = {"best deployment": best_combo, "data": entries}
+            final_obj = {"best deployment": best_combo, "schedule file": os.path.basename(self.schedule_file), "data": entries}
             with open(results_path, 'w', encoding='utf-8') as wf:
                 json.dump(final_obj, wf, indent=4, ensure_ascii=False)
-            print(f"[Executor] Wrote results with best deployment: {best_combo}")
+            print(f"[Executor] Wrote results with best deployment: {best_combo} (schedule: {os.path.basename(self.schedule_file)})")
         except Exception as e:
             print(f"[Executor] Warning: failed to write required results format: {e}")
 
