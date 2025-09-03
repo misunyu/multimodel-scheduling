@@ -15,22 +15,31 @@ import yaml
 import json
 from typing import List
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
 from unified_viewer import UnifiedViewer, InfoWindow
 
 
 class ScheduleExecutor:
     """Encapsulates state and behavior for running schedule combinations sequentially."""
 
-    def __init__(self, schedule_file: str, duration: int, info_window: InfoWindow):
+    def __init__(self, schedule_file: str, duration: int, info_window: InfoWindow, selected_combo: str = None):
         self.schedule_file = schedule_file
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
+        self._selected_combo = selected_combo
 
         self._viewer: UnifiedViewer = None
         self._index: int = 0
         self._running: bool = False
         self._combinations: List[str] = self._load_combinations(schedule_file)
+
+        # If a specific combination is requested, filter list to that single name
+        if self._selected_combo:
+            if self._selected_combo in self._combinations:
+                self._combinations = [self._selected_combo]
+            else:
+                print(f"[Executor] ERROR: requested combination '{self._selected_combo}' not found in {os.path.basename(schedule_file)}")
+                os._exit(2)
 
         if not self._combinations:
             print('[Executor] No combinations found in schedule file. Exiting.')
@@ -111,6 +120,11 @@ class ScheduleExecutor:
 
     def _run_next(self):
         if self._index >= len(self._combinations):
+            # If a specific combination was requested (executor-only mode), loop indefinitely until app exit
+            if getattr(self, '_selected_combo', None):
+                self._index = 0
+                QTimer.singleShot(300, self._run_next)
+                return
             print('[Executor] All combinations executed. Leaving windows open.')
             self._write_best_header()
             self._running = False
@@ -130,18 +144,32 @@ class ScheduleExecutor:
             combination_name=combo,
             info_window=self.info_window,
         )
+        # Mark viewer as executor-only if running a specific selected combo
+        try:
+            self._viewer.executor_only = bool(getattr(self, '_selected_combo', None))
+        except Exception:
+            pass
         # Pass shared results path to the viewer so all combinations append to the same run file
         try:
             self._viewer.results_path = self._results_path
         except Exception:
             pass
 
-        # Keep info window up-to-date and on top
+        # Keep info window up-to-date; in schedule_name mode keep it behind
         try:
             self.info_window.update_schedule_name(f"Current Schedule: {combo}")
             self.info_window.show()
-            self.info_window.raise_()
-            self.info_window.activateWindow()
+            if getattr(self, '_selected_combo', None):
+                try:
+                    self.info_window.lower()
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.info_window.raise_()
+                    self.info_window.activateWindow()
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -267,15 +295,50 @@ def main():
                         help='Path to the model scheduling information file (default: model_schedules.yaml)')
     parser.add_argument('--duration', '-d', type=int, default=60,
                         help='Execution duration per schedule in seconds (default: 60)')
+    parser.add_argument('--schedule_name', '--schedule-name', type=str, default=None,
+                        help='When set, run only the specified combination name from the schedule file in executor-only mode (no controller).')
     args = parser.parse_args()
 
     # No legacy pre-clean: results are now saved per-run under results/performance_*.json
 
     app = QApplication(sys.argv)
 
+    # Create the InfoWindow instance
     info = InfoWindow(parent=None)
+
+    # If schedule_name is provided, run executor-only mode and send InfoWindow to back
+    if args.schedule_name:
+        try:
+            # Clear always-on-top and ensure the window is behind
+            info.setWindowFlag(Qt.WindowStaysOnTopHint, False)
+            info.show()
+            try:
+                info.lower()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        executor = ScheduleExecutor(schedule_file=args.schedule, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
+        # Disable Start button since we auto-run and no controller
+        try:
+            info.start_button.setEnabled(False)
+            info.stop_button.setEnabled(True)
+        except Exception:
+            pass
+        # Start immediately and keep cycling the same combination until user closes the app or presses Stop
+        executor.start(args.duration)
+        try:
+            exit_code = app.exec_()
+        except Exception as e:
+            print(f"[Main] QApplication error: {e}")
+            exit_code = 1
+        print('[Main] QApplication loop exited.')
+        os._exit(exit_code)
+
+    # Otherwise, show InfoWindow and use full GUI mode
     info.show()
 
+    # Default GUI mode with controller
     executor = ScheduleExecutor(schedule_file=args.schedule, duration=args.duration, info_window=info)
     controller = Controller(executor)
 

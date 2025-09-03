@@ -179,7 +179,16 @@ class UnifiedViewer(QMainWindow):
                 pass
         else:
             self.info_window = InfoWindow(parent=self)
-        self.info_window.show()
+        # Show the info window only when not marked as headless/hidden
+        try:
+            if not getattr(self.info_window, 'hidden_headless', False):
+                self.info_window.show()
+        except Exception:
+            # Fallback to show to preserve legacy behavior if attribute missing
+            try:
+                self.info_window.show()
+            except Exception:
+                pass
         
         # Set window title to indicate it's a secondary window
         self.setWindowTitle("Schedule Executor Display (Secondary Window)")
@@ -561,28 +570,39 @@ class UnifiedViewer(QMainWindow):
         os._exit(0)
     
     def closeEvent(self, event):
-        """Handle window close event."""
-        print("[UnifiedViewer] Close event triggered - hiding window only")
+        """Handle window close event.
+        - In normal GUI mode: hide only and keep app running.
+        - In executor-only mode (--schedule_name): shut down entire application.
+        """
         event.accept()
         # Immediately set shutdown flags to stop video generation
         self.shutdown_flag.set()
         self.global_exit_flag = True
-        
-        # Don't close the info window as it's now the main window
-        # Instead, just hide this window
-        self.hide()
-        
+
         # Set all shutdown events to stop processes
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
                      'view3_shutdown_event', 'view4_shutdown_event',
                      'video_shutdown_event']:
-            event = getattr(self, name, None)
-            if event:
-                event.set()
-                
-        # Call the stop_execution method to clean up resources but don't exit
+            ev = getattr(self, name, None)
+            if ev:
+                ev.set()
+
+        # Clean up model execution and resources once
         self.stop_execution()
-        print("[UnifiedViewer] Window hidden, info_window remains open")
+
+        # If running in executor-only mode, shut down everything; otherwise just hide
+        if getattr(self, 'executor_only', False):
+            print("[UnifiedViewer] Close event in executor-only mode - terminating application")
+            try:
+                if self.info_window:
+                    self.info_window.close()
+            except Exception:
+                pass
+            self.shutdown_all()
+        else:
+            print("[UnifiedViewer] Close event triggered - hiding window only")
+            self.hide()
+            print("[UnifiedViewer] Window hidden, info_window remains open")
     
     def shutdown_all(self):
         """Clean up resources and shut down the application."""
