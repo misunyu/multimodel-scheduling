@@ -297,7 +297,19 @@ def main():
                         help='Execution duration per schedule in seconds (default: 60)')
     parser.add_argument('--schedule_name', '--schedule-name', type=str, default=None,
                         help='When set, run only the specified combination name from the schedule file in executor-only mode (no controller).')
+    parser.add_argument('--auto_start_all', action='store_true',
+                        help='Automatically start running all combinations and quit the app when done (no Start button needed).')
     args = parser.parse_args()
+
+    # Resolve schedule path: if given path doesn't exist, try tests/<basename>
+    schedule_path = args.schedule
+    try:
+        if not os.path.isabs(schedule_path) and not os.path.exists(schedule_path):
+            tests_candidate = os.path.join(os.path.dirname(__file__), 'tests', os.path.basename(schedule_path))
+            if os.path.exists(tests_candidate):
+                schedule_path = tests_candidate
+    except Exception:
+        pass
 
     # No legacy pre-clean: results are now saved per-run under results/performance_*.json
 
@@ -318,7 +330,7 @@ def main():
                 pass
         except Exception:
             pass
-        executor = ScheduleExecutor(schedule_file=args.schedule, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
+        executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
         # Disable Start button since we auto-run and no controller
         try:
             info.start_button.setEnabled(False)
@@ -339,7 +351,7 @@ def main():
     info.show()
 
     # Default GUI mode with controller
-    executor = ScheduleExecutor(schedule_file=args.schedule, duration=args.duration, info_window=info)
+    executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info)
     controller = Controller(executor)
 
     # Assign controller as the parent so InfoWindow's built-in handlers call our methods
@@ -347,6 +359,32 @@ def main():
         info.parent = controller
     except Exception:
         pass
+
+    # If auto_start_all requested, start immediately and quit when all combinations finish
+    if args.auto_start_all:
+        try:
+            info.start_button.setEnabled(False)
+            info.stop_button.setEnabled(True)
+        except Exception:
+            pass
+
+        # Hook to quit the app once all combos are done
+        def _on_all_done_quit():
+            try:
+                # When not running and start button is enabled again, we consider it done
+                if not executor._running and executor._index == 0:
+                    print('[Main] Auto mode: all combinations finished. Quitting application...')
+                    QTimer.singleShot(50, app.quit)
+                    return
+            except Exception:
+                pass
+            # Re-check soon until done
+            QTimer.singleShot(200, _on_all_done_quit)
+
+        # Start now with requested duration
+        controller.start_execution(args.duration)
+        # Begin monitoring for completion
+        QTimer.singleShot(200, _on_all_done_quit)
 
     try:
         exit_code = app.exec_()
