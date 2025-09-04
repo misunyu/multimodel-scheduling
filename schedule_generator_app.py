@@ -21,6 +21,7 @@ from image_processing import (
     resnet50_preprocess_local,
     yolo_postprocess_cpu,
     yolo_postprocess_npu,
+    resnet50_postprocess_local,
 )
 
 class ONNXProfilerApp(QMainWindow):
@@ -517,6 +518,13 @@ class ONNXProfilerApp(QMainWindow):
             results.append(("yolo_postprocess_npu", avg4))
         except Exception as e:
             self.log_message(f"[Warn] yolo_postprocess_npu timing failed: {e}")
+        try:
+            # Dummy logits for ResNet50: 1 x 1000
+            logits_dummy = np.random.randn(1, 1000).astype(np.float32)
+            avg5 = avg_time_ms(resnet50_postprocess_local, logits_dummy, raw_img.copy(), True)
+            results.append(("resnet50_postprocess_local", avg5))
+        except Exception as e:
+            self.log_message(f"[Warn] resnet50_postprocess_local timing failed: {e}")
 
         # Update table
         self.pre_post_table.setRowCount(0)

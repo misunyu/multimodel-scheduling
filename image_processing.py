@@ -92,6 +92,54 @@ def resnet50_preprocess_local(raw_input_img):
     """
     return image_preprocess(raw_input_img, 224, 224)
 
+# --- ResNet50 postprocess (local) ---
+# Load ImageNet class labels once
+try:
+    _IMAGENET_CLASSES = None
+    classes_path = os.path.join(os.path.dirname(__file__), "imagenet_classes.txt")
+    if os.path.exists(classes_path):
+        with open(classes_path, "r", encoding="utf-8") as _f:
+            _IMAGENET_CLASSES = [line.strip() for line in _f]
+except Exception:
+    _IMAGENET_CLASSES = None
+
+
+def resnet50_postprocess_local(logits, original_img=None, draw=True):
+    """
+    Simple post-processing for ResNet50 classification logits.
+    - Computes argmax over class dimension.
+    - Optionally draws the class name on provided image.
+
+    Args:
+        logits (np.ndarray): Model output logits or probabilities. Shapes like (N,1000), (1,1000), or (1000,).
+        original_img (np.ndarray, optional): BGR image to draw on.
+        draw (bool): If True and image provided, draw top-1 class text.
+
+    Returns:
+        tuple: (class_id, class_name, drawn_image_or_none)
+    """
+    arr = np.asarray(logits)
+    if arr.ndim == 2:
+        arr_use = arr[0] if arr.shape[0] == 1 else arr.mean(axis=0)
+    else:
+        arr_use = np.squeeze(arr)
+    class_id = int(np.argmax(arr_use)) if arr_use.size > 0 else -1
+
+    if _IMAGENET_CLASSES is not None and 0 <= class_id < len(_IMAGENET_CLASSES):
+        class_name = _IMAGENET_CLASSES[class_id]
+    else:
+        class_name = f"Class ID: {class_id}"
+
+    img_out = None
+    if draw and original_img is not None:
+        img_out = original_img
+        try:
+            cv2.putText(img_out, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        except Exception:
+            pass
+
+    return class_id, class_name, img_out
+
 def draw_detection_boxes(img, box, score, class_id):
     """Draw a single XYWH box on img (clamped to image)."""
     H, W = img.shape[:2]
