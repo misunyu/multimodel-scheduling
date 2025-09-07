@@ -41,7 +41,6 @@ class InfoWindow(QWidget):
         self.schedule_name_label.setStyleSheet(border_style)
         self.model_performance_label.setStyleSheet(border_style)
         self.cpu_info_label.setStyleSheet(border_style)
-        self.npu_info_label.setStyleSheet(border_style)
         
         # Initialize the start button
         self.start_button.clicked.connect(self.on_start_button_clicked)
@@ -128,9 +127,6 @@ class InfoWindow(QWidget):
         """Update the CPU info label."""
         self.cpu_info_label.setText(text)
     
-    def update_npu_info(self, text):
-        """Update the NPU info label."""
-        self.npu_info_label.setText(text)
         
     def update_schedule_name(self, text):
         """Update the schedule name label."""
@@ -742,21 +738,59 @@ class UnifiedViewer(QMainWindow):
         view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
         view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
         
-        # Create performance text
+        # Determine input frequencies (Hz) for each view from model_settings; provide sensible defaults
+        def _infps_for(view):
+            try:
+                v = self.model_settings.get(view, {}).get("infps", None)
+                if isinstance(v, (int, float)) and v > 0:
+                    return float(v)
+            except Exception:
+                pass
+            # Defaults: ResNet image feeder default_interval_sec=0.5 -> 2 Hz; YOLO video feeder is auto/video-driven
+            model = self.model_settings.get(view, {}).get("model", "")
+            if str(model).lower().startswith("resnet"):
+                return 2.0
+            return None  # auto
+        v1_in = _infps_for("view1")
+        v2_in = _infps_for("view2")
+        v3_in = _infps_for("view3")
+        v4_in = _infps_for("view4")
+        def _in_label(val, color=None):
+            if val is None:
+                txt = "auto"
+            else:
+                txt = f"{val:.1f} fps"
+            if color:
+                return f"<span style='color: {color};'>{txt}</span>"
+            return txt
+        # Create performance text with requested multi-line per-view format
         performance_text = (
             f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
             f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>"
-            f"<b>View1 ({view1_model} {view1_mode})</b> Avg FPS: {view1_avg_fps:.1f} "
-            f"(<span style='color: gray;'>{view1_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: purple;'>View2 ({view2_model} {view2_mode})</span></b> Avg FPS: "
-            f"<span style='color: purple;'>{view2_avg_fps:.1f}</span> "
-            f"(<span style='color: purple;'>{view2_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: green;'>View3 ({view3_model} {view3_mode})</span></b> Avg FPS: "
-            f"<span style='color: green;'>{view3_avg_fps:.1f}</span> "
-            f"(<span style='color: green;'>{view3_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: blue;'>View4 ({view4_model} {view4_mode})</span></b> Avg FPS: "
-            f"<span style='color: blue;'>{view4_avg_fps:.1f}</span> "
-            f"(<span style='color: blue;'>{view4_avg_infer_time:.1f} ms</span>)"
+            # View1
+            f"<b>View1</b><br>"
+            f"Model name: {view1_model} ({view1_mode})<br>"
+            f"Avg FPS: {view1_avg_fps:.1f}<br>"
+            f"Avg infer time: <span style='color: gray;'>{view1_avg_infer_time:.1f} ms</span><br>"
+            f"Input: {_in_label(v1_in)}<br><br>"
+            # View2 (purple)
+            f"<b><span style='color: purple;'>View2</span></b><br>"
+            f"<span style='color: purple;'>Model name: {view2_model} ({view2_mode})</span><br>"
+            f"<span style='color: purple;'>Avg FPS: {view2_avg_fps:.1f}</span><br>"
+            f"<span style='color: purple;'>Avg infer time: {view2_avg_infer_time:.1f} ms</span><br>"
+            f"Input: {_in_label(v2_in, 'purple')}<br><br>"
+            # View3 (green)
+            f"<b><span style='color: green;'>View3</span></b><br>"
+            f"<span style='color: green;'>Model name: {view3_model} ({view3_mode})</span><br>"
+            f"<span style='color: green;'>Avg FPS: {view3_avg_fps:.1f}</span><br>"
+            f"<span style='color: green;'>Avg infer time: {view3_avg_infer_time:.1f} ms</span><br>"
+            f"Input: {_in_label(v3_in, 'green')}<br><br>"
+            # View4 (blue)
+            f"<b><span style='color: blue;'>View4</span></b><br>"
+            f"<span style='color: blue;'>Model name: {view4_model} ({view4_mode})</span><br>"
+            f"<span style='color: blue;'>Avg FPS: {view4_avg_fps:.1f}</span><br>"
+            f"<span style='color: blue;'>Avg infer time: {view4_avg_infer_time:.1f} ms</span><br>"
+            f"Input: {_in_label(v4_in, 'blue')}"
         )
         
         # Create CPU info text
@@ -767,18 +801,9 @@ class UnifiedViewer(QMainWindow):
             f"CtxSwitches/sec: {delta_ctx} | Int/sec: {delta_int}"
         )
         
-        # Create NPU info text
-        npu_info_text = (
-            f"<b><span style='color: green;'>NPU</span></b><br>"
-            f"Usage: 42.0 %<br>"
-            f"LoadAvg: 0.12 / 0.10 / 0.08<br>"
-            f"CtxSwitches/sec: 12 | Int/sec: 3"
-        )
-        
         # Update info window labels
         self.info_window.update_model_performance(performance_text)
         self.info_window.update_cpu_info(cpu_info_text)
-        self.info_window.update_npu_info(npu_info_text)
         
         # Update previous stats for next calculation
         self.prev_cpu_stats = current
