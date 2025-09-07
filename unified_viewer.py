@@ -776,27 +776,27 @@ class UnifiedViewer(QMainWindow):
             status1, details1 = self._evaluate_drop_rate_trigger()
             name1 = "drop-rate surge"
             if status1 is None:
-                line1 = f"재배치 trigger [{name1}]: 데이터 부족"
+                line1 = f"Reallocation trigger [{name1}]: Insufficient data"
             elif status1:
-                line1 = f"재배치 trigger [{name1}]: 만족 ({details1})"
+                line1 = f"Reallocation trigger [{name1}]: Satisfied ({details1})"
             else:
-                line1 = f"재배치 trigger [{name1}]: 불만족 ({details1})"
+                line1 = f"Reallocation trigger [{name1}]: Not satisfied ({details1})"
         except Exception:
             name1 = "drop-rate surge"
-            line1 = f"재배치 trigger [{name1}]: 계산 오류"
+            line1 = f"Reallocation trigger [{name1}]: Calculation error"
         # Evaluate Queueing-delay pressure and append as next line
         try:
             status2, details2 = self._evaluate_queue_delay_trigger()
             name2 = "Queueing-delay pressure"
             if status2 is None:
-                line2 = f"[{name2}]: 데이터 부족"
+                line2 = f"[{name2}]: Insufficient data"
             elif status2:
-                line2 = f"[{name2}]: 만족 ({details2})"
+                line2 = f"[{name2}]: Satisfied ({details2})"
             else:
-                line2 = f"[{name2}]: 불만족 ({details2})"
+                line2 = f"[{name2}]: Not satisfied ({details2})"
         except Exception:
             name2 = "Queueing-delay pressure"
-            line2 = f"[{name2}]: 계산 오류"
+            line2 = f"[{name2}]: Calculation error"
         self.info_window.update_trigger_below_metrics(line1 + "\n" + line2)
         trigger_text = ""
 
@@ -1259,7 +1259,7 @@ class UnifiedViewer(QMainWindow):
                 return None, "<2 windows"
             r0, r1 = self._rt_drop_windows[-2], self._rt_drop_windows[-1]
             triggered = (r0 > threshold_fps) and (r1 > threshold_fps)
-            details = f"최근: {r1:.1f} FPS, 이전: {r0:.1f} FPS, 임계값: {threshold_fps:.0f}, window_sec: 3"
+            details = f"Recent: {r1:.1f} FPS, Previous: {r0:.1f} FPS, Threshold: {threshold_fps:.0f}, window_sec: 3"
             return triggered, details
         except Exception as e:
             return None, f"error: {e}"
@@ -1329,7 +1329,7 @@ class UnifiedViewer(QMainWindow):
                 return (dev, vals_dict[dev])
             dev0, top0 = _top(vals0)
             dev1, top1 = _top(vals1)
-            details = f"최근: {dev1} {top1:.1f}, 이전: {dev0} {top0:.1f}, 임계값: {threshold_val:.0f}, window_sec: 3"
+            details = f"Recent: {dev1} {top1:.1f}, Previous: {dev0} {top0:.1f}, Threshold: {threshold_val:.0f}, window_sec: 3"
             return triggered, details
         except Exception as e:
             return None, f"error: {e}"
