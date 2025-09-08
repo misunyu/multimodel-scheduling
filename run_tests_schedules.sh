@@ -44,7 +44,7 @@ invoke_one() {
 
   if [[ -x "$ROOT_DIR/schedule_executor_main.sh" ]]; then
     if (( TIMEOUT_SECS > 0 )); then
-      timeout "$TIMEOUT_SECS" bash -c '"$0" -schedule "$1" --duration 10 --auto_start_all' "$ROOT_DIR/schedule_executor_main.sh" "$schedule_file"
+      timeout "$TIMEOUT_SECS" bash -c '"$0" -schedule "$1" --duration 30 --auto_start_all' "$ROOT_DIR/schedule_executor_main.sh" "$schedule_file"
     else
       "$ROOT_DIR/schedule_executor_main.sh" -schedule "$schedule_file" --duration 10 --auto_start_all
     fi
