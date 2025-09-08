@@ -770,33 +770,12 @@ class UnifiedViewer(QMainWindow):
         view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
         
         # Create performance text and append reallocation trigger status based on recent results
-        # Evaluate drop rate trigger: two consecutive windows with drop rate > 30 FPS
-        trigger_text = ""
-        try:
-            status1, details1 = self._evaluate_drop_rate_trigger()
-            name1 = "drop-rate surge"
-            if status1 is None:
-                line1 = f"Reallocation trigger [{name1}]: Insufficient data"
-            elif status1:
-                line1 = f"Reallocation trigger [{name1}]: Satisfied ({details1})"
-            else:
-                line1 = f"Reallocation trigger [{name1}]: Not satisfied ({details1})"
-        except Exception:
-            name1 = "drop-rate surge"
-            line1 = f"Reallocation trigger [{name1}]: Calculation error"
-        # Evaluate Queueing-delay pressure and append as next line
-        try:
-            status2, details2 = self._evaluate_queue_delay_trigger()
-            name2 = "Queueing-delay pressure"
-            if status2 is None:
-                line2 = f"[{name2}]: Insufficient data"
-            elif status2:
-                line2 = f"[{name2}]: Satisfied ({details2})"
-            else:
-                line2 = f"[{name2}]: Not satisfied ({details2})"
-        except Exception:
-            name2 = "Queueing-delay pressure"
-            line2 = f"[{name2}]: Calculation error"
+        # NOTE: Reallocation trigger condition checks are disabled per requirement.
+        # The UI will display a fixed message to indicate triggers are disabled.
+        name1 = "drop-rate surge"
+        name2 = "Queueing-delay pressure"
+        line1 = f"Reallocation trigger [{name1}]: Disabled"
+        line2 = f"[{name2}]: Disabled"
         self.info_window.update_trigger_below_metrics(line1 + "\n" + line2)
         trigger_text = ""
 
@@ -1207,6 +1186,7 @@ class UnifiedViewer(QMainWindow):
     def _evaluate_drop_rate_trigger(self, threshold_fps=30.0, min_windows=2):
         """
         Evaluate the drop rate trigger condition at runtime every fixed redeploy window.
+        NOTE: Disabled per requirement; returns (None, 'disabled').
         Rules:
         - redeploy_window_sec is fixed to 3 seconds.
         - Do NOT read any files. Use in-memory drop counters from VideoFeeder.
@@ -1216,123 +1196,15 @@ class UnifiedViewer(QMainWindow):
             - status: True if trigger satisfied, False if not, None if insufficient data.
             - details: short text with computed rates for the last two windows.
         """
-        try:
-            redeploy_window_sec = 3.0
-            # Lazily initialize runtime window buffers
-            if not hasattr(self, '_rt_drop_windows'):
-                self._rt_drop_windows = []  # store last few drop rates per window
-                self._rt_last_window_ts = 0.0
-                self._rt_accum_drops = 0
-            import time
-            now = time.time()
-            # Initialize last timestamp on first call
-            if not self._rt_last_window_ts:
-                self._rt_last_window_ts = now
-            # Pull current drop counts from feeder
-            drop_map = getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}) or {}
-            scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in getattr(self, 'views_without_model', set())]
-            total_drops_current = sum(int(drop_map.get(v, 0) or 0) for v in scheduled_views)
-            # Maintain previous total to compute increment since last check
-            prev_total = getattr(self, '_rt_prev_total_drops', None)
-            if prev_total is None:
-                increment = 0
-            else:
-                increment = max(0, total_drops_current - prev_total)
-            self._rt_prev_total_drops = total_drops_current
-            # Accumulate within the current window
-            self._rt_accum_drops += increment
-            elapsed = now - self._rt_last_window_ts
-            if elapsed >= redeploy_window_sec:
-                # Close current window and compute rate
-                rate = (self._rt_accum_drops / redeploy_window_sec) if redeploy_window_sec > 0 else 0.0
-                self._rt_drop_windows.append(rate)
-                # Keep only last 2 windows for trigger decision
-                if len(self._rt_drop_windows) > 2:
-                    self._rt_drop_windows = self._rt_drop_windows[-2:]
-                # Reset for next window; handle overshoot by moving start forward multiples of window
-                windows_passed = int(elapsed // redeploy_window_sec)
-                # move window start forward
-                self._rt_last_window_ts += windows_passed * redeploy_window_sec
-                self._rt_accum_drops = 0
-            # Decide trigger
-            if len(self._rt_drop_windows) < min_windows:
-                return None, "<2 windows"
-            r0, r1 = self._rt_drop_windows[-2], self._rt_drop_windows[-1]
-            triggered = (r0 > threshold_fps) and (r1 > threshold_fps)
-            details = f"Recent: {r1:.1f} FPS, Previous: {r0:.1f} FPS, Threshold: {threshold_fps:.0f}, window_sec: 3"
-            return triggered, details
-        except Exception as e:
-            return None, f"error: {e}"
+        # Disabled: immediate no-decision
+        return None, "disabled"
 
     def _evaluate_queue_delay_trigger(self, threshold_val=35.0, min_windows=2):
         """
         Evaluate Queueing-delay pressure at runtime per 3s window.
-        Condition: in two consecutive 3s windows, there exists any device whose (1000 / queue_wait_ms_p95) > threshold_val.
-        Uses _get_device_metrics_default to obtain per-device queue_wait_ms_p95 from current runtime logs/estimates.
-        Returns (status, details) where status is True/False/None and details includes per-device recent and previous values.
+        NOTE: Disabled per requirement; returns (None, 'disabled').
         """
-        try:
-            redeploy_window_sec = 3.0
-            # Buffers for per-window max device metric value and details
-            if not hasattr(self, '_rt_qdelay_windows'):
-                self._rt_qdelay_windows = []  # store last few max vals per window
-                self._rt_qdelay_last_ts = 0.0
-                self._rt_qdelay_prev_snapshot = None
-            import time
-            now = time.time()
-            if not self._rt_qdelay_last_ts:
-                self._rt_qdelay_last_ts = now
-            # Build per_view_stats minimal and devices set similar to metrics section
-            scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in getattr(self, 'views_without_model', set())]
-            # Pull avg_wait_ms from handlers if available
-            def _avg_wait(v):
-                h = getattr(self, f"{v}_handler", None)
-                return float(getattr(h, 'avg_wait_ms', 0.0) or 0.0)
-            per_view_stats = {}
-            devices_used = set()
-            for v in scheduled_views:
-                ms = self.model_settings.get(v, {})
-                exec_mode = str(ms.get('execution', 'CPU')).upper()
-                model_name = ms.get('model', '')
-                per_view_stats[v] = (0.0, 0.0, 0, model_name, exec_mode, _avg_wait(v), 0)
-                devices_used.add(exec_mode)
-            dev_metrics = self._get_device_metrics_default(devices_used, per_view_stats, scheduled_views) or {}
-            # Compute per-device transformed value: 1000 / q95 (handle 0 -> 0)
-            vals = {}
-            for dev_key, dm in dev_metrics.items():
-                try:
-                    q95 = float(dm.get('queue_wait_ms_p95', 0.0) or 0.0)
-                    val = (1000.0 / q95) if q95 > 0 else 0.0
-                    vals[dev_key] = val
-                except Exception:
-                    vals[dev_key] = 0.0
-            # Track max across devices for window decision; also keep last snapshot for details
-            max_val = max(vals.values()) if vals else 0.0
-            # Close window if elapsed >= 3s
-            elapsed = now - self._rt_qdelay_last_ts
-            if elapsed >= redeploy_window_sec:
-                self._rt_qdelay_windows.append((max_val, vals))
-                if len(self._rt_qdelay_windows) > 2:
-                    self._rt_qdelay_windows = self._rt_qdelay_windows[-2:]
-                windows_passed = int(elapsed // redeploy_window_sec)
-                self._rt_qdelay_last_ts += windows_passed * redeploy_window_sec
-            # Decide
-            if len(self._rt_qdelay_windows) < min_windows:
-                return None, "<2 windows"
-            (v0, vals0), (v1, vals1) = self._rt_qdelay_windows[-2], self._rt_qdelay_windows[-1]
-            triggered = (v0 > threshold_val) and (v1 > threshold_val)
-            # Prepare concise details: show top device each window and its values
-            def _top(vals_dict):
-                if not vals_dict:
-                    return ("-", 0.0)
-                dev = max(vals_dict, key=lambda k: vals_dict[k])
-                return (dev, vals_dict[dev])
-            dev0, top0 = _top(vals0)
-            dev1, top1 = _top(vals1)
-            details = f"Recent: {dev1} {top1:.1f}, Previous: {dev0} {top0:.1f}, Threshold: {threshold_val:.0f}, window_sec: 3"
-            return triggered, details
-        except Exception as e:
-            return None, f"error: {e}"
+        return None, "disabled"
 
     def save_pre_post_time_average(self):
         """Compute averages for the last run_id and insert a summary line at the top of result_pre_post_time.json (JSON Lines)."""
