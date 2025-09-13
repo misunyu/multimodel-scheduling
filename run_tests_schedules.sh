@@ -46,16 +46,16 @@ invoke_one() {
     if (( TIMEOUT_SECS > 0 )); then
       timeout "$TIMEOUT_SECS" bash -c '"$0" -schedule "$1" --duration 30 --auto_start_all' "$ROOT_DIR/schedule_executor_main.sh" "$schedule_file"
     else
-      "$ROOT_DIR/schedule_executor_main.sh" -schedule "$schedule_file" --duration 10 --auto_start_all
+      "$ROOT_DIR/schedule_executor_main.sh" -schedule "$schedule_file" --duration 30 --auto_start_all
     fi
   else
     # Fallback direct python invocation
     PY=python3
     command -v /opt/.pyenv/shims/python3 >/dev/null 2>&1 && PY=/opt/.pyenv/shims/python3
     if (( TIMEOUT_SECS > 0 )); then
-      timeout "$TIMEOUT_SECS" "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 10 --auto_start_all
+      timeout "$TIMEOUT_SECS" "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 30 --auto_start_all
     else
-      "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 10 --auto_start_all
+      "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 30 --auto_start_all
     fi
   fi
 
