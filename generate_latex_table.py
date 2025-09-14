@@ -50,8 +50,14 @@ def load_yaml(path: str) -> dict:
 
 
 def find_best_record(perf: dict) -> Tuple[str, dict]:
-    best_combo = perf.get('best deployment') or perf.get('best_deployment')
-    data = perf.get('data', [])
+    # Accept both dict and list formats
+    if isinstance(perf, list):
+        # treat as list of records already
+        data = [r for r in perf if isinstance(r, dict)]
+        best_combo = None
+    else:
+        best_combo = perf.get('best deployment') or perf.get('best_deployment')
+        data = perf.get('data', [])
     if not data:
         raise ValueError('No data entries in performance JSON')
     if best_combo:
@@ -206,7 +212,30 @@ def _build_row_from_perf(perf: dict, schedule: Optional[dict]) -> Tuple[str, int
 
 
 def _find_yaml_for_perf(perf: dict, yaml_search_dirs: List[str]) -> Optional[str]:
-    schedule_name = perf.get('schedule file') or perf.get('schedule_file')
+    # Some performance JSONs might be a list of records instead of a dict wrapper
+    # Normalize by extracting the first element if a list is provided
+    if isinstance(perf, list):
+        # try to find a dict in the list that has schedule info
+        candidate = None
+        for item in perf:
+            if isinstance(item, dict) and (('schedule file' in item) or ('schedule_file' in item)):
+                candidate = item
+                break
+        if candidate is None:
+            # fallback to first dict-like item
+            for item in perf:
+                if isinstance(item, dict):
+                    candidate = item
+                    break
+        perf = candidate or {}
+
+    schedule_name = None
+    if isinstance(perf, dict):
+        schedule_name = perf.get('schedule file') or perf.get('schedule_file')
+        # Some formats nest under a top-level 'meta' or similar
+        if not schedule_name and isinstance(perf.get('meta'), dict):
+            meta = perf['meta']
+            schedule_name = meta.get('schedule file') or meta.get('schedule_file')
     if not schedule_name:
         return None
     # If it's a path already, try it directly relative to repo root
@@ -240,7 +269,15 @@ def generate_grouped_tables(perf_paths: List[str], yaml_search_dirs: List[str]) 
         try:
             row, mcount = _build_row_from_perf(perf, schedule)
         except Exception:
-            continue
+            # If perf is a list of records, try wrapping into expected dict structure
+            try:
+                if isinstance(perf, list):
+                    perf_wrapped = {'data': perf}
+                    row, mcount = _build_row_from_perf(perf_wrapped, schedule)
+                else:
+                    continue
+            except Exception:
+                continue
         # Extract numeric tuple from the rendered row's Input Freq. part
         key_tuple: Tuple[int, ...] = ()
         try:
