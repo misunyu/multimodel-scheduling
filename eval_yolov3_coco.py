@@ -609,19 +609,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                             # de-letterbox
                             x1 = (x1 - dw) / r; y1 = (y1 - dh) / r
                             x2 = (x2 - dw) / r; y2 = (y2 - dh) / r
-                            x1 = float(np.clip(x1, 0, w0)); y1 = float(np.clip(y1, 0, h0))
-                            x2 = float(np.clip(x2, 0, w0)); y2 = float(np.clip(y2, 0, h0))
+                            x1 = np.clip(x1, 0, w0); y1 = np.clip(y1, 0, h0)
+                            x2 = np.clip(x2, 0, w0); y2 = np.clip(y2, 0, h0)
                             # Additional filters mirroring yolo_postprocess_npu
-                            w = x2 - x1
-                            h = y2 - y1
-                            min_sz = 4.0
-                            if w < min_sz or h < min_sz:
-                                continue
-                            if w > 0.98 * w0 or h > 0.98 * h0:
-                                continue
-                            ar = w / (h + 1e-6)
-                            if ar > 25.0 or ar < 1.0/25.0:
-                                continue
+                            # w = float(x2 - x1)
+                            # h = float(y2 - y1)
+                            # min_sz = 4.0
+                            # if w < min_sz or h < min_sz:
+                            #     continue
+                            # if w > 0.98 * w0 or h > 0.98 * h0:
+                            #     continue
+                            # ar = w / (h + 1e-6)
+                            # if ar > 25.0 or ar < 1.0/25.0:
+                            #     continue
                             dets.append((x1, y1, x2, y2, float(s[j]), int(class_ids[j])))
                 return dets
 
