@@ -267,7 +267,7 @@ def infer_input_shape(session: ort.InferenceSession) -> Tuple[int, int]:
     return 608, 608
 
 
-def evaluate_coco(dets: List[Dict[str, Any]], ann_json: str, img_ids_subset: Optional[List[int]], log_path: Optional[str], max_dets: int = 100) -> Dict[str, float]:
+def evaluate_coco(dets: List[Dict[str, Any]], ann_json: str, img_ids_subset: Optional[List[int]], log_path: Optional[str]) -> Dict[str, float]:
     if not HAS_COCO:
         write_log_line(log_path, "[WARN] pycocotools not installed; skipping mAP evaluation. Install with: pip install pycocotools")
         return {}
@@ -276,18 +276,11 @@ def evaluate_coco(dets: List[Dict[str, Any]], ann_json: str, img_ids_subset: Opt
     coco_eval = COCOeval(coco_gt, coco_dt, iouType='bbox')
     if img_ids_subset:
         coco_eval.params.imgIds = img_ids_subset
-    # Ensure maxDets uses explicit [1, 10, max_dets]
-    try:
-        md = sorted(set([d for d in [1, 10, int(max_dets)] if isinstance(d, int) and d > 0]))
-        coco_eval.params.maxDets = md
-        write_log_line(log_path, f"[INFO] COCOeval maxDets set to {coco_eval.params.maxDets}")
-    except Exception:
-        pass
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
     # Extract metrics
-    stats = coco_eval.stats  # 12-value array (assumes standard summarize with [1,10,100] or similar)
+    stats = coco_eval.stats  # 12-value array
     keys = [
         "mAP@[.5:.95]", "mAP@0.5", "mAP@0.75", "mAP_small", "mAP_medium", "mAP_large",
         "AR1", "AR10", "AR100", "AR_small", "AR_medium", "AR_large"
@@ -304,11 +297,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--data-dir", type=str, default=DEFAULT_DATA_DIR, help="COCO data root directory")
     parser.add_argument("--results-dir", type=str, default=DEFAULT_RESULTS_DIR, help="Directory to store logs/results")
     parser.add_argument("--max-images", type=int, default=100, help="Max number of images to evaluate (use 0 for all)")
-    parser.add_argument("--conf-thr", type=float, default=0.3, help="Confidence threshold")
-    parser.add_argument("--iou-thr", type=float, default=0.5, help="IoU threshold for NMS")
+    parser.add_argument("--conf-thr", type=float, default=0.001, help="Confidence threshold (match val.py)")
+    parser.add_argument("--iou-thr", type=float, default=0.6, help="IoU threshold for NMS (match val.py)")
     parser.add_argument("--threads", type=int, default=1, help="Number of intra/inter op threads for ORT (CPU only)")
     parser.add_argument("--save-dets", action="store_true", help="Save detection JSON for COCO eval")
-    parser.add_argument("--max-dets", type=int, default=100, help="Max detections per image for COCOeval (uses [1,10,max])")
     # Device selection (CPU, NPU, or BOTH)
     parser.add_argument("--device", type=str, choices=["cpu", "npu", "both"], default="cpu", help="Device to run inference on: cpu, npu, or both")
     parser.add_argument("--npu-id", type=int, default=0, help="NPU device ID to use (for NPU modes)")
@@ -324,7 +316,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     write_log_line(log_path, f"[INFO] Data dir: {args.data_dir}")
     write_log_line(log_path, f"[INFO] Max images: {args.max_images}")
     write_log_line(log_path, f"[INFO] Conf thr: {args.conf_thr}, IoU thr: {args.iou_thr}")
-    write_log_line(log_path, f"[INFO] COCO maxDets (max) set to: {args.max_dets}")
+    if args.conf_thr > 0.001:
+        write_log_line(log_path, "[WARN] confidence threshold > 0.001 may produce invalid results (align with val.py)")
 
     # Prepare dataset
     images_dir, ann_json = prepare_coco_val(args.data_dir, log_path)
@@ -491,7 +484,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             metrics = {}
             if HAS_COCO and det_json:
-                metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_cpu, max_dets=args.max_dets)
+                metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_cpu)
                 mAP = metrics.get("mAP@[.5:.95]")
                 mAP50 = metrics.get("mAP@0.5")
                 if mAP is not None or mAP50 is not None:
@@ -609,11 +602,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                             # de-letterbox
                             x1 = (x1 - dw) / r; y1 = (y1 - dh) / r
                             x2 = (x2 - dw) / r; y2 = (y2 - dh) / r
-                            x1 = np.clip(x1, 0, w0); y1 = np.clip(y1, 0, h0)
-                            x2 = np.clip(x2, 0, w0); y2 = np.clip(y2, 0, h0)
+                            x1 = float(np.clip(x1, 0, w0)); y1 = float(np.clip(y1, 0, h0))
+                            x2 = float(np.clip(x2, 0, w0)); y2 = float(np.clip(y2, 0, h0))
                             # Additional filters mirroring yolo_postprocess_npu
-                            w = float(x2 - x1)
-                            h = float(y2 - y1)
+                            w = x2 - x1
+                            h = y2 - y1
                             min_sz = 4.0
                             if w < min_sz or h < min_sz:
                                 continue
@@ -719,7 +712,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             metrics = {}
             if HAS_COCO and det_json:
-                metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_npu, max_dets=args.max_dets)
+                metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_npu)
                 mAP = metrics.get("mAP@[.5:.95]")
                 mAP50 = metrics.get("mAP@0.5")
                 if mAP is not None or mAP50 is not None:
@@ -872,10 +865,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         h0, w0 = int(meta["orig_shape"][0]), int(meta["orig_shape"][1])
                     else:
                         # fallback to input tensor size
-                        if inp.ndim == 4:
-                            h0, w0 = int(inp.shape[2]), int(inp.shape[3])
-                        else:
-                            h0, w0 = int(input_h), int(input_w)
+                        h0, w0 = int(inp.shape[2]), int(inp.shape[3]) if inp.ndim == 4 else (input_h, input_w)
                     # onnxruntime input info may have a type string like 'tensor(int64)' or 'tensor(float)'
                     onnx_type = getattr(im_inp, "type", "tensor(float)")
                     dtype = np.int64 if "int64" in onnx_type else np.float32
@@ -1118,7 +1108,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Evaluate and save metrics
     metrics = {}
     if HAS_COCO and det_json:
-        metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_path, max_dets=args.max_dets)
+        metrics = evaluate_coco(det_json, ann_json, img_ids_subset, log_path)
         mAP = metrics.get("mAP@[.5:.95]")
         mAP50 = metrics.get("mAP@0.5")
         if mAP is not None or mAP50 is not None:
