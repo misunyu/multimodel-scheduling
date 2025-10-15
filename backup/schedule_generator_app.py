@@ -672,7 +672,7 @@ class ONNXProfilerApp(QMainWindow):
         
         # Write to model_schedules.yaml
         try:
-            with open("model_schedules.yaml", "w") as f:
+            with open("../tests/model_schedules.yaml", "w") as f:
                 # Add header comments
                 f.write("# model_schedules.yaml\n")
                 f.write("# Auto-generated configuration for model execution on CPU or NPU\n\n")

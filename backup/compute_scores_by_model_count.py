@@ -125,10 +125,10 @@ def process_performance_files(perf_dir: str, yaml_dirs: List[str]) -> Dict[int, 
 
 
 def write_outputs(groups: Dict[int, List[Tuple[Tuple[int, str], str]]], output_prefix: str) -> None:
-    os.makedirs('results', exist_ok=True)
+    os.makedirs('../results', exist_ok=True)
     master_lines: List[str] = []
     for mcount, items in sorted(groups.items()):
-        out_path = os.path.join('results', f"scores_best_deployments_{mcount}models.txt")
+        out_path = os.path.join('../results', f"scores_best_deployments_{mcount}models.txt")
         idx = 1
         lines: List[str] = []
         for _, line in items:
@@ -140,7 +140,7 @@ def write_outputs(groups: Dict[int, List[Tuple[Tuple[int, str], str]]], output_p
             f.write('\n'.join(lines) + '\n')
         print(f"Saved: {out_path} ({len(lines)} lines)")
     # Also write a combined file
-    combined_path = os.path.join('results', f"{output_prefix}_all.txt")
+    combined_path = os.path.join('../results', f"{output_prefix}_all.txt")
     with open(combined_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(master_lines) + '\n')
     print(f"Saved combined: {combined_path}")
