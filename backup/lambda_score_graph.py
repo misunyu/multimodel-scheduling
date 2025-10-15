@@ -134,7 +134,7 @@ def main():
     args = parser.parse_args()
     
     # Resolve the input file path
-    input_path = Path("performance") / args.input if "/" not in args.input else args.input
+    input_path = Path("../performance") / args.input if "/" not in args.input else args.input
     
     # Load the data
     try:

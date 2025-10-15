@@ -107,7 +107,7 @@ def collect_deployment_from_yaml(schedule: dict, combination: str) -> Tuple[Dict
 
 def collect_deployment_from_json(rec: dict) -> Dict[str, List[str]]:
     per_device: Dict[str, List[str]] = {'cpu': [], 'npu0': [], 'npu1': []}
-    models = rec.get('models', {})
+    models = rec.get('../models', {})
     for _, m in models.items():
         model_name = m.get('model')
         exec_dev = device_key(m.get('execution', ''))

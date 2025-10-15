@@ -420,7 +420,7 @@ def run(image_path: str, gt_json: str = None) -> None:
             base = os.path.basename(image_path)
             split = "val2017" if "val2017" in image_path else ("train2017" if "train2017" in image_path else None)
             if split is not None:
-                ann_path = os.path.join("./datasets/coco/annotations", f"instances_{split}.json")
+                ann_path = os.path.join("../datasets/coco/annotations", f"instances_{split}.json")
                 if os.path.isfile(ann_path):
                     with open(ann_path, "r") as f:
                         coco = json.load(f)
