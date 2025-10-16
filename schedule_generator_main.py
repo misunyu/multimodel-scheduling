@@ -10,7 +10,7 @@ Usage:
 import sys
 import argparse
 from PyQt5.QtWidgets import QApplication
-from schedule_generator_app import ONNXProfilerApp
+from backup.schedule_generator_app import ONNXProfilerApp
 
 def parse_arguments():
     """Parse command line arguments."""

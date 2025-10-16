@@ -79,7 +79,7 @@ class ONNXProfilerApp(QMainWindow):
         # Find main UI elements
         self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
         self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")
-        self.npu2_tab = self.findChild(QWidget, "npu2_tab")
+        self.npu2_tab = self.findChild(QWidget, "npu1_tab")
         
         # Set up main layout
         main_layout = self.findChild(QHBoxLayout, "mainLayout")
@@ -99,8 +99,8 @@ class ONNXProfilerApp(QMainWindow):
         
         # Find table elements
         self.cpu_table = self.findChild(QTableWidget, "cpu_table")
-        self.npu1_table = self.findChild(QTableWidget, "npu1_table")
-        self.npu2_table = self.findChild(QTableWidget, "npu2_table")
+        self.npu1_table = self.findChild(QTableWidget, "npu0_table")
+        self.npu2_table = self.findChild(QTableWidget, "npu1_table")
         self.pre_post_table = self.findChild(QTableWidget, "pre_post_table")
         
         # Set up NPU2 visibility
