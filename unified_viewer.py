@@ -280,8 +280,23 @@ class UnifiedViewer(QMainWindow):
                         "model": "yolov3_small" if view in ["view1", "view3"] else "resnet50_small",
                         "execution": "cpu"
                     }
-                    print(f"[UnifiedViewer] No model specified for {view} in {self.schedule_file}")
-                    
+                    # Informational: this view is simply unused by the selected combination
+                    print(f"[UnifiedViewer] {view} not used in this combination (no model assigned) [{os.path.basename(self.schedule_file)}]")
+
+            # Detect PyTorch availability for NPU execution and remap to CPU if unavailable
+            torch_available = True
+            try:
+                import torch  # noqa: F401
+            except Exception:
+                torch_available = False
+            if not torch_available:
+                # Remap any NPU executions to CPU to avoid runtime import errors
+                for v, cfg in self.model_settings.items():
+                    exec_dev = (cfg or {}).get("execution", "cpu")
+                    if isinstance(exec_dev, str) and exec_dev.lower().startswith("npu"):
+                        cfg["execution"] = "cpu"
+                        print(f"[UnifiedViewer] PyTorch not found; falling back to CPU for {v} (was {exec_dev})")
+
             print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file} for {self.current_combination}")
         except Exception as e:
             print(f"[UnifiedViewer ERROR] Failed to load {self.schedule_file}: {e}")

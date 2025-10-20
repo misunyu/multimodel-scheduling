@@ -592,5 +592,34 @@ def main():
         ap.print_help()
 
 
+
+def rows_from_schedule_yaml(schedule_yaml_path: str):
+    """
+    Compatibility shim for GUI predictor.
+    Reads a YAML/JSON schedule file that contains one or more combinations,
+    featurizes each combination using the same logic as CLI predict, and
+    returns a list of rows: {"combination": name, "features": {...}}.
+    """
+    from pathlib import Path as _Path
+    sched_path = _Path(schedule_yaml_path)
+    schedule = _load_yaml_or_json(sched_path)
+
+    # Load static profiling table located relative to this module
+    module_dir = _Path(__file__).resolve().parent
+    static_json = module_dir / "performance_data" / "sample_profiling_data" / "sample_profiling_data.json"
+    S = load_static_profiles(static_json)
+
+    rows = []
+    for name, combo_blob in _iter_combos_from_schedule(schedule):
+        Xdf = featurize_from_combo(S, combo_blob)
+        # Convert single-row DataFrame to plain dict of features
+        feats = {k: float(Xdf.iloc[0][k]) for k in Xdf.columns}
+        rows.append({
+            "combination": str(name),
+            "features": feats,
+        })
+    return rows
+
+
 if __name__ == "__main__":
     main()
