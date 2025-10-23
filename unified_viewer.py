@@ -663,9 +663,9 @@ class UnifiedViewer(QMainWindow):
             duration (int): Duration in seconds for the execution to run.
         """
         print(f"Starting execution with duration: {duration} seconds")
-        # Record execution window duration for saving into results
+        # We treat the first 1 second as warmup; only measure after that.
         try:
-            self.window_duration_sec = float(duration)
+            self.window_duration_sec = max(0.0, float(duration) - 1.0)
         except Exception:
             self.window_duration_sec = None
         
@@ -683,14 +683,36 @@ class UnifiedViewer(QMainWindow):
         if not hasattr(self, 'video_reader_proc') or not self.video_reader_proc.is_alive():
             self.initialize_processes()
             self.initialize_threads()
+        
+        # Schedule a warmup window: reset all metrics after 1 second from start
+        try:
+            QTimer.singleShot(1000, self._begin_measurement_window)
+        except Exception:
+            pass
             
-        # Schedule stopping execution after the specified duration
+        # Schedule stopping execution after the specified duration (includes warmup)
         QTimer.singleShot(duration * 1000, self.timed_shutdown)
     
     def timed_shutdown(self):
         """Stop execution after the scheduled duration without closing the application."""
         print("Execution duration completed, stopping model execution...")
         self.stop_execution()
+        
+    def _begin_measurement_window(self):
+        """Reset all per-view and feeder counters after warmup to start measurement."""
+        try:
+            for name in ['view1_handler', 'view2_handler', 'view3_handler', 'view4_handler']:
+                handler = getattr(self, name, None)
+                if handler and hasattr(handler, 'reset_stats'):
+                    handler.reset_stats()
+        except Exception as e:
+            print(f"[UnifiedViewer] Warmup reset warning (handlers): {e}")
+        try:
+            feeder = getattr(self, 'video_feeder', None)
+            if feeder and hasattr(feeder, 'reset_counters'):
+                feeder.reset_counters()
+        except Exception as e:
+            print(f"[UnifiedViewer] Warmup reset warning (feeder): {e}")
         
     def stop_execution(self):
         """Stop model execution without closing the application."""

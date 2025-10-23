@@ -190,7 +190,7 @@ class BestDeployFinderApp(QMainWindow):
             spin.setMaximum(1000.0)
             spin.setSingleStep(0.1)
             # Pre-fill from existing mapping or default 30.0
-            spin.setValue(float(self.input_fps_by_model.get(model, 30.0)))
+            spin.setValue(float(self.input_fps_by_model.get(model, 10.0)))
 
             container_layout.addWidget(label, row, 0)
             container_layout.addWidget(spin, row, 1)

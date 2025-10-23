@@ -175,12 +175,14 @@ class ScheduleExecutor:
 
         self._viewer.show()
 
-        duration = self.default_duration
-        self._viewer.start_execution(duration)
+        # Apply 1-second warmup: run for duration+1, but measurement starts after 1s inside viewer
+        measured_duration = self.default_duration
+        run_duration = measured_duration + 1
+        self._viewer.start_execution(run_duration)
 
-        # Schedule moving to the next combination after duration + small buffer (ms)
+        # Schedule moving to the next combination after run_duration + small buffer (ms)
         buffer_ms = 1000
-        QTimer.singleShot((duration * 1000) + buffer_ms, self._after_stop)
+        QTimer.singleShot((run_duration * 1000) + buffer_ms, self._after_stop)
 
     def _after_stop(self):
         if not self._running:

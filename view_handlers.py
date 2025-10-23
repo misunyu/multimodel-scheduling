@@ -71,6 +71,16 @@ class ViewHandler:
         """Display frames from the result queue. To be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement display_frames")
         
+    def reset_stats(self):
+        """Reset all collected statistics (used to start measurement after warmup)."""
+        self.total_infer_time = 0.0
+        self.infer_count = 0
+        self.avg_infer_time = 0.0
+        self.avg_fps = 0.0
+        self.total_wait_ms = 0.0
+        self.wait_count = 0
+        self.avg_wait_ms = 0.0
+        
     def update_stats(self, model_name, infer_time, log_enabled=0):
         """
         Update performance statistics for this view.
@@ -224,6 +234,15 @@ class VideoFeeder:
         thread = threading.Thread(target=self.feed_queues, daemon=True)
         thread.start()
         return thread
+        
+    def reset_counters(self):
+        """Reset drop counters and any per-view timestamps (for warmup handling)."""
+        try:
+            for v in list(self.drop_counts.keys()):
+                self.drop_counts[v] = 0
+        except Exception:
+            pass
+        # We intentionally do not reset last_enqueue_ts to preserve pacing; only metrics reset is needed.
         
     def feed_queues(self):
         """Feed video frames to model queues, enforcing per-view infps intervals when provided."""
