@@ -278,15 +278,110 @@ class ScheduleExecutor:
 
 
 class Controller:
-    """Minimal controller that InfoWindow can bind its Start/Stop buttons to."""
+    """Controller that InfoWindow binds to. Supports single or multi schedule execution."""
 
     def __init__(self, executor: ScheduleExecutor):
         self._executor = executor
+        self._multi_files = []
+        self._multi_idx = 0
+        self._multi_running = False
+        self._duration = executor.default_duration
+
+    def _info(self) -> InfoWindow:
+        return getattr(self._executor, 'info_window', None)
 
     def start_execution(self, duration):
-        self._executor.start(duration)
+        self._duration = max(1, int(duration))
+        info = self._info()
+        use_multi = False
+        folder = None
+        try:
+            use_multi = bool(info.multiple_schedule_files.isChecked())
+            folder = info.schedule_folder_input.text().strip()
+        except Exception:
+            use_multi = False
+
+        if use_multi and folder:
+            # Gather YAML files in folder
+            try:
+                if not os.path.isabs(folder):
+                    folder = os.path.abspath(os.path.join(os.getcwd(), folder))
+                files = []
+                for name in os.listdir(folder):
+                    if name.lower().endswith(('.yaml', '.yml')):
+                        files.append(os.path.join(folder, name))
+                files.sort()
+            except Exception as e:
+                print(f"[Controller] Failed to list schedule folder '{folder}': {e}")
+                files = []
+
+            if not files:
+                print(f"[Controller] No YAML files found in folder: {folder}. Falling back to single schedule: {self._executor.schedule_file}")
+                self._executor.start(self._duration)
+                return
+
+            # Start multi-file sequential execution
+            self._multi_files = files
+            self._multi_idx = 0
+            self._multi_running = True
+            try:
+                info.start_button.setEnabled(False)
+                info.stop_button.setEnabled(True)
+            except Exception:
+                pass
+            QTimer.singleShot(10, self._start_next_file)
+        else:
+            # Single file
+            self._executor.start(self._duration)
+
+    def _start_next_file(self):
+        if not self._multi_running:
+            return
+        if self._multi_idx >= len(self._multi_files):
+            # Done
+            self._multi_running = False
+            try:
+                self._info().start_button.setEnabled(True)
+            except Exception:
+                pass
+            print('[Controller] All schedule files executed.')
+            return
+        current_schedule = self._multi_files[self._multi_idx]
+        print(f"[Controller] Running schedule file {self._multi_idx+1}/{len(self._multi_files)}: {os.path.basename(current_schedule)}")
+        # Create a fresh executor for this schedule file
+        info = self._info()
+        self._executor = ScheduleExecutor(schedule_file=current_schedule, duration=self._duration, info_window=info)
+        # Ensure InfoWindow parent points here
+        try:
+            info.parent = self
+        except Exception:
+            pass
+        self._executor.start(self._duration)
+        # Start monitoring this executor for completion
+        QTimer.singleShot(200, self._monitor_current_done)
+
+    def _monitor_current_done(self):
+        if not self._multi_running:
+            return
+        try:
+            ex = self._executor
+            if not ex._running and ex._index == 0:
+                # Finished this file
+                self._multi_idx += 1
+                QTimer.singleShot(200, self._start_next_file)
+                return
+        except Exception:
+            pass
+        # Keep polling
+        QTimer.singleShot(300, self._monitor_current_done)
 
     def stop_execution(self):
+        # Stop current execution; if in multi mode, stop and cancel the rest
+        self._multi_running = False
+        try:
+            self._info().start_button.setEnabled(True)
+        except Exception:
+            pass
         self._executor.stop()
 
 
@@ -374,7 +469,12 @@ def main():
         def _on_all_done_quit():
             try:
                 # When not running and start button is enabled again, we consider it done
-                if not executor._running and executor._index == 0:
+                multi_running = False
+                try:
+                    multi_running = bool(getattr(controller, '_multi_running', False))
+                except Exception:
+                    multi_running = False
+                if not executor._running and executor._index == 0 and not multi_running:
                     print('[Main] Auto mode: all combinations finished. Quitting application...')
                     QTimer.singleShot(50, app.quit)
                     return

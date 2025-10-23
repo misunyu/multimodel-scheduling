@@ -8,7 +8,7 @@ import numpy as np
 import onnxruntime as ort
 import queue
 
-# import npu
+import npu
 
 # Import local modules
 from image_processing import (
@@ -20,6 +20,7 @@ from image_processing import (
 
 # Modularized timing/logging utilities (moved to dedicated module)
 from timing_utils import log_model_load, log_inference
+from utils import resolve_cpu_model_onnx, resolve_npu_object_o
 
 # Load ImageNet class labels
 with open("imagenet_classes.txt", "r") as f:
@@ -79,14 +80,14 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
         so.log_severity_level = 3
         try:
             session = ort.InferenceSession(
-                "models/yolov3_small/model/yolov3_small.onnx",
+                resolve_cpu_model_onnx("yolov3_small"),
                 sess_options=so,
                 providers=["CPUExecutionProvider"]
             )
         except TypeError:
             # Fallback for older onnxruntime without providers argument
             session = ort.InferenceSession(
-                "models/yolov3_small/model/yolov3_small.onnx",
+                resolve_cpu_model_onnx("yolov3_small"),
                 sess_options=so
             )
         # Determine input/output dynamically
@@ -223,14 +224,14 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
             pass
         try:
             session = ort.InferenceSession(
-                "models/resnet50_big/model/resnet50_big.onnx",
+                resolve_cpu_model_onnx("resnet50_big"),
                 sess_options=so,
                 providers=["CPUExecutionProvider"],
             )
         except TypeError:
             # Fallback for older onnxruntime without providers argument
             session = ort.InferenceSession(
-                "models/resnet50_big/model/resnet50_big.onnx",
+                resolve_cpu_model_onnx("resnet50_big"),
                 sess_options=so,
             )
         load_end = time.time()
@@ -368,11 +369,8 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
 
         try:
             npu_load_s = time.time()
-            # Select NPU binary based on the requested model
-            if model_name == "yolov3_big":
-                npu_o_path = "./models/yolov3_big/npu_code/yolov3_big_neubla_p1.o"
-            else:
-                npu_o_path = "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o"
+            # Select NPU binary based on the requested model (resolve legacy/new names)
+            npu_o_path = resolve_npu_object_o(model_name, part=1)
             driver = initialize_driver(npu_id, npu_o_path)
             npu_load_e = time.time()
             npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
@@ -537,7 +535,7 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
 
         try:
             npu_load_s = time.time()
-            driver = initialize_driver(npu_id, "./models/resnet50_small/npu_code/resnet50_small_neubla_p1.o")
+            driver = initialize_driver(npu_id, resolve_npu_object_o("resnet50_small", part=1))
             npu_load_e = time.time()
             npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
         except Exception as e:

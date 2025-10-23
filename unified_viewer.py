@@ -67,6 +67,13 @@ class InfoWindow(QWidget):
         except Exception:
             # If best_button is not present for some reason, ignore gracefully
             pass
+
+        # Connect the Browse... button to select a schedule folder
+        try:
+            self.browse_schedule_folder_button.clicked.connect(self.on_browse_schedule_folder_clicked)
+        except Exception:
+            # If the button is not present, ignore gracefully
+            pass
         
         # Default execution duration is 60 seconds
         self.duration_edit.setText("60")
@@ -124,7 +131,25 @@ class InfoWindow(QWidget):
                     print(f"[InfoWindow] load_best_schedule failed: {e}")
         except Exception as e:
             print(f"[InfoWindow] Failed to open file dialog: {e}")
-    
+        
+    def on_browse_schedule_folder_clicked(self):
+        """Open a directory selection dialog and set the chosen path into schedule_folder_input."""
+        try:
+            try:
+                start_dir = self.schedule_folder_input.text().strip()
+            except Exception:
+                start_dir = ""
+            if not start_dir:
+                start_dir = os.getcwd()
+            folder = QFileDialog.getExistingDirectory(self, "Select Schedule Folder", start_dir)
+            if folder:
+                try:
+                    self.schedule_folder_input.setText(folder)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[InfoWindow] Failed to open select folder dialog: {e}")
+        
     def get_execution_duration(self):
         """Get the execution duration from the input field."""
         try:

@@ -552,7 +552,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             drv_t0 = time.time()
             try:
-                driver = initialize_driver(args.npu_id, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+                driver = initialize_driver(args.npu_id, "models/yolov3_1/npu_code/yolov3_small_neubla_p1.o")
             except Exception as e:
                 write_log_line(log_npu, f"[ERROR] NPU driver init/load failed: {e}")
                 return {"error": f"NPU driver failed: {e}"}
@@ -946,7 +946,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         drv_t0 = time.time()
         try:
-            driver = initialize_driver(args.npu_id, "./models/yolov3_small/npu_code/yolov3_small_neubla_p1.o")
+            driver = initialize_driver(args.npu_id, "models/yolov3_1/npu_code/yolov3_small_neubla_p1.o")
         except Exception as e:
             write_log_line(log_path, f"[ERROR] NPU driver init/load failed: {e}")
             return 1
