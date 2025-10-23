@@ -165,6 +165,77 @@ def log_inference(pipeline: str, device: str, view: str, model: str,
     })
 
 # -------------------------------------------------------------
+# Model path resolution (legacy -> current)
+# -------------------------------------------------------------
+
+# Map legacy logical model names to current base names
+#   resnet50_small -> resnet50_1, resnet50_big -> resnet50_2
+#   yolov3_small -> yolov3_1,   yolov3_big   -> yolov3_2
+_LEGACY_TO_BASE = {
+    "resnet50_small": "resnet50_1",
+    "resnet50_big": "resnet50_2",
+    "yolov3_small": "yolov3_1",
+    "yolov3_big": "yolov3_2",
+}
+
+
+def _normalize_base(name: str) -> str:
+    """Return best-guess base folder name for a given logical or base name."""
+    if not name:
+        return name
+    # If already matches existing folder, keep
+    candidate = name
+    if os.path.isdir(os.path.join("models", candidate)):
+        return candidate
+    # Try legacy mapping
+    mapped = _LEGACY_TO_BASE.get(name, name)
+    if os.path.isdir(os.path.join("models", mapped)):
+        return mapped
+    # Heuristics: if contains 'small'/'big'
+    low = name.lower()
+    if "yolov3" in low:
+        return "yolov3_1" if "small" in low or "_1" in low else "yolov3_2"
+    if "resnet" in low:
+        return "resnet50_1" if "small" in low or "_1" in low else "resnet50_2"
+    return name
+
+
+def resolve_cpu_model_onnx(logical_name: str) -> str:
+    """
+    Resolve CPU ONNX model path for a logical model name.
+    Returns a path string (may be non-existent if nothing matched).
+    """
+    base = _normalize_base(logical_name)
+    candidates = [
+        os.path.join("models", base, "model", f"{base}.onnx"),
+        os.path.join("models", base, "model", f"{logical_name}.onnx"),
+        os.path.join("models", logical_name, "model", f"{logical_name}.onnx"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    # Fallback to the first candidate even if missing
+    return candidates[0]
+
+
+def resolve_npu_object_o(logical_name: str, part: int = 1) -> str:
+    """
+    Resolve NPU object (.o) path for a logical model name and partition id.
+    Default part=1 to match typical middle partition binaries.
+    """
+    base = _normalize_base(logical_name)
+    suffix = f"{base}_neubla_p{part}.o"
+    candidates = [
+        os.path.join("models", base, "npu_code", suffix),
+        os.path.join("models", logical_name, "npu_code", f"{logical_name}_neubla_p{part}.o"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    # Fallback
+    return candidates[0]
+
+# -------------------------------------------------------------
 # Image/Qt and system utilities (existing)
 # -------------------------------------------------------------
 
