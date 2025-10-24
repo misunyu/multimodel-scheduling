@@ -130,6 +130,13 @@ class ScheduleExecutor:
             self._running = False
             self._index = 0
             self._set_start_button_enabled(True)
+            # Notify controller (InfoWindow.parent) that this executor finished all combos
+            try:
+                parent = getattr(self.info_window, 'parent', None)
+                if parent and hasattr(parent, 'on_executor_finished'):
+                    QTimer.singleShot(50, parent.on_executor_finished)
+            except Exception:
+                pass
             return
 
         # Clean previous viewer if exists
@@ -285,6 +292,7 @@ class Controller:
         self._multi_files = []
         self._multi_idx = 0
         self._multi_running = False
+        self._advance_in_progress = False
         self._duration = executor.default_duration
 
     def _info(self) -> InfoWindow:
@@ -324,6 +332,7 @@ class Controller:
             self._multi_files = files
             self._multi_idx = 0
             self._multi_running = True
+            self._advance_in_progress = False
             try:
                 info.start_button.setEnabled(False)
                 info.stop_button.setEnabled(True)
@@ -340,6 +349,7 @@ class Controller:
         if self._multi_idx >= len(self._multi_files):
             # Done
             self._multi_running = False
+            self._advance_in_progress = False
             try:
                 self._info().start_button.setEnabled(True)
             except Exception:
@@ -356,17 +366,23 @@ class Controller:
             info.parent = self
         except Exception:
             pass
+        self._advance_in_progress = False
         self._executor.start(self._duration)
-        # Start monitoring this executor for completion
+        # Start monitoring this executor for completion (fallback)
         QTimer.singleShot(200, self._monitor_current_done)
 
     def _monitor_current_done(self):
         if not self._multi_running:
             return
+        if self._advance_in_progress:
+            # Advancement is already scheduled; keep polling in case we need fallback
+            QTimer.singleShot(300, self._monitor_current_done)
+            return
         try:
             ex = self._executor
-            if not ex._running and ex._index == 0:
-                # Finished this file
+            if ex is not None and (not ex._running and ex._index == 0):
+                # Finished this file (fallback detection)
+                self._advance_in_progress = True
                 self._multi_idx += 1
                 QTimer.singleShot(200, self._start_next_file)
                 return
@@ -374,6 +390,14 @@ class Controller:
             pass
         # Keep polling
         QTimer.singleShot(300, self._monitor_current_done)
+
+    def on_executor_finished(self):
+        """Callback from ScheduleExecutor when it finishes all combinations in the current file."""
+        if not self._multi_running or self._advance_in_progress:
+            return
+        self._advance_in_progress = True
+        self._multi_idx += 1
+        QTimer.singleShot(150, self._start_next_file)
 
     def stop_execution(self):
         # Stop current execution; if in multi mode, stop and cancel the rest
