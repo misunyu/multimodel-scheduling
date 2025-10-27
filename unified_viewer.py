@@ -5,25 +5,20 @@ import os
 import json
 import signal
 import yaml
-import queue
 from datetime import datetime
 from PyQt5.QtWidgets import QMainWindow, QLabel, QWidget, QVBoxLayout, QFileDialog
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
-from queue import Queue
-from threading import Event, Thread
-import threading
+from multiprocessing import Process, Queue, Event
 
 # Import local modules
-from utils import get_cpu_metrics, create_x_image, convert_cv_to_qt
+from utils import get_cpu_metrics
 from view_handlers import ModelSignals, YoloViewHandler, ResNetViewHandler, VideoFeeder, ResnetImageFeeder
 from model_processors import (
     video_reader_process,
     run_yolo_cpu_process,
-    run_resnet_cpu_process,
-    run_yolo_gpu_process,
-    run_resnet_gpu_process,
     run_yolo_npu_process,
+    run_resnet_cpu_process,
     run_resnet_npu_process
 )
 
@@ -101,11 +96,18 @@ class InfoWindow(QWidget):
             
     def on_stop_button_clicked(self):
         """Handle the stop button click event."""
-        # Prefer async stop if available to keep UI responsive
-        if self.parent and hasattr(self.parent, 'stop_execution_async'):
-            self.parent.stop_execution_async()
-        elif self.parent and hasattr(self.parent, 'stop_execution'):
-            self.parent.stop_execution()
+        # Call the parent's stop_execution method if available
+        if self.parent and hasattr(self.parent, 'stop_execution'):
+            try:
+                self.parent.stop_execution()
+            except Exception:
+                pass
+            # Also close the viewer window so it disappears immediately on Ubuntu
+            try:
+                if hasattr(self.parent, 'close'):
+                    self.parent.close()
+            except Exception:
+                pass
         else:
             print("Stopping execution")
 
@@ -196,36 +198,17 @@ class InfoWindow(QWidget):
             pass
         
     def closeEvent(self, event):
-        """Handle window close event - terminate the application (non-blocking)."""
-        print("[InfoWindow] Close event triggered - terminating application (async)")
+        """Handle window close event - terminate the application."""
+        print("[InfoWindow] Close event triggered - terminating application")
         event.accept()
-        try:
-            self.hide()
-        except Exception:
-            pass
-        # If we have a parent (UnifiedViewer), call its async shutdown method if available
-        if self.parent and hasattr(self.parent, 'shutdown_all_async'):
-            try:
-                self.parent.shutdown_all_async()
-                return
-            except Exception as e:
-                pass
-        # Fallback to synchronous shutdown_all or direct exit
+        
+        # If we have a parent (UnifiedViewer), call its shutdown method
         if self.parent and hasattr(self.parent, 'shutdown_all'):
             self.parent.shutdown_all()
         else:
+            # If no parent, exit directly
             print("[InfoWindow] Closing application directly")
-            try:
-                from PyQt5.QtWidgets import QApplication
-                app = QApplication.instance()
-                if app is not None:
-                    QTimer.singleShot(50, app.quit)
-                else:
-                    import sys
-                    sys.exit(0)
-            except Exception:
-                import sys
-                sys.exit(0)
+            os._exit(0)
 
 class UnifiedViewer(QMainWindow):
     """Main viewer class for the multimodel scheduling application."""
@@ -242,10 +225,6 @@ class UnifiedViewer(QMainWindow):
         
         # Set up signal handler for SIGINT (Ctrl+C)
         signal.signal(signal.SIGINT, self.signal_handler)
-        
-        # Flags for async shutdown/stop
-        self._shutdown_in_progress = False
-        self._stop_in_progress = False
 
         # Store the schedule file path and requested combination
         self.schedule_file = schedule_file
@@ -291,12 +270,6 @@ class UnifiedViewer(QMainWindow):
         """Initialize model settings from YAML configuration."""
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
-        # Headless models: run without occupying any of view1..view4
-        self.headless_ids = []           # list of headless identifiers
-        # Note: we keep hidden_views for backward compatibility, but we no longer
-        # auto-map display:none models into views. The set remains empty unless
-        # explicitly manipulated elsewhere.
-        self.hidden_views = set()
         # Default combination, can be overridden by requested_combination
         self.current_combination = self.requested_combination or "combination1"
         
@@ -304,47 +277,6 @@ class UnifiedViewer(QMainWindow):
         self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
         
         try:
-            # Helper to resolve a model identifier (possibly a folder name) to an actual ONNX file path
-            def _resolve_model_path(model_id: str) -> str:
-                try:
-                    mid = str(model_id or '').strip()
-                    if not mid:
-                        return ''
-                    # If it already points to a file that exists, return as-is
-                    if os.path.isabs(mid) and os.path.isfile(mid):
-                        return mid
-                    # If it looks like a relative path containing a separator, try relative to CWD
-                    if any(sep in mid for sep in ['/', os.sep, '\\']):
-                        cand = os.path.abspath(mid)
-                        if os.path.isfile(cand):
-                            return cand
-                        # If it's a directory, try model.onnx inside
-                        if os.path.isdir(cand):
-                            p = os.path.join(cand, 'model.onnx')
-                            if os.path.isfile(p):
-                                return p
-                            # else first .onnx inside
-                            for n in os.listdir(cand):
-                                if n.lower().endswith('.onnx'):
-                                    return os.path.join(cand, n)
-                    # Otherwise, interpret as a model name possibly equal to a folder under models_onnx
-                    models_root = os.path.join(os.getcwd(), 'models_onnx')
-                    folder = os.path.join(models_root, mid)
-                    if os.path.isdir(folder):
-                        p = os.path.join(folder, 'model.onnx')
-                        if os.path.isfile(p):
-                            return p
-                        for n in os.listdir(folder):
-                            if n.lower().endswith('.onnx'):
-                                return os.path.join(folder, n)
-                    # Fallback: try models_root/<mid>.onnx
-                    direct = os.path.join(models_root, f"{mid}.onnx")
-                    if os.path.isfile(direct):
-                        return direct
-                except Exception:
-                    pass
-                return ''
-
             # Load configuration from the specified schedule file
             with open(self.schedule_file, "r") as f:
                 config = yaml.safe_load(f) or {}
@@ -359,55 +291,16 @@ class UnifiedViewer(QMainWindow):
                 self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
                 
             # Use the selected combination configuration
-            # models with display suppressed; run headlessly and DO NOT bind to views
             if self.current_combination in config:
                 for model_config_name, model_config in (config[self.current_combination] or {}).items():
                     if isinstance(model_config, dict) and "display" in model_config:
                         view_name = model_config.get("display")
-                        vnorm = str(view_name).strip().lower() if view_name is not None else ""
-                        # If display is set to a 'none/off' value, schedule as headless (no on-screen drawing)
-                        if (not vnorm) or (vnorm in {"none", "off", "hidden", "no", "false", "0"}):
-                            # Build a stable headless id using the config key
-                            safe_name = str(model_config_name).replace(" ", "_")
-                            hid = f"headless_{safe_name}"
-                            self.headless_ids.append(hid)
-                            # Store headless config inside model_settings under its id so
-                            # feeders/process starters can use common paths without special cases
-                            mval = model_config.get("model", "")
-                            self.model_settings[hid] = {
-                                "model": mval,
-                                "model_path": _resolve_model_path(mval),
+                        if view_name:
+                            view_to_model_map[view_name] = {
+                                "model": model_config.get("model", ""),
                                 "execution": model_config.get("execution", "cpu"),
                                 "infps": model_config.get("infps", None)
                             }
-                            continue
-                        # Only allow known view labels
-                        if vnorm in {"view1", "view2", "view3", "view4"}:
-                            view_key = vnorm
-                        else:
-                            try:
-                                print(f"[UnifiedViewer] Unknown display label '{view_name}' for {model_config_name}; scheduling hidden")
-                            except Exception:
-                                pass
-                            # Treat unknown labels as headless to be safe
-                            safe_name = str(model_config_name).replace(" ", "_")
-                            hid = f"headless_{safe_name}"
-                            self.headless_ids.append(hid)
-                            mval = model_config.get("model", "")
-                            self.model_settings[hid] = {
-                                "model": mval,
-                                "model_path": _resolve_model_path(mval),
-                                "execution": model_config.get("execution", "cpu"),
-                                "infps": model_config.get("infps", None)
-                            }
-                            continue
-                        mval = model_config.get("model", "")
-                        view_to_model_map[view_key] = {
-                            "model": mval,
-                            "model_path": _resolve_model_path(mval),
-                            "execution": model_config.get("execution", "cpu"),
-                            "infps": model_config.get("infps", None)
-                        }
             
             # Assign model configurations to views
             for view in ["view1", "view2", "view3", "view4"]:
@@ -418,8 +311,7 @@ class UnifiedViewer(QMainWindow):
                     self.views_without_model.add(view)
                     # Still add default settings for compatibility with existing code
                     self.model_settings[view] = {
-                        "model": "",
-                        "model_path": "",
+                        "model": "yolov3_small" if view in ["view1", "view3"] else "resnet50_small",
                         "execution": "cpu"
                     }
                     # Informational: this view is simply unused by the selected combination
@@ -444,10 +336,10 @@ class UnifiedViewer(QMainWindow):
             print(f"[UnifiedViewer ERROR] Failed to load {self.schedule_file}: {e}")
             # Set default settings if file loading fails
             self.model_settings = {
-                "view1": {"model": "", "model_path": "", "execution": "cpu"},
-                "view2": {"model": "resnet50_small", "model_path": "", "execution": "cpu"},
-                "view3": {"model": "", "model_path": "", "execution": "cpu"},
-                "view4": {"model": "resnet50_small", "model_path": "", "execution": "cpu"}
+                "view1": {"model": "yolov3_small", "execution": "cpu"},
+                "view2": {"model": "resnet50_small", "execution": "cpu"},
+                "view3": {"model": "yolov3_small", "execution": "cpu"},
+                "view4": {"model": "resnet50_small", "execution": "cpu"}
             }
             # No views are marked as without model in case of error
     
@@ -464,32 +356,6 @@ class UnifiedViewer(QMainWindow):
         self.model_signals.update_view2_display.connect(self.update_view2_display)
         self.model_signals.update_view3_display.connect(self.update_view3_display)
         self.model_signals.update_view4_display.connect(self.update_view4_display)
-        
-        # Initialize placeholders for views without associated (visible) model
-        try:
-            self._init_placeholders()
-        except Exception:
-            pass
-    
-    def _init_placeholders(self):
-        """Show 'No model specified' placeholder on views with no visible model mapping.
-        - For views in views_without_model: always show placeholder.
-        - For views in hidden_views: show placeholder; actual model will run headlessly and updates are suppressed.
-        """
-        try:
-            x_img = create_x_image()
-            pix = convert_cv_to_qt(x_img)
-        except Exception:
-            pix = None
-        for vname in ["view1", "view2", "view3", "view4"]:
-            try:
-                if (hasattr(self, 'views_without_model') and vname in self.views_without_model) or (hasattr(self, 'hidden_views') and vname in self.hidden_views):
-                    lbl = getattr(self, vname, None)
-                    if lbl is not None and pix is not None and not pix.isNull():
-                        lbl.setPixmap(pix)
-                        lbl.setScaledContents(True)
-            except Exception:
-                continue
     
     def initialize_state_variables(self):
         """Initialize state variables."""
@@ -502,8 +368,6 @@ class UnifiedViewer(QMainWindow):
         
         # Ensure stop_execution is idempotent: save throughput only once per schedule
         self._already_stopped = False
-        # Track if a run is currently active to prevent duplicate starts
-        self._run_active = False
 
         # Store the requested execution window duration (seconds) for saving into results
         self.window_duration_sec = None
@@ -536,221 +400,33 @@ class UnifiedViewer(QMainWindow):
         self.yolo_views = set()
         # Track ResNet views that need image feeder at 10 Hz
         self.resnet_views = set()
-        # Headless resources (queues/events/processes)
-        self.headless_frame_queues = {}
-        self.headless_output_queues = {}
-        self.headless_shutdown_events = {}
-        self.headless_processes = []
     
     def initialize_processes(self):
-        """Initialize and start model workers (single-process, multi-thread)."""
-        # Start video reader thread only if any model requires YOLO video (yolov4)
-        need_video = any("yolov4" in (cfg or {}).get("model", "") for cfg in self.model_settings.values())
-        self.video_reader_proc = None
-        if need_video:
-            self.video_reader_proc = Thread(
-                target=video_reader_process,
-                args=("stockholm_1280x720.mp4", self.video_frame_queue, self.video_shutdown_event),
-                daemon=True,
-            )
-            self.video_reader_proc.start()
-        else:
-            pass
+        """Initialize and start model processes."""
+        # Start video reader process
+        self.video_reader_proc = Process(
+            target=video_reader_process,
+            args=("stockholm_1280x720.mp4", self.video_frame_queue, self.video_shutdown_event),
+            daemon=True
+        )
+        self.video_reader_proc.start()
         
-        # Start view worker threads
+        # Start view processes
         self.start_view_process("view1")
         self.start_view_process("view2")
         self.start_view_process("view3")
         self.start_view_process("view4")
-
-        # Start headless worker threads (do not occupy UI views)
-        for hid in list(getattr(self, 'headless_ids', []) or []):
-            # Prepare queues/events for this headless id
-            if hid not in self.headless_frame_queues:
-                self.headless_frame_queues[hid] = Queue(maxsize=10)
-            if hid not in self.headless_output_queues:
-                # YOLO uses output_queue; ResNet uses result_queue name-wise, but both are simple queues
-                self.headless_output_queues[hid] = Queue(maxsize=5)
-            if hid not in self.headless_shutdown_events:
-                self.headless_shutdown_events[hid] = Event()
-
-            cfg = self.model_settings.get(hid, {})
-            model = cfg.get("model", "")
-            execution = cfg.get("execution", "cpu")
-
-            frame_queue = self.headless_frame_queues[hid]
-            output_queue = self.headless_output_queues[hid]
-            shutdown_event = self.headless_shutdown_events[hid]
-
-            # Register into yolo/resnet sets so feeders can send inputs
-            if "yolov4" in model:
-                self.yolo_views.add(hid)
-                if execution == "gpu":
-                    process = Thread(
-                        target=run_yolo_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid, model),
-                        daemon=True,
-                    )
-                elif execution in ("npu0", "npu1"):
-                    print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {hid} ({model}).")
-                    process = Thread(
-                        target=run_yolo_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid, model),
-                        daemon=True,
-                    )
-                else:
-                    process = Thread(
-                        target=run_yolo_cpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
-                        daemon=True,
-                    )
-            else:
-                self.resnet_views.add(hid)
-                if execution == "gpu":
-                    process = Thread(
-                        target=run_resnet_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
-                        daemon=True,
-                    )
-                elif execution in ("npu0", "npu1"):
-                    print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {hid}.")
-                    process = Thread(
-                        target=run_resnet_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
-                        daemon=True,
-                    )
-                else:
-                    process = Thread(
-                        target=run_resnet_cpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
-                        daemon=True,
-                    )
-            process.start()
-            self.headless_processes.append(process)
-        
-        # Start drainers for headless outputs to avoid queue backpressure
-        def _make_drain(q, ev, name, cfg):
-            def _drain():
-                import queue as _q
-                while not ev.is_set() and not self.shutdown_flag.is_set():
-                    try:
-                        item = q.get(timeout=1)
-                    except _q.Empty:
-                        continue
-                    except Exception:
-                        break
-
-                    # Print concise command-line logs for headless model results
-                    try:
-                        ts = datetime.now().strftime("%H:%M:%S")
-                        model_name = str((cfg or {}).get("model", "") or name)
-                        exec_dev = str((cfg or {}).get("execution", "cpu") or "cpu").upper()
-                        combo = getattr(self, 'current_combination', '')
-                        run_id = getattr(self, 'run_id', '')
-
-                        # Try to interpret common payload shapes from model_processors:
-                        # - ResNet: (img, class_name, infer_time_ms)
-                        # - YOLO: (result_img, infer_time_ms, wait_ms)
-                        # Fallback: generic repr length-limited
-                        msg = None
-                        if isinstance(item, tuple):
-                            if len(item) == 3 and isinstance(item[1], str):
-                                # ResNet
-                                class_name = item[1]
-                                try:
-                                    infer_ms = float(item[2])
-                                except Exception:
-                                    infer_ms = None
-                                if infer_ms is not None:
-                                    msg = f"class={class_name} infer={infer_ms:.1f}ms"
-                                else:
-                                    msg = f"class={class_name}"
-                            elif len(item) == 3:
-                                # YOLO (image, infer_ms, wait_ms)
-                                try:
-                                    infer_ms = float(item[1])
-                                except Exception:
-                                    infer_ms = None
-                                try:
-                                    wait_ms = float(item[2])
-                                except Exception:
-                                    wait_ms = None
-                                if infer_ms is not None and wait_ms is not None:
-                                    msg = f"infer={infer_ms:.1f}ms wait={wait_ms:.1f}ms"
-                                elif infer_ms is not None:
-                                    msg = f"infer={infer_ms:.1f}ms"
-                            elif len(item) == 2 and isinstance(item[1], (int, float)):
-                                # Some pipelines may return (payload, infer_ms)
-                                try:
-                                    infer_ms = float(item[1])
-                                    msg = f"infer={infer_ms:.1f}ms"
-                                except Exception:
-                                    msg = None
-                        if msg is None:
-                            # Fallback: avoid dumping large arrays/images
-                            msg = "result received"
-
-                        # Accumulate basic headless stats for throughput saving
-                        try:
-                            stats = getattr(self, 'headless_stats', None)
-                            if stats is None:
-                                self.headless_stats = {}
-                                stats = self.headless_stats
-                            s = stats.setdefault(name, {
-                                'count': 0,
-                                'sum_infer_ms': 0.0,
-                                'sum_wait_ms': 0.0,
-                                'wait_count': 0,
-                                'model': model_name,
-                                'execution': exec_dev,
-                            })
-                            s['count'] += 1
-                            try:
-                                if infer_ms is not None:
-                                    s['sum_infer_ms'] += float(infer_ms)
-                            except Exception:
-                                pass
-                            try:
-                                if wait_ms is not None:
-                                    s['sum_wait_ms'] += float(wait_ms)
-                                    s['wait_count'] += 1
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-
-                        print(f"[Headless][{ts}][{combo}][{run_id}] {name} {model_name} {exec_dev}: {msg}")
-                    except Exception:
-                        # Never let logging break the drainer
-                        pass
-
-            t = Thread(target=_drain, daemon=True, name=f"Drainer-{name}")
-            t.start()
-            return t
-        self._headless_drainers = []
-        # Ensure stats container exists for headless jobs
-        try:
-            if getattr(self, 'headless_stats', None) is None:
-                self.headless_stats = {}
-        except Exception:
-            self.headless_stats = {}
-        for hid in list(getattr(self, 'headless_ids', []) or []):
-            q = self.headless_output_queues.get(hid)
-            ev = self.headless_shutdown_events.get(hid)
-            cfg = self.model_settings.get(hid, {})
-            if q is not None and ev is not None:
-                self._headless_drainers.append(_make_drain(q, ev, hid, cfg))
     
     def start_view_process(self, view_name):
         """
-        Start a worker thread for a specific view.
+        Start a process for a specific view.
         
         Args:
             view_name: Name of the view (view1, view2, etc.)
         """
-        # If no model is assigned for this view, do not start any worker
+        # If no model is assigned for this view, do not start any process
         if hasattr(self, 'views_without_model') and view_name in self.views_without_model:
-            print(f"[UnifiedViewer] Skipping worker start for {view_name}: no model assigned")
+            print(f"[UnifiedViewer] Skipping process start for {view_name}: no model assigned")
             return
         
         model = self.model_settings.get(view_name, {}).get("model", "")
@@ -760,54 +436,37 @@ class UnifiedViewer(QMainWindow):
         output_queue = getattr(self, f"{view_name}_output_queue") if view_name in ["view1", "view2"] else getattr(self, f"{view_name}_result_queue")
         shutdown_event = getattr(self, f"{view_name}_shutdown_event")
         
-        if "yolov4" in model:
-            # YOLOv4 model
+        if model.startswith("yolov3"):
+            # YOLO model
             self.yolo_views.add(view_name)
-            if execution == "gpu":
-                print(f"[UnifiedViewer] Starting {view_name} with {model} GPU (thread)")
-                process = Thread(
-                    target=run_yolo_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name, model),
-                    daemon=True,
-                )
-            elif execution in ("npu0", "npu1"):
-                # NPU execution is deprecated; fall back to GPU to align with new policy
-                print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {view_name} ({model}).")
-                process = Thread(
-                    target=run_yolo_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name, model),
-                    daemon=True,
+            if execution == "npu0" or execution == "npu1":
+                npu_id = 0 if execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
+                process = Process(
+                    target=run_yolo_npu_process,
+                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
                 )
             else:
-                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU (thread)")
-                process = Thread(
+                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
+                process = Process(
                     target=run_yolo_cpu_process,
                     args=(frame_queue, output_queue, shutdown_event, view_name),
-                    daemon=True,
                 )
         else:
             # ResNet model
             self.resnet_views.add(view_name)
-            if execution == "gpu":
-                print(f"[UnifiedViewer] Starting {view_name} with {model} GPU (thread)")
-                process = Thread(
-                    target=run_resnet_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
-                    daemon=True,
-                )
-            elif execution in ("npu0", "npu1"):
-                print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {view_name} ({model}).")
-                process = Thread(
-                    target=run_resnet_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
-                    daemon=True,
+            if execution == "npu0" or execution == "npu1":
+                npu_id = 0 if execution == "npu0" else 1
+                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
+                process = Process(
+                    target=run_resnet_npu_process,
+                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name),
                 )
             else:
-                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU (thread)")
-                process = Thread(
+                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
+                process = Process(
                     target=run_resnet_cpu_process,
                     args=(frame_queue, output_queue, shutdown_event, view_name),
-                    daemon=True,
                 )
         
         setattr(self, f"{view_name}_process", process)
@@ -822,21 +481,17 @@ class UnifiedViewer(QMainWindow):
             "view3": self.view3_frame_queue,
             "view4": self.view4_frame_queue
         }
-        # Extend with headless frame queues so feeders can push inputs
-        for hid, fq in (getattr(self, 'headless_frame_queues', {}) or {}).items():
-            view_frame_queues[hid] = fq
         
-        # Start video feeder thread only if there are YOLOv4 views
-        self.video_feeder = None
-        if self.yolo_views:
-            self.video_feeder = VideoFeeder(
-                self.video_frame_queue,
-                view_frame_queues,
-                self.yolo_views,
-                self.shutdown_flag,
-                model_settings=self.model_settings
-            )
-            self.video_feeder.start_feed_thread()
+        # Start video feeder thread (for YOLO models)
+        self.video_feeder = VideoFeeder(
+            self.video_frame_queue,
+            view_frame_queues,
+            self.yolo_views,
+            self.shutdown_flag,
+            model_settings=self.model_settings
+        )
+        self.video_feeder.start_feed_thread()
+
         # Start ResNet image feeder honoring per-view infps (defaulting to 2 FPS)
         self.resnet_feeder = ResnetImageFeeder(
             image_dir="./imagenet-sample-images",
@@ -855,7 +510,7 @@ class UnifiedViewer(QMainWindow):
         """Initialize and start view handler threads."""
         # View1 handler
         view1_model = self.model_settings.get("view1", {}).get("model", "")
-        if "yolov4" in view1_model:
+        if view1_model.startswith("yolov3"):
             self.view1_handler = YoloViewHandler(
                 "view1",
                 self.model_settings,
@@ -879,7 +534,7 @@ class UnifiedViewer(QMainWindow):
         
         # View2 handler
         view2_model = self.model_settings.get("view2", {}).get("model", "")
-        if "yolov4" in view2_model:
+        if view2_model.startswith("yolov3"):
             self.view2_handler = YoloViewHandler(
                 "view2",
                 self.model_settings,
@@ -903,7 +558,7 @@ class UnifiedViewer(QMainWindow):
         
         # View3 handler
         view3_model = self.model_settings.get("view3", {}).get("model", "")
-        if "yolov4" in view3_model:
+        if view3_model.startswith("yolov3"):
             self.view3_handler = YoloViewHandler(
                 "view3",
                 self.model_settings,
@@ -927,7 +582,7 @@ class UnifiedViewer(QMainWindow):
         
         # View4 handler
         view4_model = self.model_settings.get("view4", {}).get("model", "")
-        if "yolov4" in view4_model:
+        if view4_model.startswith("yolov3"):
             self.view4_handler = YoloViewHandler(
                 "view4",
                 self.model_settings,
@@ -952,29 +607,21 @@ class UnifiedViewer(QMainWindow):
     # View update methods
     def update_view1_display(self, pixmap):
         """Update view1 display."""
-        if hasattr(self, 'hidden_views') and 'view1' in self.hidden_views:
-            return  # suppress drawing when hidden
         self.view1.setPixmap(pixmap)
         self.view1.setScaledContents(True)
     
     def update_view2_display(self, pixmap):
         """Update view2 display."""
-        if hasattr(self, 'hidden_views') and 'view2' in self.hidden_views:
-            return
         self.view2.setPixmap(pixmap)
         self.view2.setScaledContents(True)
     
     def update_view3_display(self, pixmap):
         """Update view3 display."""
-        if hasattr(self, 'hidden_views') and 'view3' in self.hidden_views:
-            return
         self.view3.setPixmap(pixmap)
         self.view3.setScaledContents(True)
     
     def update_view4_display(self, pixmap):
         """Update view4 display."""
-        if hasattr(self, 'hidden_views') and 'view4' in self.hidden_views:
-            return
         self.view4.setPixmap(pixmap)
         self.view4.setScaledContents(True)
     
@@ -995,83 +642,71 @@ class UnifiedViewer(QMainWindow):
                 event.set()
                 
         # Exit immediately without cleaning up queues
-        print("[SIGINT] Requesting application quit")
-        try:
-            from PyQt5.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app is not None:
-                QTimer.singleShot(50, app.quit)
-        except Exception:
-            pass
+        print("[SIGINT] Forcing exit")
+        os._exit(0)
     
     def closeEvent(self, event):
         """Handle window close event.
-        - In normal GUI mode: hide immediately and keep app running.
-        - In executor-only mode (--schedule_name): hide and shutdown asynchronously.
+        - Always stop execution and timers.
+        - In executor-only mode (--schedule_name): shut down entire application.
+        - Otherwise: dispose this window so a fresh viewer can be created later.
         """
         event.accept()
-        # Hide the window immediately to keep UI responsive
+        # Immediately set shutdown flags to stop video generation
         try:
-            self.hide()
+            self.shutdown_flag.set()
+            self.global_exit_flag = True
         except Exception:
             pass
-        # Immediately signal threads/processes to stop without blocking
-        try:
-            if hasattr(self, 'shutdown_flag') and self.shutdown_flag:
-                self.shutdown_flag.set()
-        except Exception:
-            pass
-        self.global_exit_flag = True
+
+        # Set all shutdown events to stop processes
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
                      'view3_shutdown_event', 'view4_shutdown_event',
                      'video_shutdown_event']:
+            ev = getattr(self, name, None)
             try:
-                ev = getattr(self, name, None)
                 if ev:
                     ev.set()
             except Exception:
                 pass
-        # Defer heavy stopping/cleanup to background to avoid freezing GUI
-        try:
-            self.stop_execution_async()
-        except Exception:
-            # Fallback to synchronous stop if async path unavailable
-            try:
-                self.stop_execution()
-            except Exception:
-                pass
-        # If running in executor-only mode, shut down everything asynchronously; otherwise just return
-        if getattr(self, 'executor_only', False):
-            print("[UnifiedViewer] Close event in executor-only mode - terminating application (async)")
-            try:
-                if self.info_window:
-                    self.info_window.hide()
-            except Exception:
-                pass
-            try:
-                self.shutdown_all_async()
-            except Exception:
-                # Fallback to sync
-                self.shutdown_all()
-        else:
-            print("[UnifiedViewer] Close event handled - window hidden; Info window remains open")
-    
-    def shutdown_all(self):
-        """Clean up resources and shut down the application gracefully."""
-        # First stop all model execution
+
+        # Clean up model execution and resources once
         try:
             self.stop_execution()
-        except Exception as e:
+        except Exception:
             pass
-        # Request application quit without forcing interpreter exit
+
+        # Stop and delete CPU timer if present
         try:
-            from PyQt5.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app is not None:
-                print("[Shutdown] Requesting application quit")
-                QTimer.singleShot(50, app.quit)
-        except Exception as e:
+            if hasattr(self, 'cpu_timer') and self.cpu_timer is not None:
+                self.cpu_timer.stop()
+                self.cpu_timer.deleteLater()
+        except Exception:
             pass
+
+        # If running in executor-only mode, shut down everything; otherwise dispose this window
+        if getattr(self, 'executor_only', False):
+            print("[UnifiedViewer] Close event in executor-only mode - terminating application")
+            try:
+                if self.info_window:
+                    self.info_window.close()
+            except Exception:
+                pass
+            self.shutdown_all()
+        else:
+            print("[UnifiedViewer] Close event triggered - closing viewer window")
+            try:
+                self.deleteLater()
+            except Exception:
+                pass
+    
+    def shutdown_all(self):
+        """Clean up resources and shut down the application."""
+        # First stop all model execution
+        self.stop_execution()
+            
+        print("[Shutdown] Forcing exit")
+        os._exit(0)
     
     # Monitoring and statistics methods
     def start_execution(self, duration):
@@ -1082,38 +717,14 @@ class UnifiedViewer(QMainWindow):
             duration (int): Duration in seconds for the execution to run.
         """
         print(f"Starting execution with duration: {duration} seconds")
-        # If a stop/shutdown is in progress, retry shortly to avoid race and UI freeze
+        # We treat the first 1 second as warmup; only measure after that.
         try:
-            if getattr(self, '_stop_in_progress', False) or getattr(self, '_shutdown_in_progress', False):
-                print("[Start] Stop/shutdown in progress; retrying in 200 ms")
-                QTimer.singleShot(200, lambda d=duration: self.start_execution(d))
-                return
-        except Exception:
-            pass
-        # Prevent duplicate start within the same run (can be triggered by multiple signals)
-        try:
-            if getattr(self, '_run_active', False):
-                print("[Start] Run already active; ignoring duplicate start request")
-                return
-        except Exception:
-            pass
-        # Ensure the model result display window is visible when starting a run
-        try:
-            self.show()
-        except Exception:
-            pass
-        # We treat the first 5 seconds as warmup; only measure after that.
-        try:
-            self.window_duration_sec = max(0.0, float(duration) - 5.0)
+            self.window_duration_sec = max(0.0, float(duration) - 1.0)
         except Exception:
             self.window_duration_sec = None
         
         # Reset idempotent stop flag for new run
         self._already_stopped = False
-        try:
-            pass
-        except Exception:
-            pass
 
         # Create a run_id and export to environment so child processes can log it
         try:
@@ -1123,34 +734,13 @@ class UnifiedViewer(QMainWindow):
             self.run_id = ""
         
         # Initialize and start processes if they're not already running
-        vid_proc = getattr(self, 'video_reader_proc', None)
-        # Note: vid_proc can legitimately be None when no yolov4 models are scheduled.
-        # Treat that as "not running" so we (re)initialize processes/threads for ResNet-only runs too.
-        if (vid_proc is None) or (hasattr(vid_proc, 'is_alive') and not vid_proc.is_alive()):
-            # Reset runtime state (events/queues/flags) for a fresh run after Stop
-            try:
-                self.initialize_state_variables()
-                # Also clear handler references from previous run to aid GC
-                for name in ['view1_handler','view2_handler','view3_handler','view4_handler','video_feeder','resnet_feeder']:
-                    if hasattr(self, name):
-                        try:
-                            setattr(self, name, None)
-                        except Exception:
-                            pass
-            except Exception as e:
-                pass
+        if not hasattr(self, 'video_reader_proc') or not self.video_reader_proc.is_alive():
             self.initialize_processes()
             self.initialize_threads()
         
-        # Mark run as active only after processes/threads are initialized
+        # Schedule a warmup window: reset all metrics after 1 second from start
         try:
-            self._run_active = True
-        except Exception:
-            pass
-        
-        # Schedule a warmup window: reset all metrics after 5 seconds from start
-        try:
-            QTimer.singleShot(5000, self._begin_measurement_window)
+            QTimer.singleShot(1000, self._begin_measurement_window)
         except Exception:
             pass
             
@@ -1160,63 +750,10 @@ class UnifiedViewer(QMainWindow):
     def timed_shutdown(self):
         """Stop execution after the scheduled duration without closing the application."""
         print("Execution duration completed, stopping model execution...")
-        try:
-            self.stop_execution_async()
-        except Exception:
-            self.stop_execution()
-        
-    def stop_execution_async(self):
-        """Start non-blocking stop of model execution and cleanup in a background thread."""
-        if getattr(self, '_stop_in_progress', False):
-            print("[Stop Execution] Async stop already in progress")
-            return
-        self._stop_in_progress = True
-        def _run_stop():
-            try:
-                self.stop_execution()
-            finally:
-                self._stop_in_progress = False
-                pass
-        try:
-            t = threading.Thread(target=_run_stop, name="StopExecutionThread", daemon=True)
-            t.start()
-        except Exception as e:
-            print(f"[Stop Execution] Failed to start async stop thread: {e}")
-            # Fallback to synchronous stop
-            try:
-                self.stop_execution()
-            finally:
-                self._stop_in_progress = False
-
-    def shutdown_all_async(self):
-        """Shut down entire application asynchronously to avoid freezing the UI."""
-        if getattr(self, '_shutdown_in_progress', False):
-            print("[Shutdown] Shutdown already in progress")
-            return
-        self._shutdown_in_progress = True
-        def _run_shutdown():
-            try:
-                self.shutdown_all()
-            finally:
-                self._shutdown_in_progress = False
-        try:
-            t = threading.Thread(target=_run_shutdown, name="ShutdownThread", daemon=True)
-            t.start()
-        except Exception as e:
-            print(f"[Shutdown] Failed to start shutdown thread: {e}")
-            try:
-                self.shutdown_all()
-            finally:
-                self._shutdown_in_progress = False
+        self.stop_execution()
         
     def _begin_measurement_window(self):
         """Reset all per-view and feeder counters after warmup to start measurement."""
-        try:
-            import time as _t
-            # Mark measurement window start (used for elapsed-based drop rate)
-            self.measurement_start_ts = _t.time()
-        except Exception:
-            pass
         try:
             for name in ['view1_handler', 'view2_handler', 'view3_handler', 'view4_handler']:
                 handler = getattr(self, name, None)
@@ -1230,12 +767,6 @@ class UnifiedViewer(QMainWindow):
                 feeder.reset_counters()
         except Exception as e:
             print(f"[UnifiedViewer] Warmup reset warning (feeder): {e}")
-        try:
-            rfeeder = getattr(self, 'resnet_feeder', None)
-            if rfeeder and hasattr(rfeeder, 'reset_counters'):
-                rfeeder.reset_counters()
-        except Exception as e:
-            print(f"[UnifiedViewer] Warmup reset warning (resnet feeder): {e}")
         
     def stop_execution(self):
         """Stop model execution without closing the application."""
@@ -1245,60 +776,35 @@ class UnifiedViewer(QMainWindow):
             return
         # Mark as stopped to ensure idempotency
         self._already_stopped = True
-        # Mark run inactive immediately to avoid duplicate starts racing during stop
-        try:
-            self._run_active = False
-        except Exception:
-            pass
-
-        # Signal all threads (feeders/handlers) to stop
-        try:
-            if hasattr(self, 'shutdown_flag') and self.shutdown_flag:
-                self.shutdown_flag.set()
-        except Exception as e:
-            print(f"[Stop Execution] Warning setting shutdown_flag: {e}")
         
-        # Set shutdown events to signal workers to stop
+        # Set shutdown events to signal processes to stop
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
                      'view3_shutdown_event', 'view4_shutdown_event',
                      'video_shutdown_event']:
             event = getattr(self, name, None)
             if event:
                 event.set()
-        # Headless shutdown events
-        try:
-            for ev in (getattr(self, 'headless_shutdown_events', {}) or {}).values():
-                try:
-                    ev.set()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        
-        # Gracefully stop all worker threads
+                
+        # Gracefully stop all processes first, then force terminate if needed
         process_names = ['view1_process', 'view2_process', 'view3_process', 'view4_process', 'video_reader_proc']
         processes = [getattr(self, name, None) for name in process_names if hasattr(self, name) and getattr(self, name, None)]
-        # Include headless processes
-        try:
-            processes.extend(list(getattr(self, 'headless_processes', []) or []))
-        except Exception:
-            pass
-        try:
-            pass
-        except Exception:
-            pass
         
-        # Give threads time to exit their loops and run cleanup
+        # Give processes time to exit their loops and run cleanup (e.g., NPU driver close in finally)
         for p in processes:
             if p and p.is_alive():
                 try:
                     p.join(timeout=3.0)
                 except Exception as e:
-                    print(f"[Stop Execution] Worker join warning: {e}")
-        try:
-            pass
-        except Exception:
-            pass
+                    print(f"[Stop Execution] Process join error: {e}")
+        
+        # Force terminate any stubborn processes that didn't exit
+        for p in processes:
+            if p and p.is_alive():
+                try:
+                    p.terminate()
+                    p.join(timeout=0.5)
+                except Exception as e:
+                    print(f"[Stop Execution] Process termination error: {e}")
                     
         # Save throughput data once
         try:
@@ -1314,61 +820,14 @@ class UnifiedViewer(QMainWindow):
         except Exception as e:
             print(f"[Stop Execution] Error saving pre/post timing averages: {e}")
 
-        # After a schedule ends: drain all queues and explicitly close them
+        # Stop periodic timers to avoid lingering updates on Ubuntu
         try:
-            self._drain_and_close_all_queues()
-        except Exception as e:
-            print(f"[Stop Execution] Queue cleanup error: {e}")
-            
-        try:
-            # Hide the model result display window after stopping, per requirement
-            # Must execute on the Qt main thread to avoid macOS SIGTRAP from cross-thread UI calls
-            from PyQt5.QtCore import QTimer as _QtTimer
-            _QtTimer.singleShot(0, lambda: (self.hide(), print("[Stop Execution] Model execution stopped, display window hidden; Info window remains open")))
-        except Exception:
-            print("[Stop Execution] Model execution stopped (could not schedule hide)")
-        
-    def _drain_and_close_all_queues(self):
-        """Drain all inter-process queues and explicitly close them.
-        This prevents residual items from a finished schedule affecting the next run
-        and ensures background feeder/handler threads do not leak resources.
-        """
-        def drain_queue(q):
-            if not q:
-                return
-            try:
-                # Non-blocking drain
-                while True:
-                    try:
-                        _ = q.get_nowait()
-                    except queue.Empty:
-                        break
-                    except (EOFError, BrokenPipeError, OSError):
-                        break
-                    except Exception:
-                        # Keep draining on any unexpected item error
-                        continue
-            except Exception:
-                pass
-        # Enumerate all queues used in the viewer
-        queue_names = [
-            'video_frame_queue',
-            'view1_frame_queue', 'view1_output_queue',
-            'view2_frame_queue', 'view2_output_queue',
-            'view3_frame_queue', 'view3_result_queue',
-            'view4_frame_queue', 'view4_result_queue',
-        ]
-        for name in queue_names:
-            q = getattr(self, name, None)
-            drain_queue(q)
-        # Drain headless queues
-        try:
-            for q in (getattr(self, 'headless_frame_queues', {}) or {}).values():
-                drain_queue(q)
-            for q in (getattr(self, 'headless_output_queues', {}) or {}).values():
-                drain_queue(q)
+            if hasattr(self, 'cpu_timer') and self.cpu_timer is not None:
+                self.cpu_timer.stop()
         except Exception:
             pass
+            
+        print("[Stop Execution] Model execution stopped, window remains open with last results")
         
     def update_cpu_npu_usage(self):
         """Update CPU and NPU usage information."""
@@ -1391,31 +850,21 @@ class UnifiedViewer(QMainWindow):
         view4_avg_fps = getattr(self, 'view4_handler', None).avg_fps if hasattr(self, 'view4_handler') else 0.0
         view4_avg_infer_time = getattr(self, 'view4_handler', None).avg_infer_time if hasattr(self, 'view4_handler') else 0.0
         
-        # Determine which views are actually scheduled in this combination
-        scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
-
-        # Calculate total average FPS (total throughput) over scheduled views only
-        per_view_fps = {
-            "view1": view1_avg_fps,
-            "view2": view2_avg_fps,
-            "view3": view3_avg_fps,
-            "view4": view4_avg_fps,
-        }
-        total_fps = sum(per_view_fps[v] for v in scheduled_views)
-        scheduled_count = len(scheduled_views)
-        total_avg_fps = total_fps / scheduled_count if scheduled_count > 0 else 0.0
+        # Calculate total average FPS (total throughput)
+        total_fps = (view1_avg_fps + view2_avg_fps + view3_avg_fps + view4_avg_fps)
+        total_avg_fps = total_fps / 4 if total_fps > 0 else 0.0
         
         # Get model and execution mode for each view
-        view1_model = self.model_settings.get("view1", {}).get("model", "")
+        view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
         view1_mode = self.model_settings.get("view1", {}).get("execution", "cpu").upper()
         
-        view2_model = self.model_settings.get("view2", {}).get("model", "")
+        view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
         view2_mode = self.model_settings.get("view2", {}).get("execution", "cpu").upper()
         
-        view3_model = self.model_settings.get("view3", {}).get("model", "")
+        view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
         view3_mode = self.model_settings.get("view3", {}).get("execution", "cpu").upper()
         
-        view4_model = self.model_settings.get("view4", {}).get("model", "")
+        view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
         view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
         
         # Create performance text and append reallocation trigger status based on recent results
@@ -1428,55 +877,21 @@ class UnifiedViewer(QMainWindow):
         self.info_window.update_trigger_below_metrics(line1 + "\n" + line2)
         trigger_text = ""
 
-        # Build per-view lines only for visible (non-hidden) scheduled views
-        visible_views = [v for v in scheduled_views if v not in getattr(self, 'hidden_views', set())]
-        per_view_lines = []
-        if "view1" in visible_views:
-            per_view_lines.append(
-                f"<b>View1 ({view1_model} {view1_mode})</b> Avg FPS: {view1_avg_fps:.1f} (<span style='color: gray;'>{view1_avg_infer_time:.1f} ms</span>)"
-            )
-        if "view2" in visible_views:
-            per_view_lines.append(
-                f"<b><span style='color: purple;'>View2 ({view2_model} {view2_mode})</span></b> Avg FPS: <span style='color: purple;'>{view2_avg_fps:.1f}</span> (<span style='color: purple;'>{view2_avg_infer_time:.1f} ms</span>)"
-            )
-        if "view3" in visible_views:
-            per_view_lines.append(
-                f"<b><span style='color: green;'>View3 ({view3_model} {view3_mode})</span></b> Avg FPS: <span style='color: green;'>{view3_avg_fps:.1f}</span> (<span style='color: green;'>{view3_avg_infer_time:.1f} ms</span>)"
-            )
-        if "view4" in visible_views:
-            per_view_lines.append(
-                f"<b><span style='color: blue;'>View4 ({view4_model} {view4_mode})</span></b> Avg FPS: <span style='color: blue;'>{view4_avg_fps:.1f}</span> (<span style='color: blue;'>{view4_avg_infer_time:.1f} ms</span>)"
-            )
-
-        # Build a section listing models that are running headlessly (display: none)
-        headless_lines = []
-        try:
-            for hid in list(getattr(self, 'headless_ids', []) or []):
-                cfg = (self.model_settings or {}).get(hid, {})
-                model_name = str(cfg.get('model', '') or '')
-                exec_dev_raw = str(cfg.get('execution', 'cpu') or 'cpu').upper()
-                # Normalize device naming to CPU/GPU/NPU (hide numeric suffixes)
-                if exec_dev_raw.startswith('NPU'):
-                    exec_dev = 'NPU'
-                elif exec_dev_raw.startswith('GPU'):
-                    exec_dev = 'GPU'
-                else:
-                    exec_dev = 'CPU'
-                if model_name:
-                    headless_lines.append(f"- {model_name} <span style='color: gray;'>({exec_dev})</span>")
-        except Exception:
-            pass
-        
-        # Compose performance text: visible per-view lines and then hidden models section (names must be shown even if no view)
-        sections = [
-            f"<b>Total Throughput: {total_fps:.1f} FPS</b>",
-            f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b>",
-        ]
-        if per_view_lines:
-            sections.append("<br>".join(per_view_lines))
-        if headless_lines:
-            sections.append("<b>Models running without display</b><br>" + "<br>".join(headless_lines))
-        performance_text = ("<br>".join(sections))
+        performance_text = (
+            f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
+            f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>"
+            f"<b>View1 ({view1_model} {view1_mode})</b> Avg FPS: {view1_avg_fps:.1f} "
+            f"(<span style='color: gray;'>{view1_avg_infer_time:.1f} ms</span>)<br>"
+            f"<b><span style='color: purple;'>View2 ({view2_model} {view2_mode})</span></b> Avg FPS: "
+            f"<span style='color: purple;'>{view2_avg_fps:.1f}</span> "
+            f"(<span style='color: purple;'>{view2_avg_infer_time:.1f} ms</span>)<br>"
+            f"<b><span style='color: green;'>View3 ({view3_model} {view3_mode})</span></b> Avg FPS: "
+            f"<span style='color: green;'>{view3_avg_fps:.1f}</span> "
+            f"(<span style='color: green;'>{view3_avg_infer_time:.1f} ms</span>)<br>"
+            f"<b><span style='color: blue;'>View4 ({view4_model} {view4_mode})</span></b> Avg FPS: "
+            f"<span style='color: blue;'>{view4_avg_fps:.1f}</span> "
+            f"(<span style='color: blue;'>{view4_avg_infer_time:.1f} ms</span>)"
+        )
         
         # Create CPU info text
         cpu_info_text = (
@@ -1519,25 +934,11 @@ class UnifiedViewer(QMainWindow):
                 except Exception:
                     pass
             max_q_wait = max(q_waits) if q_waits else 0.0
-            # Drop rate (frames/sec) across CNN and YOLO (exclude language models)
-            # Sum drops from both feeders over all active ids (visible + headless)
-            import time as _t
-            active_ids = set(list(getattr(self, 'yolo_views', set()) or set())) | set(list(getattr(self, 'resnet_views', set()) or set()))
-            # YOLO/video feeder drops
-            vf = getattr(self, 'video_feeder', None)
-            vf_map = getattr(vf, 'drop_counts', {}) if vf else {}
-            vf_drops = sum(int(vf_map.get(v, 0) or 0) for v in active_ids)
-            # ResNet/cnn feeder drops
-            rf = getattr(self, 'resnet_feeder', None)
-            rf_map = getattr(rf, 'drop_counts', {}) if rf else {}
-            rf_drops = sum(int(rf_map.get(v, 0) or 0) for v in active_ids)
-            total_drops = vf_drops + rf_drops
-            # Normalize by elapsed measurement time since warm-up
-            try:
-                elapsed = float(max(0.001, (_t.time() - float(getattr(self, 'measurement_start_ts', 0.0)))) )
-            except Exception:
-                elapsed = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
-            drop_rate_fps = total_drops / elapsed if elapsed > 0 else 0.0
+            # drop_rate_fps from feeder drops per window
+            window_sec = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
+            drop_counts = getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}) or {}
+            total_drops = sum(int(drop_counts.get(v, 0) or 0) for v in scheduled_views)
+            drop_rate_fps = total_drops / window_sec if window_sec > 0 else 0.0
             score = total_fps - 0.2 * drop_rate_fps
             # Show each metric on its own line
             metrics_line = (
@@ -1574,50 +975,48 @@ class UnifiedViewer(QMainWindow):
                 except Exception:
                     pass
             # Get model and execution mode for each view
-            view1_model = self.model_settings.get("view1", {}).get("model", "")
+            view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
             view1_mode = self.model_settings.get("view1", {}).get("execution", "cpu").upper()
             
             view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
             view2_mode = self.model_settings.get("view2", {}).get("execution", "cpu").upper()
             
-            view3_model = self.model_settings.get("view3", {}).get("model", "")
+            view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
             view3_mode = self.model_settings.get("view3", {}).get("execution", "cpu").upper()
             
             view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
             view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
             
-            # Get performance statistics from view handlers (robust to missing handlers)
-            def _stats_for(view_name: str):
-                handler = getattr(self, f"{view_name}_handler", None)
-                if handler is None:
-                    return 0.0, 0.0, 0
-                try:
-                    avg_fps = float(getattr(handler, 'avg_fps', 0.0) or 0.0)
-                except Exception:
-                    avg_fps = 0.0
-                try:
-                    avg_infer_time = float(getattr(handler, 'avg_infer_time', 0.0) or 0.0)
-                except Exception:
-                    avg_infer_time = 0.0
-                try:
-                    infer_count = int(getattr(handler, 'infer_count', 0) or 0)
-                except Exception:
-                    infer_count = 0
-                return avg_fps, avg_infer_time, infer_count
-
-            view1_avg_fps, view1_avg_infer_time, view1_infer_count = _stats_for('view1')
-            view2_avg_fps, view2_avg_infer_time, view2_infer_count = _stats_for('view2')
-            view3_avg_fps, view3_avg_infer_time, view3_infer_count = _stats_for('view3')
-            view4_avg_fps, view4_avg_infer_time, view4_infer_count = _stats_for('view4')
+            # Check if view handlers exist
+            if not all(hasattr(self, f'view{i}_handler') for i in range(1, 5)):
+                print("[Save Throughput] No view handlers initialized, skipping throughput data save")
+                return
+                
+            # Get performance statistics from view handlers
+            view1_avg_fps = self.view1_handler.avg_fps
+            view1_avg_infer_time = self.view1_handler.avg_infer_time
+            view1_infer_count = self.view1_handler.infer_count
+            
+            view2_avg_fps = self.view2_handler.avg_fps
+            view2_avg_infer_time = self.view2_handler.avg_infer_time
+            view2_infer_count = self.view2_handler.infer_count
+            
+            view3_avg_fps = self.view3_handler.avg_fps
+            view3_avg_infer_time = self.view3_handler.avg_infer_time
+            view3_infer_count = self.view3_handler.infer_count
+            
+            view4_avg_fps = self.view4_handler.avg_fps
+            view4_avg_infer_time = self.view4_handler.avg_infer_time
+            view4_infer_count = self.view4_handler.infer_count
             
             # Determine which views are actually scheduled in this combination
             scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
 
             # Map helpers for per-view stats, including avg_wait_ms (if available) and dropped frames
-            view1_wait = getattr(getattr(self, 'view1_handler', None), 'avg_wait_ms', 0.0)
-            view2_wait = getattr(getattr(self, 'view2_handler', None), 'avg_wait_ms', 0.0)
-            view3_wait = getattr(getattr(self, 'view3_handler', None), 'avg_wait_ms', 0.0)
-            view4_wait = getattr(getattr(self, 'view4_handler', None), 'avg_wait_ms', 0.0)
+            view1_wait = getattr(self.view1_handler, 'avg_wait_ms', 0.0)
+            view2_wait = getattr(self.view2_handler, 'avg_wait_ms', 0.0)
+            view3_wait = getattr(self.view3_handler, 'avg_wait_ms', 0.0)
+            view4_wait = getattr(self.view4_handler, 'avg_wait_ms', 0.0)
 
             # Drop counts from feeder (0 if not present)
             drop_counts = getattr(self, 'video_feeder', None)
@@ -1630,7 +1029,7 @@ class UnifiedViewer(QMainWindow):
                 "view4": (view4_avg_fps, view4_avg_infer_time, view4_infer_count, view4_model, view4_mode, view4_wait, int(drop_map.get("view4", 0))),
             }
 
-            # Calculate total throughput for scheduled views (with headless later)
+            # Calculate total throughput for scheduled views
             total_fps = sum(per_view_stats[v][0] for v in scheduled_views)
             scheduled_count = len(scheduled_views)
             total_avg_fps = total_fps / scheduled_count if scheduled_count > 0 else 0.0
@@ -1661,53 +1060,6 @@ class UnifiedViewer(QMainWindow):
                     "dropped_frames_due_to_full_queue": int(dropped or 0)
                 }
                 devices_used.add(exec_mode)
-
-            # Include headless jobs (no views) into models and totals
-            try:
-                headless_ids = list(getattr(self, 'headless_ids', []) or [])
-                hstats = getattr(self, 'headless_stats', {}) or {}
-                # elapsed time since measurement start; fallback to window duration
-                try:
-                    import time as _t
-                    elapsed = float(max(0.001, (_t.time() - float(getattr(self, 'measurement_start_ts', 0.0)))))
-                except Exception:
-                    elapsed = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
-                for hid in headless_ids:
-                    cfg = self.model_settings.get(hid, {})
-                    model_name = cfg.get('model', '')
-                    exec_mode = str(cfg.get('execution', 'cpu')).upper()
-                    s = hstats.get(hid, {})
-                    count = int(s.get('count', 0) or 0)
-                    sum_infer_ms = float(s.get('sum_infer_ms', 0.0) or 0.0)
-                    sum_wait_ms = float(s.get('sum_wait_ms', 0.0) or 0.0)
-                    wait_count = int(s.get('wait_count', 0) or 0)
-                    avg_time = (sum_infer_ms / count) if count > 0 else 0.0
-                    avg_wait_ms = (sum_wait_ms / wait_count) if wait_count > 0 else 0.0
-                    avg_fps = (count / elapsed) if elapsed > 0 else 0.0
-                    # Update totals (headless contributes to total throughput)
-                    total_fps += avg_fps
-                    # Models entry uses the headless id as key
-                    throughput_data["models"][hid] = {
-                        "model": model_name,
-                        "execution": exec_mode,
-                        "throughput_fps": round(avg_fps, 2),
-                        "avg_inference_time_ms": round(avg_time, 2),
-                        "inference_count": int(count),
-                        "avg_wait_to_preprocess_ms": round(avg_wait_ms or 0.0, 2),
-                        "dropped_frames_due_to_full_queue": 0
-                    }
-                    devices_used.add(exec_mode)
-                # Recompute average throughput across all scheduled entities (views + headless)
-                total_entities = scheduled_count + len(headless_ids)
-                total_avg_fps = total_fps / total_entities if total_entities > 0 else 0.0
-                # Reflect updated totals
-                throughput_data["total"]["total_throughput_fps"] = round(total_fps, 2)
-                throughput_data["total"]["avg_throughput_fps"] = round(total_avg_fps, 2)
-            except Exception as e:
-                try:
-                    print(f"[Save Throughput] Warning: failed to include headless metrics: {e}")
-                except Exception:
-                    pass
 
             # Compute per-device queue metrics with fallback when timing logs are unavailable
             try:
