@@ -13,9 +13,6 @@ import os
 import argparse
 import yaml
 import json
-import signal
-import time
-import multiprocessing as mp
 from typing import List
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer, Qt
@@ -34,14 +31,7 @@ class ScheduleExecutor:
         self._viewer: UnifiedViewer = None
         self._index: int = 0
         self._running: bool = False
-        self._end_time = None  # wall-clock end time for capped runs (epoch seconds)
         self._combinations: List[str] = self._load_combinations(schedule_file)
-        # Delay between schedules (ms) to ensure file writes and cleanup settle
-        self._inter_schedule_delay_ms: int = 1000
-        try:
-            pass
-        except Exception:
-            pass
 
         # If a specific combination is requested, filter list to that single name
         if self._selected_combo:
@@ -49,13 +39,11 @@ class ScheduleExecutor:
                 self._combinations = [self._selected_combo]
             else:
                 print(f"[Executor] ERROR: requested combination '{self._selected_combo}' not found in {os.path.basename(schedule_file)}")
-                import sys
-                sys.exit(2)
+                os._exit(2)
 
         if not self._combinations:
             print('[Executor] No combinations found in schedule file. Exiting.')
-            import sys
-            sys.exit(1)
+            os._exit(1)
 
     # ------------------------------ Public API ------------------------------ #
 
@@ -67,11 +55,6 @@ class ScheduleExecutor:
         self._index = 0
         if duration is not None:
             self.default_duration = max(1, int(duration))
-        # Cap total continuous execution time to 1 hour when running a single selected combination
-        if getattr(self, '_selected_combo', None):
-            self._end_time = time.time() + 3600.0
-        else:
-            self._end_time = None
         # Prepare a unique results file path for this run
         results_dir = os.path.join(os.getcwd(), 'results')
         os.makedirs(results_dir, exist_ok=True)
@@ -136,21 +119,11 @@ class ScheduleExecutor:
             pass
 
     def _run_next(self):
-        
-        # Enforce max continuous runtime (1 hour) in selected-combo mode
-        if getattr(self, '_end_time', None) is not None:
-            remaining = int(self._end_time - time.time())
-            if remaining <= 0:
-                print('[Executor] Reached 1-hour cap for selected combination. Stopping execution.')
-                self.stop()
-                return
-
         if self._index >= len(self._combinations):
-            # If a specific combination was requested (executor-only mode), loop until cap or stop
+            # If a specific combination was requested (executor-only mode), loop indefinitely until app exit
             if getattr(self, '_selected_combo', None):
                 self._index = 0
-                # Short delay before repeating the same combination to avoid tight loop
-                QTimer.singleShot(self._inter_schedule_delay_ms, self._run_next)
+                QTimer.singleShot(300, self._run_next)
                 return
             print('[Executor] All combinations executed. Leaving windows open.')
             self._write_best_header()
@@ -209,21 +182,14 @@ class ScheduleExecutor:
 
         self._viewer.show()
 
-        # Apply 5-second warmup: run for duration+5, but measurement starts after 5s inside viewer
+        # Apply 1-second warmup: run for duration+1, but measurement starts after 1s inside viewer
         measured_duration = self.default_duration
-        # If capped, ensure we don't exceed remaining time (include 5s warm-up)
-        if getattr(self, '_end_time', None) is not None:
-            remaining = max(0, int(self._end_time - time.time()))
-            # Reserve 5 seconds for warm-up; run for at least 1 second if remaining is small
-            run_duration = max(1, min(measured_duration + 5, remaining))
-        else:
-            run_duration = measured_duration + 5
+        run_duration = measured_duration + 3
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)
         buffer_ms = 1000
-        next_delay_ms = (run_duration * 1000) + buffer_ms
-        QTimer.singleShot(next_delay_ms, self._after_stop)
+        QTimer.singleShot((run_duration * 1000) + buffer_ms, self._after_stop)
 
     def _after_stop(self):
         if not self._running:
@@ -234,8 +200,7 @@ class ScheduleExecutor:
         except Exception as e:
             print(f"[Executor] Warning: stop_execution error: {e}")
         self._index += 1
-        # Delay before moving to next schedule to ensure results are flushed and resources cleaned
-        QTimer.singleShot(self._inter_schedule_delay_ms, self._run_next)  # short delay to flush file writes
+        QTimer.singleShot(300, self._run_next)  # short delay to flush file writes
 
     def _write_best_header(self):
         """Rewrite the run results file into required object format with best deployment."""
@@ -297,13 +262,6 @@ class ScheduleExecutor:
 
             # 점수 계산부
             for ent in entries:
-                # Force window_sec to the actual measured schedule duration from the GUI (duration_edit)
-                # We always overwrite whatever was recorded during collection to avoid off-by-one artifacts (e.g., 9s when set to 10s)
-                try:
-                    ent['window_sec'] = float(self.default_duration)
-                except Exception:
-                    ent['window_sec'] = float(self.default_duration)
-
                 total_fps, drop_rate = _metrics(ent)
                 score = total_fps - 0.2 * drop_rate
                 ent['score'] = round(score, 4)
@@ -477,75 +435,23 @@ def main():
     # No legacy pre-clean: results are now saved per-run under results/performance_*.json
 
     app = QApplication(sys.argv)
-    try:
-        mp.set_start_method('spawn', force=True)
-        print(f"[Main] multiprocessing start method set to: {mp.get_start_method()}")
-    except Exception as e:
-        try:
-            print(f"[Main] Failed to set multiprocessing start method to 'spawn': {e}")
-        except Exception:
-            pass
-    try:
-        app.setQuitOnLastWindowClosed(False)
-        print("[Main] Qt setQuitOnLastWindowClosed(False)")
-    except Exception:
-        pass
 
     # Create the InfoWindow instance
     info = InfoWindow(parent=None)
 
-    # Shared graceful shutdown handler that mimics pressing Stop in InfoWindow
-    def _graceful_shutdown(signum=None, frame=None):
-        try:
-            print(f"[Main] Received signal {signum}; initiating graceful shutdown...")
-        except Exception:
-            pass
-        try:
-            # Prefer stopping executor (mirrors Stop Execution)
-            nonlocal_executor = getattr(_graceful_shutdown, '_executor', None)
-            if nonlocal_executor is not None:
-                try:
-                    nonlocal_executor.stop()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # Hide InfoWindow and quit the app event loop
-        try:
-            info.hide()
-        except Exception:
-            pass
-        try:
-            QTimer.singleShot(50, app.quit)
-        except Exception:
-            try:
-                app.quit()
-            except Exception:
-                pass
-
-    # If schedule_name is provided, run executor-only mode without showing InfoWindow
+    # If schedule_name is provided, run executor-only mode and send InfoWindow to back
     if args.schedule_name:
         try:
-            # Ensure InfoWindow stays hidden in combination execution mode
-            info.hide()
+            # Clear always-on-top and ensure the window is behind
             info.setWindowFlag(Qt.WindowStaysOnTopHint, False)
+            info.show()
+            try:
+                info.lower()
+            except Exception:
+                pass
         except Exception:
             pass
         executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
-        # Link executor for shutdown handler
-        try:
-            setattr(_graceful_shutdown, '_executor', executor)
-        except Exception:
-            pass
-        # Install signal handlers to perform graceful stop on SIGTERM/SIGINT
-        try:
-            signal.signal(signal.SIGTERM, _graceful_shutdown)
-        except Exception:
-            pass
-        try:
-            signal.signal(signal.SIGINT, _graceful_shutdown)
-        except Exception:
-            pass
         # Disable Start button since we auto-run and no controller
         try:
             info.start_button.setEnabled(False)
@@ -560,7 +466,7 @@ def main():
             print(f"[Main] QApplication error: {e}")
             exit_code = 1
         print('[Main] QApplication loop exited.')
-        sys.exit(exit_code)
+        os._exit(exit_code)
 
     # Otherwise, show InfoWindow and use full GUI mode
     info.show()
@@ -572,20 +478,6 @@ def main():
     # Assign controller as the parent so InfoWindow's built-in handlers call our methods
     try:
         info.parent = controller
-    except Exception:
-        pass
-
-    # Link executor for shutdown handler and install signals
-    try:
-        setattr(_graceful_shutdown, '_executor', executor)
-    except Exception:
-        pass
-    try:
-        signal.signal(signal.SIGTERM, _graceful_shutdown)
-    except Exception:
-        pass
-    try:
-        signal.signal(signal.SIGINT, _graceful_shutdown)
     except Exception:
         pass
 
@@ -627,7 +519,7 @@ def main():
         exit_code = 1
 
     print('[Main] QApplication loop exited.')
-    sys.exit(exit_code)
+    os._exit(exit_code)
 
 
 if __name__ == "__main__":
