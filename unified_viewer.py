@@ -717,9 +717,9 @@ class UnifiedViewer(QMainWindow):
             duration (int): Duration in seconds for the execution to run.
         """
         print(f"Starting execution with duration: {duration} seconds")
-        # We treat the first 1 second as warmup; only measure after that.
+        # We treat the first 5 seconds as warmup; only measure after that.
         try:
-            self.window_duration_sec = max(0.0, float(duration) - 1.0)
+            self.window_duration_sec = max(0.0, float(duration) - 5.0)
         except Exception:
             self.window_duration_sec = None
         
@@ -738,9 +738,9 @@ class UnifiedViewer(QMainWindow):
             self.initialize_processes()
             self.initialize_threads()
         
-        # Schedule a warmup window: reset all metrics after 1 second from start
+        # Schedule a warmup window: reset all metrics after 5 seconds from start
         try:
-            QTimer.singleShot(1000, self._begin_measurement_window)
+            QTimer.singleShot(5000, self._begin_measurement_window)
         except Exception:
             pass
             
