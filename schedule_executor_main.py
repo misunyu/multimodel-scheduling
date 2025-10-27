@@ -106,15 +106,12 @@ class ScheduleExecutor:
         if viewer is None:
             return
         try:
+            # Ensure proper shutdown and close the window to avoid lingering windows on Ubuntu
             viewer.stop_execution()
         except Exception:
             pass
         try:
-            viewer.hide()
-        except Exception:
-            pass
-        try:
-            viewer.deleteLater()
+            viewer.close()  # triggers UnifiedViewer.closeEvent for robust cleanup
         except Exception:
             pass
 
@@ -184,7 +181,7 @@ class ScheduleExecutor:
 
         # Apply 1-second warmup: run for duration+1, but measurement starts after 1s inside viewer
         measured_duration = self.default_duration
-        run_duration = measured_duration + 3
+        run_duration = measured_duration + 1
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)

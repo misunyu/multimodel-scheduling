@@ -98,7 +98,16 @@ class InfoWindow(QWidget):
         """Handle the stop button click event."""
         # Call the parent's stop_execution method if available
         if self.parent and hasattr(self.parent, 'stop_execution'):
-            self.parent.stop_execution()
+            try:
+                self.parent.stop_execution()
+            except Exception:
+                pass
+            # Also close the viewer window so it disappears immediately on Ubuntu
+            try:
+                if hasattr(self.parent, 'close'):
+                    self.parent.close()
+            except Exception:
+                pass
         else:
             print("Stopping execution")
 
@@ -638,26 +647,44 @@ class UnifiedViewer(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event.
-        - In normal GUI mode: hide only and keep app running.
+        - Always stop execution and timers.
         - In executor-only mode (--schedule_name): shut down entire application.
+        - Otherwise: dispose this window so a fresh viewer can be created later.
         """
         event.accept()
         # Immediately set shutdown flags to stop video generation
-        self.shutdown_flag.set()
-        self.global_exit_flag = True
+        try:
+            self.shutdown_flag.set()
+            self.global_exit_flag = True
+        except Exception:
+            pass
 
         # Set all shutdown events to stop processes
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
                      'view3_shutdown_event', 'view4_shutdown_event',
                      'video_shutdown_event']:
             ev = getattr(self, name, None)
-            if ev:
-                ev.set()
+            try:
+                if ev:
+                    ev.set()
+            except Exception:
+                pass
 
         # Clean up model execution and resources once
-        self.stop_execution()
+        try:
+            self.stop_execution()
+        except Exception:
+            pass
 
-        # If running in executor-only mode, shut down everything; otherwise just hide
+        # Stop and delete CPU timer if present
+        try:
+            if hasattr(self, 'cpu_timer') and self.cpu_timer is not None:
+                self.cpu_timer.stop()
+                self.cpu_timer.deleteLater()
+        except Exception:
+            pass
+
+        # If running in executor-only mode, shut down everything; otherwise dispose this window
         if getattr(self, 'executor_only', False):
             print("[UnifiedViewer] Close event in executor-only mode - terminating application")
             try:
@@ -667,9 +694,11 @@ class UnifiedViewer(QMainWindow):
                 pass
             self.shutdown_all()
         else:
-            print("[UnifiedViewer] Close event triggered - hiding window only")
-            self.hide()
-            print("[UnifiedViewer] Window hidden, info_window remains open")
+            print("[UnifiedViewer] Close event triggered - closing viewer window")
+            try:
+                self.deleteLater()
+            except Exception:
+                pass
     
     def shutdown_all(self):
         """Clean up resources and shut down the application."""
@@ -790,6 +819,13 @@ class UnifiedViewer(QMainWindow):
                 self.save_pre_post_time_average()
         except Exception as e:
             print(f"[Stop Execution] Error saving pre/post timing averages: {e}")
+
+        # Stop periodic timers to avoid lingering updates on Ubuntu
+        try:
+            if hasattr(self, 'cpu_timer') and self.cpu_timer is not None:
+                self.cpu_timer.stop()
+        except Exception:
+            pass
             
         print("[Stop Execution] Model execution stopped, window remains open with last results")
         
