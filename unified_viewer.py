@@ -987,36 +987,31 @@ class UnifiedViewer(QMainWindow):
             view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
             view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
             
-            # Check if view handlers exist
-            if not all(hasattr(self, f'view{i}_handler') for i in range(1, 5)):
-                print("[Save Throughput] No view handlers initialized, skipping throughput data save")
-                return
-                
-            # Get performance statistics from view handlers
-            view1_avg_fps = self.view1_handler.avg_fps
-            view1_avg_infer_time = self.view1_handler.avg_infer_time
-            view1_infer_count = self.view1_handler.infer_count
+            # Get performance statistics from view handlers (safe defaults if a view is not configured)
+            view1_avg_fps = getattr(getattr(self, 'view1_handler', None), 'avg_fps', 0.0)
+            view1_avg_infer_time = getattr(getattr(self, 'view1_handler', None), 'avg_infer_time', 0.0)
+            view1_infer_count = getattr(getattr(self, 'view1_handler', None), 'infer_count', 0)
             
-            view2_avg_fps = self.view2_handler.avg_fps
-            view2_avg_infer_time = self.view2_handler.avg_infer_time
-            view2_infer_count = self.view2_handler.infer_count
+            view2_avg_fps = getattr(getattr(self, 'view2_handler', None), 'avg_fps', 0.0)
+            view2_avg_infer_time = getattr(getattr(self, 'view2_handler', None), 'avg_infer_time', 0.0)
+            view2_infer_count = getattr(getattr(self, 'view2_handler', None), 'infer_count', 0)
             
-            view3_avg_fps = self.view3_handler.avg_fps
-            view3_avg_infer_time = self.view3_handler.avg_infer_time
-            view3_infer_count = self.view3_handler.infer_count
+            view3_avg_fps = getattr(getattr(self, 'view3_handler', None), 'avg_fps', 0.0)
+            view3_avg_infer_time = getattr(getattr(self, 'view3_handler', None), 'avg_infer_time', 0.0)
+            view3_infer_count = getattr(getattr(self, 'view3_handler', None), 'infer_count', 0)
             
-            view4_avg_fps = self.view4_handler.avg_fps
-            view4_avg_infer_time = self.view4_handler.avg_infer_time
-            view4_infer_count = self.view4_handler.infer_count
+            view4_avg_fps = getattr(getattr(self, 'view4_handler', None), 'avg_fps', 0.0)
+            view4_avg_infer_time = getattr(getattr(self, 'view4_handler', None), 'avg_infer_time', 0.0)
+            view4_infer_count = getattr(getattr(self, 'view4_handler', None), 'infer_count', 0)
             
             # Determine which views are actually scheduled in this combination
             scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
 
             # Map helpers for per-view stats, including avg_wait_ms (if available) and dropped frames
-            view1_wait = getattr(self.view1_handler, 'avg_wait_ms', 0.0)
-            view2_wait = getattr(self.view2_handler, 'avg_wait_ms', 0.0)
-            view3_wait = getattr(self.view3_handler, 'avg_wait_ms', 0.0)
-            view4_wait = getattr(self.view4_handler, 'avg_wait_ms', 0.0)
+            view1_wait = getattr(getattr(self, 'view1_handler', None), 'avg_wait_ms', 0.0)
+            view2_wait = getattr(getattr(self, 'view2_handler', None), 'avg_wait_ms', 0.0)
+            view3_wait = getattr(getattr(self, 'view3_handler', None), 'avg_wait_ms', 0.0)
+            view4_wait = getattr(getattr(self, 'view4_handler', None), 'avg_wait_ms', 0.0)
 
             # Drop counts from feeder (0 if not present)
             drop_counts = getattr(self, 'video_feeder', None)
@@ -1106,7 +1101,11 @@ class UnifiedViewer(QMainWindow):
 
             with open(results_path, "w", encoding="utf-8") as f:
                 json.dump(results, f, indent=4, ensure_ascii=False)
-                
+                try:
+                    f.flush()
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
             print(f"[Shutdown] Throughput data saved to {results_path}")
         except Exception as e:
             print(f"[Shutdown ERROR] Failed to save throughput data: {e}")

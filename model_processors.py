@@ -8,7 +8,7 @@ import numpy as np
 import onnxruntime as ort
 import queue
 
-# import npu
+import npu
 
 # Import local modules
 from image_processing import (
