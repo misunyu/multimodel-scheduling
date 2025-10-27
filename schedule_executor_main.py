@@ -184,7 +184,7 @@ class ScheduleExecutor:
 
         # Apply 1-second warmup: run for duration+1, but measurement starts after 1s inside viewer
         measured_duration = self.default_duration
-        run_duration = measured_duration + 1
+        run_duration = measured_duration + 3
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)
