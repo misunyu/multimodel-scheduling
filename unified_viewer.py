@@ -675,6 +675,11 @@ class UnifiedViewer(QMainWindow):
             self.stop_execution()
         except Exception:
             pass
+        # Ensure all queues are drained/closed between runs to prevent BrokenPipe on next schedule
+        try:
+            self._cleanup_queues()
+        except Exception:
+            pass
 
         # Stop and delete CPU timer if present
         try:
@@ -776,6 +781,14 @@ class UnifiedViewer(QMainWindow):
             return
         # Mark as stopped to ensure idempotency
         self._already_stopped = True
+
+        # Immediately signal all local threads/feeders to stop enqueuing
+        try:
+            if hasattr(self, 'shutdown_flag') and self.shutdown_flag:
+                self.shutdown_flag.set()
+            self.global_exit_flag = True
+        except Exception:
+            pass
         
         # Set shutdown events to signal processes to stop
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
@@ -826,8 +839,69 @@ class UnifiedViewer(QMainWindow):
                 self.cpu_timer.stop()
         except Exception:
             pass
+        
+        # After all processes are stopped, clear and close all queues to avoid BrokenPipe in next runs
+        try:
+            self._cleanup_queues()
+        except Exception as e:
+            print(f"[Stop Execution] Queue cleanup warning: {e}")
             
         print("[Stop Execution] Model execution stopped, window remains open with last results")
+        
+    def _cleanup_queues(self):
+        """Drain, close, and nullify all multiprocessing queues safely between runs."""
+        import time as _t
+        # Helper to drain a queue without blocking
+        def _drain(q):
+            if not q:
+                return
+            try:
+                while True:
+                    try:
+                        q.get_nowait()
+                    except Exception:
+                        break
+            except Exception:
+                pass
+        # Helper to close a queue safely
+        def _close(q):
+            if not q:
+                return
+            try:
+                try:
+                    q.close()
+                except Exception:
+                    pass
+                try:
+                    # Prevent hanging on Python's background feeder thread
+                    q.cancel_join_thread()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        # Give local feeders a moment to observe shutdown_flag
+        try:
+            _t.sleep(0.05)
+        except Exception:
+            pass
+        # List of queue attribute names to cleanup
+        q_names = [
+            'video_frame_queue',
+            'view1_frame_queue', 'view1_output_queue',
+            'view2_frame_queue', 'view2_output_queue',
+            'view3_frame_queue', 'view3_result_queue',
+            'view4_frame_queue', 'view4_result_queue',
+        ]
+        for name in q_names:
+            q = getattr(self, name, None)
+            try:
+                _drain(q)
+                _close(q)
+            finally:
+                try:
+                    setattr(self, name, None)
+                except Exception:
+                    pass
         
     def update_cpu_npu_usage(self):
         """Update CPU and NPU usage information."""
