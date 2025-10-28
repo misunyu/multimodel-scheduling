@@ -59,8 +59,15 @@ if [[ ! -f "$SCHEDULE_FILE" && "$SCHEDULE_FILE" != */* ]]; then
   fi
 fi
 
+# Resolve Python interpreter for sudo: prefer system binary to avoid pyenv shims
+PY="/usr/bin/python3"
+if [[ ! -x "$PY" ]]; then
+  # Fallback if system path is different; sudo will use absolute path when provided
+  PY="python3"
+fi
+
 # Build command: always pass --schedule; append --schedule_name only when provided
-CMD=(sudo /opt/.pyenv/shims/python3 schedule_executor_main.py --schedule "$SCHEDULE_FILE")
+CMD=(sudo "$PY" schedule_executor_main.py --schedule "$SCHEDULE_FILE")
 if [[ -n "$SCHEDULE_NAME" ]]; then
   CMD+=(--schedule_name "$SCHEDULE_NAME")
 fi

@@ -14,7 +14,7 @@ import sys
 import argparse
 from PyQt5 import uic
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout
 from schedule_generator.file_manager import FileManager
 
 
@@ -184,13 +184,16 @@ class BestDeployFinderApp(QMainWindow):
             label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             label.setMinimumWidth(max_label_px + pad_px)
 
-            spin = QDoubleSpinBox(container_widget)
-            spin.setDecimals(1)
-            spin.setMinimum(0.1)
-            spin.setMaximum(1000.0)
-            spin.setSingleStep(0.1)
-            # Pre-fill from existing mapping or default 30.0
-            spin.setValue(float(self.input_fps_by_model.get(model, 10.0)))
+            spin = QSpinBox(container_widget)
+            spin.setMinimum(0)
+            spin.setMaximum(1000)
+            spin.setSingleStep(1)
+            # Pre-fill from existing mapping or default 10
+            try:
+                preset = int(self.input_fps_by_model.get(model, 10))
+            except Exception:
+                preset = 10
+            spin.setValue(preset)
 
             container_layout.addWidget(label, row, 0)
             container_layout.addWidget(spin, row, 1)
@@ -207,9 +210,12 @@ class BestDeployFinderApp(QMainWindow):
 
         if dlg.exec_() == QDialog.Accepted:
             for model, spin in spin_boxes.items():
-                self.input_fps_by_model[model] = float(spin.value())
+                try:
+                    self.input_fps_by_model[model] = int(spin.value())
+                except Exception:
+                    self.input_fps_by_model[model] = 0
             # Log results
-            pairs = ", ".join([f"{m}: {v:.1f}" for m, v in sorted(self.input_fps_by_model.items())])
+            pairs = ", ".join([f"{m}: {int(v)}" for m, v in sorted(self.input_fps_by_model.items())])
             self._log(f"[Info] Updated input rates: {pairs}")
 
     def select_models_folder(self):
@@ -318,23 +324,25 @@ class BestDeployFinderApp(QMainWindow):
                     v = self.input_fps_by_model.get(model)
                     try:
                         if v is not None:
-                            infps = float(v)
+                            infps = int(v)
                     except Exception:
                         infps = None
                 # Fallback heuristics if not provided
                 if infps is None:
                     lname = model.lower()
                     if "resnet50" in lname:
-                        infps = 2.0
+                        infps = 2
                     elif "yolov3" in lname:
-                        infps = 30.0
+                        infps = 30
+                    else:
+                        infps = 10
                 entry = {
                     "model": model,
                     "execution": device,
                     "display": f"view{j+1}",
                 }
                 if infps is not None:
-                    entry["infps"] = float(infps)
+                    entry["infps"] = int(infps)
                 schedules[combo_name][model_id] = entry
         # Write YAML
         try:
@@ -473,23 +481,23 @@ class BestDeployFinderApp(QMainWindow):
                 v = self.input_fps_by_model.get(model)
                 try:
                     if v is not None:
-                        infps = float(v)
+                        infps = int(v)
                 except Exception:
                     infps = None
             # Reasonable defaults if not provided
             if infps is None:
                 lname = model.lower()
                 if "resnet50" in lname:
-                    infps = 2.0
+                    infps = 2
                 elif "yolov3" in lname:
-                    infps = 30.0
+                    infps = 30
                 else:
-                    infps = 10.0
+                    infps = 10
             entry = {
                 "model": model,
                 "execution": "cpu",
                 "display": f"view{j+1}",
-                "infps": float(infps),
+                "infps": int(infps),
             }
             schedules["combination_1"][f"{model}_cpu"] = entry
         # Write YAML
