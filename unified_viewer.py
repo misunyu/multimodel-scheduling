@@ -11,6 +11,34 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
 from multiprocessing import Process, Queue, Event
 
+# Globally suppress noisy BrokenPipeError/"handle is closed" tracebacks from background threads
+try:
+    import threading, sys
+    _orig_exhook = getattr(threading, 'excepthook', None)
+    def _suppress_broken_pipe_excepthook(args):
+        try:
+            e = args.exc_value
+            msg = str(e).lower()
+            if isinstance(e, BrokenPipeError) or ('broken pipe' in msg) or ('handle is closed' in msg):
+                return  # swallow silently
+        except Exception:
+            pass
+        try:
+            if _orig_exhook:
+                return _orig_exhook(args)
+        except Exception:
+            pass
+        try:
+            sys.__excepthook__(args.exc_type, args.exc_value, args.exc_traceback)
+        except Exception:
+            pass
+    try:
+        threading.excepthook = _suppress_broken_pipe_excepthook
+    except Exception:
+        pass
+except Exception:
+    pass
+
 # Import local modules
 from utils import get_cpu_metrics
 from view_handlers import ModelSignals, YoloViewHandler, ResNetViewHandler, VideoFeeder, ResnetImageFeeder
