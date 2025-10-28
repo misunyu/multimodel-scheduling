@@ -5,11 +5,13 @@ import os
 import json
 import signal
 import yaml
+import queue
 from datetime import datetime
 from PyQt5.QtWidgets import QMainWindow, QLabel, QWidget, QVBoxLayout, QFileDialog
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
 from multiprocessing import Process, Queue, Event
+import threading
 
 # Import local modules
 from utils import get_cpu_metrics
@@ -69,7 +71,7 @@ class InfoWindow(QWidget):
             pass
         
         # Default execution duration is 60 seconds
-        self.duration_edit.setText("60")
+        self.duration_edit.setText("10")
         
     def on_start_button_clicked(self):
         """Handle the start button click event."""
@@ -89,8 +91,10 @@ class InfoWindow(QWidget):
             
     def on_stop_button_clicked(self):
         """Handle the stop button click event."""
-        # Call the parent's stop_execution method if available
-        if self.parent and hasattr(self.parent, 'stop_execution'):
+        # Prefer async stop if available to keep UI responsive
+        if self.parent and hasattr(self.parent, 'stop_execution_async'):
+            self.parent.stop_execution_async()
+        elif self.parent and hasattr(self.parent, 'stop_execution'):
             self.parent.stop_execution()
         else:
             print("Stopping execution")
@@ -164,15 +168,24 @@ class InfoWindow(QWidget):
             pass
         
     def closeEvent(self, event):
-        """Handle window close event - terminate the application."""
-        print("[InfoWindow] Close event triggered - terminating application")
+        """Handle window close event - terminate the application (non-blocking)."""
+        print("[InfoWindow] Close event triggered - terminating application (async)")
         event.accept()
-        
-        # If we have a parent (UnifiedViewer), call its shutdown method
+        try:
+            self.hide()
+        except Exception:
+            pass
+        # If we have a parent (UnifiedViewer), call its async shutdown method if available
+        if self.parent and hasattr(self.parent, 'shutdown_all_async'):
+            try:
+                self.parent.shutdown_all_async()
+                return
+            except Exception:
+                pass
+        # Fallback to synchronous shutdown_all or direct exit
         if self.parent and hasattr(self.parent, 'shutdown_all'):
             self.parent.shutdown_all()
         else:
-            # If no parent, exit directly
             print("[InfoWindow] Closing application directly")
             os._exit(0)
 
@@ -191,6 +204,10 @@ class UnifiedViewer(QMainWindow):
         
         # Set up signal handler for SIGINT (Ctrl+C)
         signal.signal(signal.SIGINT, self.signal_handler)
+        
+        # Flags for async shutdown/stop
+        self._shutdown_in_progress = False
+        self._stop_in_progress = False
 
         # Store the schedule file path and requested combination
         self.schedule_file = schedule_file
@@ -613,38 +630,55 @@ class UnifiedViewer(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event.
-        - In normal GUI mode: hide only and keep app running.
-        - In executor-only mode (--schedule_name): shut down entire application.
+        - In normal GUI mode: hide immediately and keep app running.
+        - In executor-only mode (--schedule_name): hide and shutdown asynchronously.
         """
         event.accept()
-        # Immediately set shutdown flags to stop video generation
-        self.shutdown_flag.set()
+        # Hide the window immediately to keep UI responsive
+        try:
+            self.hide()
+        except Exception:
+            pass
+        # Immediately signal threads/processes to stop without blocking
+        try:
+            if hasattr(self, 'shutdown_flag') and self.shutdown_flag:
+                self.shutdown_flag.set()
+        except Exception:
+            pass
         self.global_exit_flag = True
-
-        # Set all shutdown events to stop processes
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
                      'view3_shutdown_event', 'view4_shutdown_event',
                      'video_shutdown_event']:
-            ev = getattr(self, name, None)
-            if ev:
-                ev.set()
-
-        # Clean up model execution and resources once
-        self.stop_execution()
-
-        # If running in executor-only mode, shut down everything; otherwise just hide
-        if getattr(self, 'executor_only', False):
-            print("[UnifiedViewer] Close event in executor-only mode - terminating application")
             try:
-                if self.info_window:
-                    self.info_window.close()
+                ev = getattr(self, name, None)
+                if ev:
+                    ev.set()
             except Exception:
                 pass
-            self.shutdown_all()
+        # Defer heavy stopping/cleanup to background to avoid freezing GUI
+        try:
+            self.stop_execution_async()
+        except Exception:
+            # Fallback to synchronous stop if async path unavailable
+            try:
+                self.stop_execution()
+            except Exception:
+                pass
+        # If running in executor-only mode, shut down everything asynchronously; otherwise just return
+        if getattr(self, 'executor_only', False):
+            print("[UnifiedViewer] Close event in executor-only mode - terminating application (async)")
+            try:
+                if self.info_window:
+                    self.info_window.hide()
+            except Exception:
+                pass
+            try:
+                self.shutdown_all_async()
+            except Exception:
+                # Fallback to sync
+                self.shutdown_all()
         else:
-            print("[UnifiedViewer] Close event triggered - hiding window only")
-            self.hide()
-            print("[UnifiedViewer] Window hidden, info_window remains open")
+            print("[UnifiedViewer] Close event handled - window hidden; Info window remains open")
     
     def shutdown_all(self):
         """Clean up resources and shut down the application."""
@@ -663,6 +697,19 @@ class UnifiedViewer(QMainWindow):
             duration (int): Duration in seconds for the execution to run.
         """
         print(f"Starting execution with duration: {duration} seconds")
+        # If a stop/shutdown is in progress, retry shortly to avoid race and UI freeze
+        try:
+            if getattr(self, '_stop_in_progress', False) or getattr(self, '_shutdown_in_progress', False):
+                print("[Start] Stop/shutdown in progress; retrying in 200 ms")
+                QTimer.singleShot(200, lambda d=duration: self.start_execution(d))
+                return
+        except Exception:
+            pass
+        # Ensure the model result display window is visible when starting a run
+        try:
+            self.show()
+        except Exception:
+            pass
         # We treat the first 1 second as warmup; only measure after that.
         try:
             self.window_duration_sec = max(0.0, float(duration) - 1.0)
@@ -681,6 +728,18 @@ class UnifiedViewer(QMainWindow):
         
         # Initialize and start processes if they're not already running
         if not hasattr(self, 'video_reader_proc') or not self.video_reader_proc.is_alive():
+            # Reset runtime state (events/queues/flags) for a fresh run after Stop
+            try:
+                self.initialize_state_variables()
+                # Also clear handler references from previous run to aid GC
+                for name in ['view1_handler','view2_handler','view3_handler','view4_handler','video_feeder','resnet_feeder']:
+                    if hasattr(self, name):
+                        try:
+                            setattr(self, name, None)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             self.initialize_processes()
             self.initialize_threads()
         
@@ -696,7 +755,53 @@ class UnifiedViewer(QMainWindow):
     def timed_shutdown(self):
         """Stop execution after the scheduled duration without closing the application."""
         print("Execution duration completed, stopping model execution...")
-        self.stop_execution()
+        try:
+            self.stop_execution_async()
+        except Exception:
+            self.stop_execution()
+        
+    def stop_execution_async(self):
+        """Start non-blocking stop of model execution and cleanup in a background thread."""
+        if getattr(self, '_stop_in_progress', False):
+            print("[Stop Execution] Async stop already in progress")
+            return
+        self._stop_in_progress = True
+        def _run_stop():
+            try:
+                self.stop_execution()
+            finally:
+                self._stop_in_progress = False
+        try:
+            t = threading.Thread(target=_run_stop, name="StopExecutionThread", daemon=True)
+            t.start()
+        except Exception as e:
+            print(f"[Stop Execution] Failed to start async stop thread: {e}")
+            # Fallback to synchronous stop
+            try:
+                self.stop_execution()
+            finally:
+                self._stop_in_progress = False
+
+    def shutdown_all_async(self):
+        """Shut down entire application asynchronously to avoid freezing the UI."""
+        if getattr(self, '_shutdown_in_progress', False):
+            print("[Shutdown] Shutdown already in progress")
+            return
+        self._shutdown_in_progress = True
+        def _run_shutdown():
+            try:
+                self.shutdown_all()
+            finally:
+                self._shutdown_in_progress = False
+        try:
+            t = threading.Thread(target=_run_shutdown, name="ShutdownThread", daemon=True)
+            t.start()
+        except Exception as e:
+            print(f"[Shutdown] Failed to start shutdown thread: {e}")
+            try:
+                self.shutdown_all()
+            finally:
+                self._shutdown_in_progress = False
         
     def _begin_measurement_window(self):
         """Reset all per-view and feeder counters after warmup to start measurement."""
@@ -722,6 +827,13 @@ class UnifiedViewer(QMainWindow):
             return
         # Mark as stopped to ensure idempotency
         self._already_stopped = True
+
+        # Signal all threads (feeders/handlers) to stop
+        try:
+            if hasattr(self, 'shutdown_flag') and self.shutdown_flag:
+                self.shutdown_flag.set()
+        except Exception as e:
+            print(f"[Stop Execution] Warning setting shutdown_flag: {e}")
         
         # Set shutdown events to signal processes to stop
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
@@ -765,8 +877,62 @@ class UnifiedViewer(QMainWindow):
                 self.save_pre_post_time_average()
         except Exception as e:
             print(f"[Stop Execution] Error saving pre/post timing averages: {e}")
+
+        # After a schedule ends: drain all queues and explicitly close them
+        try:
+            self._drain_and_close_all_queues()
+        except Exception as e:
+            print(f"[Stop Execution] Queue cleanup error: {e}")
             
-        print("[Stop Execution] Model execution stopped, window remains open with last results")
+        try:
+            # Hide the model result display window after stopping, per requirement
+            self.hide()
+            print("[Stop Execution] Model execution stopped, display window hidden; Info window remains open")
+        except Exception:
+            print("[Stop Execution] Model execution stopped (could not hide window)")
+        
+    def _drain_and_close_all_queues(self):
+        """Drain all inter-process queues and explicitly close them.
+        This prevents residual items from a finished schedule affecting the next run
+        and ensures background feeder/handler threads do not leak resources.
+        """
+        def drain_queue(q):
+            if not q:
+                return
+            try:
+                # Non-blocking drain
+                while True:
+                    try:
+                        _ = q.get_nowait()
+                    except queue.Empty:
+                        break
+                    except (EOFError, BrokenPipeError, OSError):
+                        break
+                    except Exception:
+                        # Keep draining on any unexpected item error
+                        continue
+            except Exception:
+                pass
+            try:
+                q.close()
+            except Exception:
+                pass
+            try:
+                # join_thread is available on multiprocessing.Queue
+                q.join_thread()
+            except Exception:
+                pass
+        # Enumerate all queues used in the viewer
+        queue_names = [
+            'video_frame_queue',
+            'view1_frame_queue', 'view1_output_queue',
+            'view2_frame_queue', 'view2_output_queue',
+            'view3_frame_queue', 'view3_result_queue',
+            'view4_frame_queue', 'view4_result_queue',
+        ]
+        for name in queue_names:
+            q = getattr(self, name, None)
+            drain_queue(q)
         
     def update_cpu_npu_usage(self):
         """Update CPU and NPU usage information."""

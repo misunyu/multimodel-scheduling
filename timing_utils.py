@@ -9,12 +9,22 @@ import time
 from contextlib import ContextDecorator
 
 RESULT_TIME_FILE = "result_pre_post_time.json"  # JSON Lines
+# Delay before starting to record performance measurements (seconds).
+# Can be overridden via environment variable MEASURE_DELAY_SECONDS.
+_MEASURE_DELAY_SECONDS = float(os.environ.get("MEASURE_DELAY_SECONDS", "5"))
+# Start timestamp captured at module import
+_MEASURE_START_TS = time.time()
 
 
 def should_record_time() -> bool:
-    """Return True if RECORD_TIME=1 in environment."""
+    """Return True if RECORD_TIME=1 in environment and the delay has passed."""
     try:
-        return int(os.environ.get("RECORD_TIME", "0")) == 1
+        if int(os.environ.get("RECORD_TIME", "0")) != 1:
+            return False
+        # Enforce startup delay before beginning to record timings
+        if (time.time() - _MEASURE_START_TS) < _MEASURE_DELAY_SECONDS:
+            return False
+        return True
     except Exception:
         return False
 
