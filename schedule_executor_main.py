@@ -31,7 +31,6 @@ class ScheduleExecutor:
         self._viewer: UnifiedViewer = None
         self._index: int = 0
         self._running: bool = False
-        self._finalized: bool = False  # set True only after results file is fully written for this YAML
         self._combinations: List[str] = self._load_combinations(schedule_file)
 
         # If a specific combination is requested, filter list to that single name
@@ -54,14 +53,13 @@ class ScheduleExecutor:
             return
         self._running = True
         self._index = 0
-        self._finalized = False
         if duration is not None:
             self.default_duration = max(1, int(duration))
         # Prepare a unique results file path for this run
         results_dir = os.path.join(os.getcwd(), 'results')
         os.makedirs(results_dir, exist_ok=True)
         from datetime import datetime
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         self._results_path = os.path.join(results_dir, f'performance_{ts}.json')
         self._reset_results_file()
         self._set_start_button_enabled(False)
@@ -108,12 +106,15 @@ class ScheduleExecutor:
         if viewer is None:
             return
         try:
-            # Ensure proper shutdown and close the window to avoid lingering windows on Ubuntu
             viewer.stop_execution()
         except Exception:
             pass
         try:
-            viewer.close()  # triggers UnifiedViewer.closeEvent for robust cleanup
+            viewer.hide()
+        except Exception:
+            pass
+        try:
+            viewer.deleteLater()
         except Exception:
             pass
 
@@ -129,13 +130,6 @@ class ScheduleExecutor:
             self._running = False
             self._index = 0
             self._set_start_button_enabled(True)
-            # Notify controller (InfoWindow.parent) that this executor finished all combos
-            try:
-                parent = getattr(self.info_window, 'parent', None)
-                if parent and hasattr(parent, 'on_executor_finished'):
-                    QTimer.singleShot(50, parent.on_executor_finished)
-            except Exception:
-                pass
             return
 
         # Clean previous viewer if exists
@@ -181,9 +175,10 @@ class ScheduleExecutor:
 
         self._viewer.show()
 
-        # Apply 5-second warmup: run for duration+5, but measurement starts after 5s inside viewer
+        # Apply 5-second warmup: run for duration+5, but measurement starts after warmup inside viewer
         measured_duration = self.default_duration
-        run_duration = measured_duration + 5
+        warmup_seconds = 5
+        run_duration = measured_duration + warmup_seconds
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)
@@ -202,17 +197,10 @@ class ScheduleExecutor:
         QTimer.singleShot(300, self._run_next)  # short delay to flush file writes
 
     def _write_best_header(self):
-        """Rewrite the run results file into required object format with best deployment.
-        Also marks this executor as finalized so Controller can start the next YAML file only after
-        the results have been fully persisted to disk.
-        """
+        """Rewrite the run results file into required object format with best deployment."""
         results_path = getattr(self, '_results_path', None)
         if not results_path or not os.path.exists(results_path):
             print('[Executor] No results file to annotate with best deployment.')
-            try:
-                self._finalized = True
-            except Exception:
-                pass
             return
         try:
             with open(results_path, 'r', encoding='utf-8') as rf:
@@ -229,18 +217,10 @@ class ScheduleExecutor:
                 entries = data_json
             else:
                 print('[Executor] Results format not recognized; skipping annotation.')
-                try:
-                    self._finalized = True
-                except Exception:
-                    pass
                 return
 
             if not entries:
                 print('[Executor] No entries found in results; skipping annotation.')
-                try:
-                    self._finalized = True
-                except Exception:
-                    pass
                 return
 
             # ScheduleExecutor._write_best_header() 내부
@@ -293,158 +273,21 @@ class ScheduleExecutor:
             final_obj = {"best deployment": best_combo, "schedule file": os.path.basename(self.schedule_file), "data": entries}
             with open(results_path, 'w', encoding='utf-8') as wf:
                 json.dump(final_obj, wf, indent=4, ensure_ascii=False)
-                try:
-                    wf.flush()
-                    os.fsync(wf.fileno())
-                except Exception:
-                    pass
             print(f"[Executor] Wrote results with best deployment: {best_combo} (schedule: {os.path.basename(self.schedule_file)})")
-            try:
-                self._finalized = True
-            except Exception:
-                pass
         except Exception as e:
             print(f"[Executor] Warning: failed to write required results format: {e}")
-            try:
-                self._finalized = True
-            except Exception:
-                pass
 
 
 class Controller:
-    """Controller that InfoWindow binds to. Supports single or multi schedule execution."""
+    """Minimal controller that InfoWindow can bind its Start/Stop buttons to."""
 
     def __init__(self, executor: ScheduleExecutor):
         self._executor = executor
-        self._multi_files = []
-        self._multi_idx = 0
-        self._multi_running = False
-        self._advance_in_progress = False
-        self._starting_file = False  # reentrancy guard for _start_next_file
-        self._duration = executor.default_duration
-
-    def _info(self) -> InfoWindow:
-        return getattr(self._executor, 'info_window', None)
 
     def start_execution(self, duration):
-        self._duration = max(1, int(duration))
-        info = self._info()
-        use_multi = False
-        folder = None
-        try:
-            use_multi = bool(info.multiple_schedule_files.isChecked())
-            folder = info.schedule_folder_input.text().strip()
-        except Exception:
-            use_multi = False
-
-        if use_multi and folder:
-            # If a multi-file run is already in progress or being started, ignore duplicate start requests
-            if self._multi_running or self._starting_file:
-                print('[Controller] Start ignored: multi-file run already in progress or starting.')
-                return
-            # Gather YAML files in folder
-            try:
-                if not os.path.isabs(folder):
-                    folder = os.path.abspath(os.path.join(os.getcwd(), folder))
-                files = []
-                for name in os.listdir(folder):
-                    if name.lower().endswith(('.yaml', '.yml')):
-                        files.append(os.path.join(folder, name))
-                files.sort()
-            except Exception as e:
-                print(f"[Controller] Failed to list schedule folder '{folder}': {e}")
-                files = []
-
-            if not files:
-                print(f"[Controller] No YAML files found in folder: {folder}. Falling back to single schedule: {self._executor.schedule_file}")
-                self._executor.start(self._duration)
-                return
-
-            # Start multi-file sequential execution
-            self._multi_files = files
-            self._multi_idx = 0
-            self._multi_running = True
-            self._advance_in_progress = False
-            try:
-                info.start_button.setEnabled(False)
-                info.stop_button.setEnabled(True)
-            except Exception:
-                pass
-            QTimer.singleShot(10, self._start_next_file)
-        else:
-            # Single file
-            self._executor.start(self._duration)
-
-    def _start_next_file(self):
-        if not self._multi_running:
-            return
-        # Reentrancy guard to prevent duplicate starts when multiple timers fire
-        if self._starting_file:
-            return
-        self._starting_file = True
-        try:
-            if self._multi_idx >= len(self._multi_files):
-                # Done
-                self._multi_running = False
-                self._advance_in_progress = False
-                try:
-                    self._info().start_button.setEnabled(True)
-                except Exception:
-                    pass
-                print('[Controller] All schedule files executed.')
-                return
-            current_schedule = self._multi_files[self._multi_idx]
-            print(f"[Controller] Running schedule file {self._multi_idx+1}/{len(self._multi_files)}: {os.path.basename(current_schedule)}")
-            # Create a fresh executor for this schedule file
-            info = self._info()
-            self._executor = ScheduleExecutor(schedule_file=current_schedule, duration=self._duration, info_window=info)
-            # Ensure InfoWindow parent points here
-            try:
-                info.parent = self
-            except Exception:
-                pass
-            self._advance_in_progress = False
-            self._executor.start(self._duration)
-            # Start monitoring this executor for completion (fallback)
-            QTimer.singleShot(250, self._monitor_current_done)
-        finally:
-            self._starting_file = False
-
-    def _monitor_current_done(self):
-        if not self._multi_running:
-            return
-        if self._advance_in_progress:
-            # Advancement is already scheduled; keep polling in case we need fallback
-            QTimer.singleShot(300, self._monitor_current_done)
-            return
-        try:
-            ex = self._executor
-            if ex is not None and (not ex._running) and (ex._index == 0) and getattr(ex, '_finalized', False):
-                # Finished this file (fallback detection) and results finalized
-                self._advance_in_progress = True
-                self._multi_idx += 1
-                QTimer.singleShot(200, self._start_next_file)
-                return
-        except Exception:
-            pass
-        # Keep polling
-        QTimer.singleShot(300, self._monitor_current_done)
-
-    def on_executor_finished(self):
-        """Callback from ScheduleExecutor when it finishes all combinations in the current file."""
-        if not self._multi_running or self._advance_in_progress:
-            return
-        self._advance_in_progress = True
-        self._multi_idx += 1
-        QTimer.singleShot(150, self._start_next_file)
+        self._executor.start(duration)
 
     def stop_execution(self):
-        # Stop current execution; if in multi mode, stop and cancel the rest
-        self._multi_running = False
-        try:
-            self._info().start_button.setEnabled(True)
-        except Exception:
-            pass
         self._executor.stop()
 
 
@@ -532,12 +375,7 @@ def main():
         def _on_all_done_quit():
             try:
                 # When not running and start button is enabled again, we consider it done
-                multi_running = False
-                try:
-                    multi_running = bool(getattr(controller, '_multi_running', False))
-                except Exception:
-                    multi_running = False
-                if not executor._running and executor._index == 0 and not multi_running:
+                if not executor._running and executor._index == 0:
                     print('[Main] Auto mode: all combinations finished. Quitting application...')
                     QTimer.singleShot(50, app.quit)
                     return
