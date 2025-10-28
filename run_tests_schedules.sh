@@ -53,23 +53,23 @@ fi
 
 # Determine Python executable from virtual environment
 PY=/opt/.pyenv/shims/python3
-if [[ -d "$ROOT_DIR/.venv" ]]; then
-  # Use virtual environment Python if available
-  if [[ -f "$ROOT_DIR/.venv/bin/python3" ]]; then
-    PY="$ROOT_DIR/.venv/bin/python3"
-    echo "Using virtual environment Python: $PY"
-  elif [[ -f "$ROOT_DIR/.venv/bin/python" ]]; then
-    PY="$ROOT_DIR/.venv/bin/python"
-    echo "Using virtual environment Python: $PY"
-  fi
-else
-  # Fallback to system python or pyenv
-  if command -v python3 >/dev/null 2>&1; then
-    PY=python3
-  elif [[ -f /opt/.pyenv/shims/python3 ]]; then
-    PY=/opt/.pyenv/shims/python3
-  fi
-fi
+#if [[ -d "$ROOT_DIR/.venv" ]]; then
+#  # Use virtual environment Python if available
+#  if [[ -f "$ROOT_DIR/.venv/bin/python3" ]]; then
+#    PY="$ROOT_DIR/.venv/bin/python3"
+#    echo "Using virtual environment Python: $PY"
+#  elif [[ -f "$ROOT_DIR/.venv/bin/python" ]]; then
+#    PY="$ROOT_DIR/.venv/bin/python"
+#    echo "Using virtual environment Python: $PY"
+#  fi
+#else
+#  # Fallback to system python or pyenv
+#  if command -v python3 >/dev/null 2>&1; then
+#    PY=python3
+#  elif [[ -f /opt/.pyenv/shims/python3 ]]; then
+#    PY=/opt/.pyenv/shims/python3
+#  fi
+#fi
 
 # Verify Python has PyQt5
 if ! "$PY" -c "import PyQt5" 2>/dev/null; then
