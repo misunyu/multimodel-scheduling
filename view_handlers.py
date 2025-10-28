@@ -127,20 +127,11 @@ class YoloViewHandler(ViewHandler):
                     wait_ms = 0.0
             except queue.Empty:
                 continue
-            except (EOFError, BrokenPipeError, OSError) as e:
-                # Suppress BrokenPipeError and common closed-handle noise during/after shutdown
-                try:
-                    if isinstance(e, BrokenPipeError):
-                        if self.shutdown_flag.is_set() or global_exit_flag:
-                            break
-                        continue
-                    msg = str(e)
-                    if isinstance(e, OSError) and ('handle is closed' in msg.lower() or 'broken pipe' in msg.lower() or 'closed' in msg.lower()):
-                        if self.shutdown_flag.is_set() or global_exit_flag:
-                            break
-                        continue
-                except Exception:
-                    pass
+            except BrokenPipeError:
+                if self.shutdown_flag.is_set() or global_exit_flag:
+                    break
+                continue
+            except (EOFError, OSError) as e:
                 print(f"[{self.view_name} Queue ERROR] {e}")
                 if self.shutdown_flag.is_set() or global_exit_flag:
                     break
@@ -186,7 +177,11 @@ class ResNetViewHandler(ViewHandler):
                 frame, class_name, infer_time = self.result_queue.get(timeout=1)
             except queue.Empty:
                 continue
-            except (EOFError, BrokenPipeError, OSError) as e:
+            except BrokenPipeError:
+                if self.shutdown_flag.is_set() or global_exit_flag:
+                    break
+                continue
+            except (EOFError, OSError) as e:
                 print(f"[{self.view_name} Queue ERROR] {e}")
                 if self.shutdown_flag.is_set() or global_exit_flag:
                     break
@@ -299,15 +294,6 @@ class VideoFeeder:
             except queue.Empty:
                 continue
             except Exception as e:
-                # Suppress BrokenPipe/closed-handle noise during shutdown/teardown
-                try:
-                    msg = str(e).lower()
-                    if isinstance(e, BrokenPipeError) or ('broken pipe' in msg) or ('handle is closed' in msg):
-                        if self.shutdown_flag.is_set() or global_exit_flag:
-                            break
-                        continue
-                except Exception:
-                    pass
                 print(f"[feed_queues ERROR] {e}")
                 if self.shutdown_flag.is_set() or global_exit_flag:
                     break
