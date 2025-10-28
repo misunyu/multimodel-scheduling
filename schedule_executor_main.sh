@@ -60,7 +60,7 @@ if [[ ! -f "$SCHEDULE_FILE" && "$SCHEDULE_FILE" != */* ]]; then
 fi
 
 # Resolve Python interpreter for sudo: prefer system binary to avoid pyenv shims
-PY="/usr/bin/python3"
+PY="/opt/.pyenv/shims/python3"
 if [[ ! -x "$PY" ]]; then
   # Fallback if system path is different; sudo will use absolute path when provided
   PY="python3"
