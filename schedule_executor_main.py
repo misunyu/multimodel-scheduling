@@ -277,6 +277,13 @@ class ScheduleExecutor:
 
             # 점수 계산부
             for ent in entries:
+                # Force window_sec to the actual measured schedule duration from the GUI (duration_edit)
+                # We always overwrite whatever was recorded during collection to avoid off-by-one artifacts (e.g., 9s when set to 10s)
+                try:
+                    ent['window_sec'] = float(self.default_duration)
+                except Exception:
+                    ent['window_sec'] = float(self.default_duration)
+
                 total_fps, drop_rate = _metrics(ent)
                 score = total_fps - 0.2 * drop_rate
                 ent['score'] = round(score, 4)
