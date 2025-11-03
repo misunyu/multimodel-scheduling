@@ -47,6 +47,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
@@ -434,6 +435,11 @@ def train_two_targets(X: pd.DataFrame, Y: pd.DataFrame, model_out_prefix: Path) 
 
 
 def predict_two_targets(model_in_prefix: Path, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Backward-compatible helper that loads models and predicts once.
+    Note: Loading per call is slower; prefer using `load_two_models` +
+    `predict_two_targets_loaded` when calling repeatedly.
+    """
     xgb = _lazy_import_xgb()
     feat_names = list(X.columns)
     dmat = xgb.DMatrix(X.values, feature_names=feat_names)
@@ -443,6 +449,26 @@ def predict_two_targets(model_in_prefix: Path, X: pd.DataFrame) -> Tuple[np.ndar
     bst1 = xgb.Booster(model_file=m1)
     bst2 = xgb.Booster(model_file=m2)
 
+    y1_pred = bst1.predict(dmat)
+    y2_pred = bst2.predict(dmat)
+    return y1_pred, y2_pred
+
+
+def load_two_models(model_in_prefix: Path):
+    """Load y1 and y2 XGBoost boosters once and return them as a tuple."""
+    xgb = _lazy_import_xgb()
+    m1 = str(model_in_prefix) + "_y1.json"
+    m2 = str(model_in_prefix) + "_y2.json"
+    bst1 = xgb.Booster(model_file=m1)
+    bst2 = xgb.Booster(model_file=m2)
+    return bst1, bst2
+
+
+def predict_two_targets_loaded(bst1, bst2, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    """Predict using preloaded boosters (no reload)."""
+    xgb = _lazy_import_xgb()
+    feat_names = list(X.columns)
+    dmat = xgb.DMatrix(X.values, feature_names=feat_names)
     y1_pred = bst1.predict(dmat)
     y2_pred = bst2.predict(dmat)
     return y1_pred, y2_pred
@@ -566,17 +592,54 @@ def main():
         schedule = _load_yaml_or_json(sched_path)
         combos = _iter_combos_from_schedule(schedule)
 
+        # Preload models once
+        bst1, bst2 = load_two_models(model_prefix)
+        xgb = _lazy_import_xgb()
+
         results: List[Tuple[str, float, float, float]] = []
+        total_infer_s: float = 0.0
+        total_y1_s: float = 0.0
+        total_y2_s: float = 0.0
         for name, combo_blob in combos:
             X = featurize_from_combo(S, combo_blob)
-            y1_pred, y2_pred = predict_two_targets(model_prefix, X)
+            feat_names = list(X.columns)
+            dmat = xgb.DMatrix(X.values, feature_names=feat_names)
+
+            t0 = time.perf_counter()
+            y1_pred = bst1.predict(dmat)
+            t1 = time.perf_counter()
+            y1_ms = (t1 - t0) * 1000.0
+            total_y1_s += (t1 - t0)
+
+            t2 = time.perf_counter()
+            y2_pred = bst2.predict(dmat)
+            t3 = time.perf_counter()
+            y2_ms = (t3 - t2) * 1000.0
+            total_y2_s += (t3 - t2)
+
+            infer_ms = y1_ms + y2_ms
+            total_infer_s += (t1 - t0) + (t3 - t2)
+
             fps = float(y1_pred[0]); dropr = float(y2_pred[0])
             score = fps - float(args.alpha) * dropr
             results.append((name, fps, dropr, score))
             print(f"{name}\t"
                   f"pred_total_throughput_fps={fps:.4f}\t"
                   f"pred_drop_rate_fps={dropr:.4f}\t"
-                  f"pred_score(alpha={args.alpha:g})={score:.4f}")
+                  f"pred_score(alpha={args.alpha:g})={score:.4f}\t"
+                  f"infer_y1_ms={y1_ms:.2f}\t"
+                  f"infer_y2_ms={y2_ms:.2f}\t"
+                  f"infer_time_ms={infer_ms:.2f}")
+        if results:
+            total_ms = total_infer_s * 1000.0
+            avg_ms = total_ms / max(len(results), 1)
+            total_y1_ms = total_y1_s * 1000.0
+            total_y2_ms = total_y2_s * 1000.0
+            avg_y1_ms = total_y1_ms / max(len(results), 1)
+            avg_y2_ms = total_y2_ms / max(len(results), 1)
+            print(f"TOTAL\tcombinations={len(results)}\ttotal_infer_time_ms={total_ms:.2f}\tavg_infer_time_ms={avg_ms:.2f}")
+            print(f"TOTAL_Y1\ttotal_infer_time_ms={total_y1_ms:.2f}\tavg_infer_time_ms={avg_y1_ms:.2f}")
+            print(f"TOTAL_Y2\ttotal_infer_time_ms={total_y2_ms:.2f}\tavg_infer_time_ms={avg_y2_ms:.2f}")
 
         if results:
             best_name, best_fps, best_drop, best_score = max(results, key=lambda x: x[3])
