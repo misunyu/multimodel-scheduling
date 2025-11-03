@@ -13,6 +13,8 @@ import os
 import argparse
 import yaml
 import json
+import signal
+import time
 from typing import List
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer, Qt
@@ -31,6 +33,7 @@ class ScheduleExecutor:
         self._viewer: UnifiedViewer = None
         self._index: int = 0
         self._running: bool = False
+        self._end_time = None  # wall-clock end time for capped runs (epoch seconds)
         self._combinations: List[str] = self._load_combinations(schedule_file)
 
         # If a specific combination is requested, filter list to that single name
@@ -55,6 +58,11 @@ class ScheduleExecutor:
         self._index = 0
         if duration is not None:
             self.default_duration = max(1, int(duration))
+        # Cap total continuous execution time to 1 hour when running a single selected combination
+        if getattr(self, '_selected_combo', None):
+            self._end_time = time.time() + 3600.0
+        else:
+            self._end_time = None
         # Prepare a unique results file path for this run
         results_dir = os.path.join(os.getcwd(), 'results')
         os.makedirs(results_dir, exist_ok=True)
@@ -119,8 +127,16 @@ class ScheduleExecutor:
             pass
 
     def _run_next(self):
+        # Enforce max continuous runtime (1 hour) in selected-combo mode
+        if getattr(self, '_end_time', None) is not None:
+            remaining = int(self._end_time - time.time())
+            if remaining <= 0:
+                print('[Executor] Reached 1-hour cap for selected combination. Stopping execution.')
+                self.stop()
+                return
+
         if self._index >= len(self._combinations):
-            # If a specific combination was requested (executor-only mode), loop indefinitely until app exit
+            # If a specific combination was requested (executor-only mode), loop until cap or stop
             if getattr(self, '_selected_combo', None):
                 self._index = 0
                 QTimer.singleShot(300, self._run_next)
@@ -177,7 +193,13 @@ class ScheduleExecutor:
 
         # Apply 1-second warmup: run for duration+1, but measurement starts after 1s inside viewer
         measured_duration = self.default_duration
-        run_duration = measured_duration + 1
+        # If capped, ensure we don't exceed remaining time (include 1s warm-up)
+        if getattr(self, '_end_time', None) is not None:
+            remaining = max(0, int(self._end_time - time.time()))
+            # Reserve 1 second for warm-up; run for at least 1 second if remaining is small
+            run_duration = max(1, min(measured_duration + 1, remaining))
+        else:
+            run_duration = measured_duration + 1
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)
@@ -320,19 +342,58 @@ def main():
     # Create the InfoWindow instance
     info = InfoWindow(parent=None)
 
-    # If schedule_name is provided, run executor-only mode and send InfoWindow to back
-    if args.schedule_name:
+    # Shared graceful shutdown handler that mimics pressing Stop in InfoWindow
+    def _graceful_shutdown(signum=None, frame=None):
         try:
-            # Clear always-on-top and ensure the window is behind
-            info.setWindowFlag(Qt.WindowStaysOnTopHint, False)
-            info.show()
+            print(f"[Main] Received signal {signum}; initiating graceful shutdown...")
+        except Exception:
+            pass
+        try:
+            # Prefer stopping executor (mirrors Stop Execution)
+            nonlocal_executor = getattr(_graceful_shutdown, '_executor', None)
+            if nonlocal_executor is not None:
+                try:
+                    nonlocal_executor.stop()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Hide InfoWindow and quit the app event loop
+        try:
+            info.hide()
+        except Exception:
+            pass
+        try:
+            QTimer.singleShot(50, app.quit)
+        except Exception:
             try:
-                info.lower()
+                app.quit()
             except Exception:
                 pass
+
+    # If schedule_name is provided, run executor-only mode without showing InfoWindow
+    if args.schedule_name:
+        try:
+            # Ensure InfoWindow stays hidden in combination execution mode
+            info.hide()
+            info.setWindowFlag(Qt.WindowStaysOnTopHint, False)
         except Exception:
             pass
         executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
+        # Link executor for shutdown handler
+        try:
+            setattr(_graceful_shutdown, '_executor', executor)
+        except Exception:
+            pass
+        # Install signal handlers to perform graceful stop on SIGTERM/SIGINT
+        try:
+            signal.signal(signal.SIGTERM, _graceful_shutdown)
+        except Exception:
+            pass
+        try:
+            signal.signal(signal.SIGINT, _graceful_shutdown)
+        except Exception:
+            pass
         # Disable Start button since we auto-run and no controller
         try:
             info.start_button.setEnabled(False)
@@ -359,6 +420,20 @@ def main():
     # Assign controller as the parent so InfoWindow's built-in handlers call our methods
     try:
         info.parent = controller
+    except Exception:
+        pass
+
+    # Link executor for shutdown handler and install signals
+    try:
+        setattr(_graceful_shutdown, '_executor', executor)
+    except Exception:
+        pass
+    try:
+        signal.signal(signal.SIGTERM, _graceful_shutdown)
+    except Exception:
+        pass
+    try:
+        signal.signal(signal.SIGINT, _graceful_shutdown)
     except Exception:
         pass
 

@@ -96,6 +96,8 @@ class BestDeployFinderApp(QMainWindow):
             self.predict_best_button.clicked.connect(self.on_predict_best_clicked)
         if hasattr(self, 'load_execute_best_button'):
             self.load_execute_best_button.clicked.connect(self.on_load_execute_best_clicked)
+        if hasattr(self, 'stop_execution'):
+            self.stop_execution.clicked.connect(self.on_stop_execution_clicked)
 
         # Initialize line edits if present
         if hasattr(self, 'deployment_model_input'):
@@ -107,6 +109,20 @@ class BestDeployFinderApp(QMainWindow):
 
         # State: input FPS mapping per model
         self.input_fps_by_model = {}
+
+        # Prediction/execution state tracking
+        self._prev_selected_models = set()      # set[str]
+        self._prev_score = None                 # float | None
+        self._prev_best_combo = None            # str | None
+        self._current_selected_models = set()   # set[str]
+        self._current_best_combo = None         # str | None
+        self._current_score = None              # float | None
+        self._executor_proc = None              # subprocess.Popen | None
+        self._running_combo_name = None         # str | None - currently executing combination name
+
+        # Status bar (labels) gating (legacy signature fields retained for logs/backward-compat; not primary gating now)
+        self._last_displayed_best_sig = None    # tuple | None — stable signature of last displayed best combo
+        self._last_displayed_best_name = None   # str | None — last displayed combo name (for logs only)
 
         # Default outputs
         self.generated_schedule_path = os.path.join(os.path.dirname(__file__), 'model_schedules.yaml')
@@ -507,11 +523,100 @@ class BestDeployFinderApp(QMainWindow):
             f.write(yaml.dump(schedules, default_flow_style=False))
         return out_path
 
+    def _compute_combo_signature(self, schedule_path: str, combo_name: str):
+        """Compute a stable signature for a combination from the schedule YAML so we can
+        detect real changes regardless of combo naming or ordering.
+        Signature contains a sorted tuple of entries (model, execution, infps, display).
+        Returns None on error.
+        """
+        try:
+            import yaml as _yaml
+            with open(schedule_path, 'r', encoding='utf-8') as f:
+                doc = _yaml.safe_load(f) or {}
+            combo = doc.get(str(combo_name)) if isinstance(doc, dict) else None
+            if not isinstance(combo, dict):
+                return None
+            items = []
+            for _key, entry in combo.items():
+                if not isinstance(entry, dict):
+                    continue
+                model = entry.get('model')
+                execu = entry.get('execution')
+                infps = entry.get('infps', None)
+                display = entry.get('display', None)
+                try:
+                    if infps is not None:
+                        infps = int(infps)
+                except Exception:
+                    pass
+                items.append((str(model), str(execu), infps, str(display) if display is not None else None))
+            sig = tuple(sorted(items))
+            return sig
+        except Exception as e:
+            try:
+                self.log(f"[Warn] Failed to compute signature for {combo_name}: {e}")
+            except Exception:
+                pass
+            return None
+
+    def _kill_existing_executor(self):
+        """Terminate previously launched executor subprocess if it's still running.
+        Try graceful group signal first (mimics pressing Stop), then escalate.
+        """
+        import os as _os
+        import signal as _signal
+        import platform as _platform
+        import subprocess as _subprocess
+        proc = getattr(self, '_executor_proc', None)
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                self.log("[Exec] Terminating previous executor window (gracefully)...")
+                try:
+                    if _platform.system() == 'Windows':
+                        # Try CTRL_BREAK to the process group if possible
+                        try:
+                            proc.send_signal(_signal.CTRL_BREAK_EVENT)
+                        except Exception:
+                            proc.terminate()
+                    else:
+                        # POSIX: signal the whole process group that we created
+                        try:
+                            _os.killpg(proc.pid, _signal.SIGTERM)
+                        except Exception:
+                            proc.terminate()
+                except Exception:
+                    pass
+                # Wait a bit for clean shutdown
+                try:
+                    proc.wait(timeout=6)
+                except Exception:
+                    # Escalate to force-kill the group first, then the process
+                    self.log("[Exec] Forcing kill of previous executor window...")
+                    try:
+                        if _platform.system() != 'Windows':
+                            try:
+                                _os.killpg(proc.pid, _signal.SIGKILL)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        finally:
+            self._executor_proc = None
+            self._running_combo_name = None
+
     def _launch_executor_subprocess(self, schedule_path: str, combo_name: str = None, duration: int = None):
         """Launch schedule_executor_main.py in a separate process to avoid nested QApps.
         If combo_name is provided, run executor-only mode for that single combination.
+        Returns the subprocess handle and stores it as self._executor_proc.
         """
         import subprocess
+        import platform
         py = sys.executable or 'python'
         exec_path = os.path.join(os.path.dirname(__file__), 'schedule_executor_main.py')
         args = [py, exec_path, '--schedule', schedule_path]
@@ -525,15 +630,114 @@ class BestDeployFinderApp(QMainWindow):
             args += ['--schedule-name', combo_name]
         self.log(f"[Exec] Launching executor: {' '.join(args)}")
         try:
-            subprocess.Popen(args)
+            popen_kwargs = {}
+            if platform.system() == 'Windows':
+                try:
+                    popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+                except Exception:
+                    pass
+            else:
+                # POSIX: start a new session so we can signal the whole process group
+                popen_kwargs['start_new_session'] = True
+            proc = subprocess.Popen(args, **popen_kwargs)
+            self._executor_proc = proc
+            # Track which combination is running (if provided)
+            try:
+                self._running_combo_name = str(combo_name) if combo_name else None
+            except Exception:
+                self._running_combo_name = combo_name
+            return proc
         except Exception as e:
             self.log(f"[Error] Failed to launch executor: {e}")
+            return None
+
+    def on_stop_execution_clicked(self):
+        """Handler for the Stop Execution button.
+        Mimics pressing Stop in the info window by terminating the running executor subprocess.
+        """
+        try:
+            self.log("[Action] Stop requested. Terminating running executor...")
+        except Exception:
+            pass
+        self._kill_existing_executor()
+        try:
+            self.log("[Action] Execution stopped.")
+        except Exception:
+            pass
 
     def on_load_execute_best_clicked(self):
         """Load best predicted deployment and start execution.
         If no predictions exist, run all selected models on CPU at user-specified input rates.
+        Updated behavior per requirement:
+        1) When pressed, if a current prediction exists for the current selection,
+           - If the newly selected model set differs from the previous set: stop previous and run the new best.
+           - If the newly selected model set is the same as the previous set: compare scores.
+             If the new score is >= 15% higher than the previous score, stop previous and run new best;
+             otherwise, keep the current executor running. Always log the score difference.
+        2) If no current prediction context exists, fall back to predictions.csv or CPU-only schedule.
         """
-        # 1) Try to read best from predictions.csv
+        try:
+            has_current = bool(getattr(self, '_current_best_combo', None))
+            cur_models = getattr(self, '_current_selected_models', set()) or set()
+            prev_models = getattr(self, '_prev_selected_models', set()) or set()
+            cur_score = getattr(self, '_current_score', None)
+            prev_score = getattr(self, '_prev_score', None)
+            schedule_path = self.generated_schedule_path
+
+            if has_current and cur_models:
+                if not os.path.exists(schedule_path):
+                    self.log(f"[Warn] Expected schedule not found for current prediction: {schedule_path}. Falling back.")
+                else:
+                    # Case A: selection changed -> always restart with new best
+                    if cur_models != prev_models:
+                        self.log("[Load] Current selection differs from previous. Running newly predicted best combination.")
+                        self._kill_existing_executor()
+                        duration = 60
+                        self._launch_executor_subprocess(schedule_path, combo_name=self._current_best_combo, duration=duration)
+                        return
+                    # Case B: selection same -> if same best combination is already running, keep running; else compare scores
+                    else:
+                        # If currently running the same combination, keep running regardless of score difference
+                        try:
+                            proc = getattr(self, '_executor_proc', None)
+                            running_name = getattr(self, '_running_combo_name', None)
+                            is_alive = (proc is not None and proc.poll() is None)
+                            if is_alive and running_name and str(running_name) == str(self._current_best_combo):
+                                self.log(f"[Decision] Same selection and same combination '{running_name}' is already running. Keeping current executor.")
+                                return
+                        except Exception:
+                            pass
+                        # Log score difference if available
+                        try:
+                            if (cur_score is not None) and (prev_score is not None):
+                                diff = float(cur_score) - float(prev_score)
+                                prev = float(prev_score)
+                                curr = float(cur_score)
+                                diff = curr - prev
+                                pct = (diff / prev * 100.0) if prev != 0.0 else float('inf')
+                                self.log(f"[Decision] Same selection. prev_score={prev:.6f}, new_score={curr:.6f}, diff={diff:.6f} ({pct:.2f}%)")
+                                should_restart = (prev == 0.0 and curr > 0.0) or (prev != 0.0 and curr >= 1.15 * prev)
+                                if should_restart:
+                                    self.log("[Decision] New score is >= 15% higher (or previous was 0 and new > 0). Restarting with new best combination.")
+                                    self._kill_existing_executor()
+                                    duration = 60
+                                    self._launch_executor_subprocess(schedule_path, combo_name=self._current_best_combo, duration=duration)
+                                    return
+                                else:
+                                    self.log("[Decision] Improvement < 15%. Keeping current executor running.")
+                                    return
+                            else:
+                                self.log("[Decision] Same selection but insufficient score history to compare. Keeping current executor running.")
+                                return
+                        except Exception:
+                            # On any logging/format issue, do not disrupt execution choice; keep current running.
+                            self.log("[Decision] Error computing score difference. Keeping current executor running.")
+                            return
+        except Exception:
+            # Continue to fallback path below on any unexpected issue
+            pass
+
+        # Fallback to legacy behavior using predictions.csv or CPU-only schedule
         predictions_csv = os.path.join(os.path.dirname(__file__), 'predictions.csv')
         schedule_path = self.generated_schedule_path
         best_combo = None
@@ -548,7 +752,7 @@ class BestDeployFinderApp(QMainWindow):
                         self.log(f"[Load] Using best combination from predictions.csv: {best_combo}")
             except Exception as e:
                 self.log(f"[Warn] Failed to parse predictions.csv: {e}")
-        # 2) If no predictions, create a CPU-only schedule for the selected models
+        # If no predictions.csv best, create a CPU-only schedule for the selected models
         if not best_combo:
             checked_dirs = self.get_checked_top_level_dirs()
             if not checked_dirs:
@@ -561,23 +765,37 @@ class BestDeployFinderApp(QMainWindow):
             except Exception as e:
                 self.log(f"[Error] Failed to build CPU-only schedule: {e}")
                 return
-        # 3) Ensure schedule exists
+        # Ensure schedule exists
         if not os.path.exists(schedule_path):
             self.log(f"[Error] Schedule file not found: {schedule_path}")
             return
+        # Terminate existing executor before launching a new one
+        self._kill_existing_executor()
         # Optional: pick duration from UI if available later; for now, default to 60
         duration = 60
-        # 4) Launch executor in a subprocess with selected combo
+        # Launch executor in a subprocess with selected combo
         self._launch_executor_subprocess(schedule_path, combo_name=best_combo, duration=duration)
 
     def on_predict_best_clicked(self):
-        """Handler invoked when predict_best_button is clicked."""
+        """Handler invoked when predict_best_button is clicked.
+        Also manages internal state for previous/current selections and scores.
+        """
         models_root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
         pred_model = self.prediction_model_input.text() if hasattr(self, 'prediction_model_input') else ''
         device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
 
         # Collect selected (checked) top-level model folders
         checked_dirs = self.get_checked_top_level_dirs()
+
+        # Shift current->previous state before computing new prediction
+        try:
+            self._prev_selected_models = set(getattr(self, '_current_selected_models', set()) or set())
+            self._prev_score = getattr(self, '_current_score', None)
+            self._prev_best_combo = getattr(self, '_current_best_combo', None)
+        except Exception:
+            self._prev_selected_models = set()
+            self._prev_score = None
+            self._prev_best_combo = None
 
         # Log inputs
         self.log(f"[Predict] models_root={models_root}")
@@ -597,6 +815,12 @@ class BestDeployFinderApp(QMainWindow):
             self.log(f"[Error] {e}")
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
+            for _name in ('throughput_value', 'drop_value', 'score_value'):
+                if hasattr(self, _name):
+                    try:
+                        getattr(self, _name).setText('-')
+                    except Exception:
+                        pass
             return
 
         # Step 1: Generate schedule YAML (using generate_all_combinations)
@@ -607,6 +831,12 @@ class BestDeployFinderApp(QMainWindow):
             self.log(f"[Error][Step1] {e}")
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
+            for _name in ('throughput_value', 'drop_value', 'score_value'):
+                if hasattr(self, _name):
+                    try:
+                        getattr(self, _name).setText('-')
+                    except Exception:
+                        pass
             return
 
         # Step 2: Run prediction using XGBoost model
@@ -614,12 +844,69 @@ class BestDeployFinderApp(QMainWindow):
             best_combo, df = self.predict_best_combination(schedule_path, pred_model)
             if not best_combo:
                 raise RuntimeError("Prediction produced no result.")
-            # Extract combination number (digits at end)
-            import re
-            m = re.search(r"(\d+)$", best_combo)
-            combo_number = m.group(1) if m else best_combo
-            if hasattr(self, 'label_best_deploy_value'):
-                self.label_best_deploy_value.setText(str(combo_number))
+            # Decide whether to update status bar according to the new rule:
+            # Do NOT update if (selection unchanged) AND ((new_score <= 0.85 * prev_score) OR (new_best_name == prev_best_name)).
+            try:
+                new_score = float(df.iloc[0]['pred_score']) if len(df) > 0 else None
+            except Exception:
+                new_score = None
+            same_selection = (set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)])) == (getattr(self, '_prev_selected_models', set()) or set()))
+            prev_score = getattr(self, '_prev_score', None)
+            prev_best = getattr(self, '_prev_best_combo', None)
+            new_best = str(best_combo)
+
+            skip_update = False
+            reason_msgs = []
+            if same_selection:
+                if (prev_score is not None) and (new_score is not None) and (new_score <= 0.85 * float(prev_score)):
+                    skip_update = True
+                    reason_msgs.append(f"new_score={new_score:.6f} <= 0.85 * prev_score={float(prev_score):.6f}")
+                if prev_best is not None and new_best == str(prev_best):
+                    skip_update = True
+                    reason_msgs.append(f"new_best_name == prev_best_name == '{new_best}'")
+
+            if skip_update:
+                self.log(f"[UI] Status bar NOT updated (same selection AND { ' OR '.join(reason_msgs) }).")
+            else:
+                # Update labels
+                import re
+                m = re.search(r"(\d+)$", best_combo)
+                combo_number = m.group(1) if m else best_combo
+                if hasattr(self, 'label_best_deploy_value'):
+                    self.label_best_deploy_value.setText(str(combo_number))
+                # Update the predicted metrics to the status labels
+                try:
+                    top_fps = float(df.iloc[0]['pred_total_throughput_fps'])
+                    top_drop = float(df.iloc[0]['pred_drop_rate_fps'])
+                    top_score = float(df.iloc[0]['pred_score'])
+                    if hasattr(self, 'throughput_value'):
+                        try:
+                            self.throughput_value.setText(f"{top_fps:.3f}")
+                        except Exception:
+                            self.throughput_value.setText(str(top_fps))
+                    if hasattr(self, 'drop_value'):
+                        try:
+                            self.drop_value.setText(f"{top_drop:.3f}")
+                        except Exception:
+                            self.drop_value.setText(str(top_drop))
+                    if hasattr(self, 'score_value'):
+                        try:
+                            self.score_value.setText(f"{top_score:.3f}")
+                        except Exception:
+                            self.score_value.setText(str(top_score))
+                except Exception:
+                    pass
+                # Also record legacy signature fields for possible future diagnostics (optional)
+                try:
+                    sig = self._compute_combo_signature(schedule_path, best_combo)
+                    self._last_displayed_best_sig = sig
+                except Exception:
+                    pass
+                try:
+                    self._last_displayed_best_name = str(best_combo)
+                except Exception:
+                    self._last_displayed_best_name = best_combo
+                self.log(f"[UI] Status bar updated for best combination: {best_combo}")
             # Log top predictions summary
             self.log(f"[Step2] Top-1 combination: {best_combo}")
             try:
@@ -627,6 +914,19 @@ class BestDeployFinderApp(QMainWindow):
                 self.log("[Step2] Top predictions:")
                 for i in range(topn):
                     self.log(f"  {i+1}. {df.iloc[i]['combination']} -> {float(df.iloc[i]['pred_score']):.4f}")
+            except Exception:
+                pass
+            # Update internal current-state tracking
+            try:
+                # derive current selected model names from checked_dirs
+                current_models = set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]))
+                self._current_selected_models = current_models
+                self._current_best_combo = str(best_combo)
+                self._current_score = float(df.iloc[0]['pred_score']) if len(df) > 0 else None
+                self.log(f"[State] Updated current selection: {sorted(list(self._current_selected_models))}")
+                self.log(f"[State] Current best: {self._current_best_combo} (score={self._current_score})")
+                if getattr(self, '_prev_selected_models', None) is not None:
+                    self.log(f"[State] Previous selection: {sorted(list(self._prev_selected_models))} (score={self._prev_score})")
             except Exception:
                 pass
         except Exception as e:
