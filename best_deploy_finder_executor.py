@@ -14,7 +14,7 @@ import sys
 import argparse
 from PyQt5 import uic
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QAbstractItemView, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout
 from schedule_generator.file_manager import FileManager
 
 
@@ -49,7 +49,6 @@ class CheckableFileSystemModel(QFileSystemModel):
     def setData(self, index, value, role=Qt.EditRole):
         if role == Qt.CheckStateRole and index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
             path = self.filePath(index)
-            # No limit on number of checked top-level models; simply set the state
             self._check_states[path] = Qt.Checked if value == Qt.Checked else Qt.Unchecked
             self.dataChanged.emit(index, index, [Qt.CheckStateRole])
             return True
@@ -65,8 +64,8 @@ class BestDeployFinderApp(QMainWindow):
         super().__init__()
         uic.loadUi(os.path.join(os.path.dirname(__file__), 'best_deploy_finder_executor.ui'), self)
 
-        # Default models root to ./models_onnx
-        self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models_onnx')
+        # Default models root to ./models
+        self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models')
 
         # Setup file system model and tree view
         self.fs_model = CheckableFileSystemModel(self)
@@ -77,26 +76,11 @@ class BestDeployFinderApp(QMainWindow):
         # Hook the model to the tree view defined in the UI
         self.model_tree_view.setModel(self.fs_model)
         self.model_tree_view.setRootIndex(root_index)
-        # Allow multi-selection in the tree view
-        try:
-            self.model_tree_view.setSelectionMode(QAbstractItemView.MultiSelection)
-        except Exception:
-            pass
         # Show only name column
         for col in range(1, self.fs_model.columnCount()):
             self.model_tree_view.setColumnHidden(col, True)
         # Expand one level for visibility
         self.model_tree_view.expand(root_index)
-
-        # Selection limiting state
-        self._suppress_selection_handler = False
-        self._last_selected_top_keys = set()  # distinct top-level model keys currently allowed
-        try:
-            sel_model = self.model_tree_view.selectionModel()
-            if sel_model is not None:
-                sel_model.selectionChanged.connect(self._on_tree_selection_changed)
-        except Exception:
-            pass
 
         # Wire up browse buttons if present
         if hasattr(self, 'deploy_model_browse_button'):
@@ -143,101 +127,6 @@ class BestDeployFinderApp(QMainWindow):
         # Default outputs
         self.generated_schedule_path = os.path.join(os.path.dirname(__file__), 'model_schedules.yaml')
 
-    # ------------------------------
-    # Selection limiting helpers (max 4)
-    # ------------------------------
-    def _path_to_top_key(self, path: str):
-        """Map a filesystem path (file or dir) to a top-level 'model key' under models_root.
-        Rules:
-        - Top-level file *.onnx -> key = file stem
-        - Top-level folder containing model.onnx -> key = folder name
-        - Nested selections under such a folder count toward that folder's key
-        Otherwise return None.
-        """
-        try:
-            root = self.models_root
-            if not path:
-                return None
-            # Normalize
-            path = os.path.abspath(path)
-            root = os.path.abspath(root)
-
-            # If it's a file
-            if os.path.isfile(path):
-                dirp = os.path.dirname(path)
-                base = os.path.basename(path)
-                # Direct child .onnx
-                if dirp == root and base.lower().endswith('.onnx'):
-                    return os.path.splitext(base)[0]
-                # model.onnx inside a direct child folder
-                if base.lower() == 'model.onnx' and os.path.dirname(dirp) == root:
-                    return os.path.basename(dirp)
-                # Other files: map to their direct child folder if applicable
-                if os.path.dirname(dirp) == root:
-                    return os.path.basename(dirp)
-                return None
-
-            # If it's a directory
-            if os.path.isdir(path):
-                parent = os.path.dirname(path)
-                if parent == root:
-                    # Count only folders that are direct children; prefer those with model.onnx
-                    if os.path.isfile(os.path.join(path, 'model.onnx')):
-                        return os.path.basename(path)
-                    # If no model.onnx, still treat as a bucket for selection counting
-                    return os.path.basename(path)
-                # If nested, attribute to its top-level parent folder under root
-                while parent and parent != '/' and parent != root:
-                    path, parent = parent, os.path.dirname(parent)
-                if parent == root:
-                    return os.path.basename(path)
-            return None
-        except Exception:
-            return None
-
-    def _collect_selected_top_keys(self):
-        keys = []
-        try:
-            for idx in self.model_tree_view.selectedIndexes():
-                if idx.column() != 0:
-                    continue
-                p = self.fs_model.filePath(idx)
-                k = self._path_to_top_key(p)
-                if k:
-                    keys.append(k)
-        except Exception:
-            return set()
-        return set(keys)
-
-    def _deselect_key(self, key: str):
-        try:
-            sel_model = self.model_tree_view.selectionModel()
-            if sel_model is None:
-                return
-            # Deselect all selected indexes that map to this key
-            for idx in list(self.model_tree_view.selectedIndexes()):
-                if idx.column() != 0:
-                    continue
-                p = self.fs_model.filePath(idx)
-                if self._path_to_top_key(p) == key:
-                    try:
-                        sel_model.select(idx, sel_model.Deselect)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    def _on_tree_selection_changed(self, selected, deselected):
-        if self._suppress_selection_handler:
-            return
-        try:
-            # Simply track currently selected top-level keys; no selection cap enforced
-            current_keys = self._collect_selected_top_keys()
-            self._last_selected_top_keys = set(current_keys)
-        except Exception:
-            # On any error, do not block user selection
-            self._suppress_selection_handler = False
-
     def _log(self, message: str):
         if hasattr(self, 'log_text_edit') and self.log_text_edit is not None:
             # QPlainTextEdit supports appendPlainText, not append
@@ -260,55 +149,10 @@ class BestDeployFinderApp(QMainWindow):
         fm = FileManager(log_callback=self._log)
         return fm.get_models_from_selection(self.model_tree_view, self.fs_model, self.models_root)
 
-    def _enumerate_models_under_root(self):
-        """Enumerate runnable models under self.models_root for the Input Rate dialog.
-        Rules:
-        - If there is a top-level file with .onnx extension, include it with model name = file stem.
-        - If there is a top-level directory and it contains a file named 'model.onnx', include it with model name = folder name.
-        - If both a file and a folder would yield the same model name, prefer the folder/model.onnx entry.
-        Returns an ordered list of model names (sorted) and an internal mapping name->path kept on self for potential future use.
-        """
-        root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
-        try:
-            entries = os.listdir(root)
-        except Exception as e:
-            self._log(f"[Error] Failed to list models root '{root}': {e}")
-            return []
-
-        name_to_path = {}
-        # First, collect files (*.onnx)
-        for name in entries:
-            path = os.path.join(root, name)
-            if os.path.isfile(path) and name.lower().endswith('.onnx'):
-                model_name = os.path.splitext(name)[0]
-                if model_name and model_name not in name_to_path:
-                    name_to_path[model_name] = path
-        # Then, collect directories containing model.onnx (override if name clashes)
-        for name in entries:
-            path = os.path.join(root, name)
-            if os.path.isdir(path):
-                candidate = os.path.join(path, 'model.onnx')
-                if os.path.isfile(candidate):
-                    model_name = name
-                    # Prefer folder/model.onnx over top-level file with same name
-                    name_to_path[model_name] = candidate
-
-        # Store for potential later usage; dialog only needs names for now
-        try:
-            self._input_rate_model_paths = dict(name_to_path)
-        except Exception:
-            self._input_rate_model_paths = name_to_path
-
-        model_names = sorted(name_to_path.keys())
-        self._log(f"[Info] Detected {len(model_names)} models under root for Input Rate: {', '.join(model_names) if model_names else '(none)'}")
-        return model_names
-
     def on_input_rate_clicked(self):
-        # New requirement: target files under ./models_onnx and directories containing model.onnx.
-        # Model naming: file .onnx -> file stem; directory/model.onnx -> directory name.
-        models = self._enumerate_models_under_root()
+        models = self._get_selected_model_names()
         if not models:
-            self._log("[Warning] 모델 루트 폴더에서 실행 대상 모델을 찾지 못했습니다. (.onnx 파일 또는 <folder>/model.onnx)")
+            self._log("[Warning] No models selected. Please select folders in the model tree.")
             return
         # Load the dialog UI
         dialog_ui_path = os.path.join(os.path.dirname(__file__), 'input_rate_dialog.ui')
@@ -402,19 +246,6 @@ class BestDeployFinderApp(QMainWindow):
             self.fs_model.set_root_index(root_index)
             self.model_tree_view.setRootIndex(root_index)
             self.model_tree_view.expand(root_index)
-            # Reset selection limiting state and reconnect handler
-            try:
-                self._last_selected_top_keys = set()
-                sel_model = self.model_tree_view.selectionModel()
-                if sel_model is not None:
-                    # Avoid duplicate connections by disconnecting if already connected
-                    try:
-                        sel_model.selectionChanged.disconnect(self._on_tree_selection_changed)
-                    except Exception:
-                        pass
-                    sel_model.selectionChanged.connect(self._on_tree_selection_changed)
-            except Exception:
-                pass
 
     def select_prediction_model(self):
         # Expect a folder that contains <prefix>_y1.json and <prefix>_y2.json
@@ -458,8 +289,9 @@ class BestDeployFinderApp(QMainWindow):
         models = [m for m in models if m]
         if not models:
             raise ValueError("No models selected. Please check at least one top-level model folder.")
-        # Note: We no longer cap the number of selected models to 4.
-        # The display layout still supports up to 4 views; models beyond 4 will have display='none'.
+        if len(models) > 4:
+            self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
+            models = models[:4]
 
         # Load device info
         try:
@@ -496,88 +328,9 @@ class BestDeployFinderApp(QMainWindow):
 
         # Build schedules dict
         schedules = {}
-        # Load sample profiling totals (used when UI rates/tokens are not available)
-        def _load_sample_totals():
-            import json as _json
-            cpu_fps_map, gpu_fps_map, cpu_tok_map, gpu_tok_map = {}, {}, {}, {}
-            cwd = os.getcwd()
-            primary = os.path.join(cwd, "xgboost_model", "performance_results", "sample_profiling_data", "sample_profiling_data.json")
-            secondary = os.path.join(cwd, "sample_profiling_data", "sample_profiling_data.json")
-            sample_path = primary if os.path.isfile(primary) else (secondary if os.path.isfile(secondary) else None)
-            if not sample_path:
-                self.log("[Warning] No sample profiling JSON found at primary or secondary path")
-                return cpu_fps_map, gpu_fps_map, cpu_tok_map, gpu_tok_map
-            try:
-                with open(sample_path, 'r') as sf:
-                    sample = _json.load(sf)
-            except Exception as e:
-                self.log(f"[Warning] Failed to read sample profiling: {e}")
-                return cpu_fps_map, gpu_fps_map, cpu_tok_map, gpu_tok_map
-            total_data = sample.get("total_data", []) or []
-            for item in total_data:
-                try:
-                    m = item.get("model", "") or ""
-                    # base model id from filename or folder/model.onnx
-                    base = os.path.splitext(os.path.basename(m))[0]
-                    if os.path.basename(m).lower() == 'model.onnx':
-                        base = os.path.basename(os.path.dirname(m))
-                    cfps = item.get('cpu_fps', None)
-                    gfps = item.get('gpu_fps', None)
-                    if isinstance(cfps, (int, float)) and cfps > 0:
-                        cpu_fps_map.setdefault(base, float(cfps))
-                    if isinstance(gfps, (int, float)) and gfps > 0:
-                        gpu_fps_map.setdefault(base, float(gfps))
-                    # Tokens/s from input tokens and infer(ms) if available, else direct cpu_tokens/gpu_tokens
-                    cinfer = item.get('cpu_infer', None)
-                    ginfer = item.get('gpu_infer', None)
-                    c_in_tok = item.get('cpu_input_tokens', None)
-                    g_in_tok = item.get('gpu_input_tokens', None)
-                    c_tok = None
-                    g_tok = None
-                    if isinstance(c_in_tok, (int, float)) and isinstance(cinfer, (int, float)) and cinfer > 0:
-                        try:
-                            c_tok = float(c_in_tok) / (float(cinfer) / 1000.0)
-                        except Exception:
-                            c_tok = None
-                    if isinstance(g_in_tok, (int, float)) and isinstance(ginfer, (int, float)) and ginfer > 0:
-                        try:
-                            g_tok = float(g_in_tok) / (float(ginfer) / 1000.0)
-                        except Exception:
-                            g_tok = None
-                    if not isinstance(c_tok, (int, float)) or c_tok <= 0:
-                        c_tok = item.get('cpu_tokens', None)
-                    if not isinstance(g_tok, (int, float)) or g_tok <= 0:
-                        g_tok = item.get('gpu_tokens', None)
-                    if isinstance(c_tok, (int, float)) and c_tok > 0:
-                        cpu_tok_map.setdefault(base, float(c_tok))
-                    if isinstance(g_tok, (int, float)) and g_tok > 0:
-                        gpu_tok_map.setdefault(base, float(g_tok))
-                except Exception:
-                    continue
-            self.log(f"[Info] Loaded sample profiling from {sample_path}")
-            return cpu_fps_map, gpu_fps_map, cpu_tok_map, gpu_tok_map
-
-        sm_cpu_fps, sm_gpu_fps, sm_cpu_tok, sm_gpu_tok = _load_sample_totals()
-
         for i, combo in enumerate(combinations):
             combo_name = f"combination_{i+1}"
             schedules[combo_name] = {}
-            # Determine display mapping based on the 'use_display_view' checkbox.
-            use_display_checked = False
-            try:
-                use_display_checked = bool(self.use_display_view.isChecked())
-            except Exception:
-                use_display_checked = False
-            preferred = ["mnasnet", "resnet50", "resnext50", "yolov4"]
-            models_in_combo = list(combo.keys())
-            display_map = {m: "none" for m in models_in_combo}
-            if use_display_checked:
-                v = 1
-                for name in preferred:
-                    for m in models_in_combo:
-                        if m.lower() == name and v <= 4:
-                            display_map[m] = f"view{v}"
-                            v += 1
             for j, (model, device) in enumerate(combo.items()):
                 model_id = f"{model}_{device}"
                 # Determine default infps
@@ -590,18 +343,7 @@ class BestDeployFinderApp(QMainWindow):
                             infps = int(v)
                     except Exception:
                         infps = None
-                # If no explicit rate, try sample profiling fps (per device)
-                if infps is None:
-                    # sample model key normalization is same as 'model' here
-                    fps = None
-                    if device == 'cpu':
-                        fps = sm_cpu_fps.get(model)
-                    else:
-                        # NPU or others use GPU fps
-                        fps = sm_gpu_fps.get(model)
-                    if isinstance(fps, (int, float)) and fps > 0:
-                        infps = int(max(1, round(float(fps))))
-                # Fallback heuristics if still not provided
+                # Fallback heuristics if not provided
                 if infps is None:
                     lname = model.lower()
                     if "resnet50" in lname:
@@ -613,18 +355,10 @@ class BestDeployFinderApp(QMainWindow):
                 entry = {
                     "model": model,
                     "execution": device,
-                    "display": display_map.get(model, "none"),
+                    "display": f"view{j+1}",
                 }
                 if infps is not None:
                     entry["infps"] = int(infps)
-                # Add intps for LLM if available from sample totals
-                tok = None
-                if device == 'cpu':
-                    tok = sm_cpu_tok.get(model)
-                else:
-                    tok = sm_gpu_tok.get(model)
-                if isinstance(tok, (int, float)) and tok > 0:
-                    entry["intps"] = max(1, int(round(float(tok))))
                 schedules[combo_name][model_id] = entry
         # Write YAML
         try:
@@ -637,245 +371,23 @@ class BestDeployFinderApp(QMainWindow):
         return out_path
 
     def generate_all_combinations(self) -> str:
-        """Generate model schedules based on ONNX files directly under ./models_onnx and
-        folders that contain a model.onnx (e.g., tiny-llama-chat-onnx/model.onnx).
-        Selection rule:
-        - Use the Input Rate dialog's values (self.input_fps_by_model). Models with infps > 0
-          are considered selected. Model names are:
-            * <file_stem> for top-level *.onnx files
-            * <folder_name> for <folder>/model.onnx
-        Output:
-        - Save into the gen_schedules folder.
-        - Filename includes the number of selected models and each model's input rate.
+        """Generate all possible model-to-device combinations into model_schedules.yaml using:
+        - Checked top-level model folders in the tree.
+        - Device config path from self.device_config_input.
+        - Per-model input rates from input_rate_dialog (self.input_fps_by_model).
         Returns the output YAML path.
         """
-        import re
-        import yaml
-
-        # Resolve models root and device config
+        # Resolve selections
         models_root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
+        checked_dirs = self.get_checked_top_level_dirs()
+        if not checked_dirs:
+            raise ValueError("No model folders selected. Please check model folders in the tree.")
         device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
         if not device_conf or not os.path.exists(device_conf):
             raise FileNotFoundError(f"Device config not found: {device_conf}")
-
-        # Enumerate available models under root (top-level *.onnx and */model.onnx)
-        available_models = self._enumerate_models_under_root()  # returns model names
-        if not available_models:
-            raise ValueError("No ONNX models found directly under the models root. (*.onnx or <folder>/model.onnx)")
-
-        # Determine selected models with the following priority:
-        # 1) Highlighted items in the tree view (files or folders). This allows selecting top-level *.onnx files.
-        # 2) Checked top-level directories (legacy checkbox behavior).
-        # 3) Input Rate dialog selections (infps > 0). If none, default all detected models to rate=10.
-        ui_selected: list = []
-        try:
-            # Collect highlighted selections from the tree (column 0 only)
-            selected_indices = [idx for idx in self.model_tree_view.selectedIndexes() if idx.column() == 0]
-            sel_models = set()
-            for idx in selected_indices:
-                p = self.fs_model.filePath(idx)
-                try:
-                    if os.path.isfile(p):
-                        # If a top-level .onnx file was selected, use its stem as model name
-                        if p.lower().endswith('.onnx') and os.path.dirname(p) == self.models_root:
-                            sel_models.add(os.path.splitext(os.path.basename(p))[0])
-                        # If 'model.onnx' inside a top-level folder was selected, use the folder name
-                        elif os.path.basename(p).lower() == 'model.onnx' and os.path.dirname(os.path.dirname(p)) == self.models_root:
-                            sel_models.add(os.path.basename(os.path.dirname(p)))
-                    elif os.path.isdir(p):
-                        # If a top-level folder containing model.onnx was selected, use folder name
-                        if os.path.dirname(p) == self.models_root and os.path.isfile(os.path.join(p, 'model.onnx')):
-                            sel_models.add(os.path.basename(p))
-                except Exception:
-                    continue
-            ui_selected = sorted([m for m in sel_models if m in available_models])
-        except Exception:
-            ui_selected = []
-
-        checked_models: list = []
-        try:
-            checked_dirs = self.get_checked_top_level_dirs()
-            checked_models = sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)])
-            # Only keep those that are valid available models (folder must contain model.onnx)
-            checked_models = [m for m in checked_models if m in available_models]
-        except Exception:
-            checked_models = []
-
-        # Compose final selection list
-        if ui_selected:
-            selected_models = ui_selected
-            try:
-                self.log(f"[Info] Using highlighted selections: {', '.join(selected_models)}")
-            except Exception:
-                pass
-        elif checked_models:
-            selected_models = checked_models
-            try:
-                self.log(f"[Info] Using checked models: {', '.join(selected_models)}")
-            except Exception:
-                pass
-        else:
-            # Fall back to Input Rate dialog mapping
-            selected_models = []
-        
-        # Build per-model rates for the chosen models
-        rates = {}
-        if selected_models:
-            for m in selected_models:
-                v = None
-                if isinstance(getattr(self, 'input_fps_by_model', None), dict):
-                    try:
-                        v = int(self.input_fps_by_model.get(m, 0))
-                    except Exception:
-                        v = 0
-                if not v or v <= 0:
-                    v = 10
-                rates[m] = int(v)
-        else:
-            # Determine selected models via input rates (> 0). If the dialog was never used
-            # or no positive rates were set, default all detected models to rate=10.
-            if isinstance(getattr(self, 'input_fps_by_model', None), dict):
-                for m in available_models:
-                    try:
-                        v = int(self.input_fps_by_model.get(m, 0))
-                    except Exception:
-                        v = 0
-                    if v > 0:
-                        rates[m] = v
-            if not rates:
-                # Fallback: use default rate 10 for all models
-                rates = {m: 10 for m in available_models}
-                try:
-                    self.log("[Info] Input Rate dialog not used or no positive rates provided. Using default infps=10 for all models.")
-                except Exception:
-                    pass
-            selected_models = sorted(rates.keys())
-
-        # Do not limit the number of models; viewer layout maps at most 4 models to views, others use display='none'.
-        selected_models = sorted(selected_models)
-        if len(selected_models) > 4:
-            try:
-                self.log(f"[Info] {len(selected_models)} models selected; display will show up to 4, others set to 'none'.")
-            except Exception:
-                pass
-        # Persist the currently selected models for downstream logic (predict/load handlers)
-        try:
-            self._last_selected_models_from_rates = set(selected_models)
-        except Exception:
-            self._last_selected_models_from_rates = set(selected_models)
-
-        # Load device info (optional): we only care if a GPU device section exists; we will use a single logical GPU.
-        try:
-            import yaml as _yaml
-            with open(device_conf, 'r') as f:
-                device_config = _yaml.safe_load(f) or {}
-            # Try to read GPU availability for logging only
-            gpu_cfg = device_config.get("devices", {}).get("gpu", {})
-            gpu_count = gpu_cfg.get("count", 1)
-            self.log(f"[Info] Device config loaded. Using single GPU (count reported={gpu_count})")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load device config '{device_conf}': {e}")
-
-        # Generate all combinations with CPU/GPU options only.
-        # GPU has no concurrency limit (each model can choose GPU independently).
-        combinations = []
-        def rec(idx, assign):
-            if idx >= len(selected_models):
-                combinations.append(assign.copy())
-                return
-            model = selected_models[idx]
-            # Option 1: CPU
-            assign[model] = "cpu"
-            rec(idx + 1, assign)
-            # Option 2: GPU
-            assign[model] = "gpu"
-            rec(idx + 1, assign)
-        rec(0, {})
-
-        # Build schedules dict
-        schedules = {}
-        for i, combo in enumerate(combinations):
-            combo_name = f"combination_{i+1}"
-            schedules[combo_name] = {}
-            # Determine display mapping based on the 'use_display_view' checkbox.
-            use_display_checked = False
-            try:
-                use_display_checked = bool(self.use_display_view.isChecked())
-            except Exception:
-                use_display_checked = False
-            preferred = ["mnasnet", "resnet50", "resnext50", "yolov4"]
-            models_in_combo = list(combo.keys())
-            display_map = {m: "none" for m in models_in_combo}
-            if use_display_checked:
-                v = 1
-                for name in preferred:
-                    for m in models_in_combo:
-                        if m.lower() == name and v <= 4:
-                            display_map[m] = f"view{v}"
-                            v += 1
-            for j, (model, device) in enumerate(combo.items()):
-                infps = int(rates.get(model, 0)) if model in rates else 0
-                if infps <= 0:
-                    # Fallback defaults if somehow missing
-                    lname = model.lower()
-                    if "resnet50" in lname:
-                        infps = 2
-                    elif "yolov3" in lname:
-                        infps = 30
-                    else:
-                        infps = 10
-                entry = {
-                    "model": model,
-                    "execution": device,
-                    "display": display_map.get(model, "none"),
-                    "infps": int(infps),
-                }
-                schedules[combo_name][f"{model}_{device}"] = entry
-
-        # Prepare output path under gen_schedules with informative filename
-        root_dir = os.path.dirname(__file__)
-        out_dir = os.path.join(root_dir, 'gen_schedules')
-        try:
-            os.makedirs(out_dir, exist_ok=True)
-        except Exception:
-            pass
-        # Compose filename: m{N}_{abbrev-rate}_... .yaml (use only first two letters of model name; join with single underscore)
-        def _sanitize(s: str) -> str:
-            return re.sub(r"[^A-Za-z0-9_.-]", "-", s)
-        def _abbr(model: str) -> str:
-            s = _sanitize(model)
-            # keep only letters/digits for abbreviation base
-            import re as _re
-            alnum = ''.join(_re.findall(r"[A-Za-z0-9]", s))
-            if len(alnum) >= 2:
-                return alnum[:2].lower()
-            return s[:2].lower() if len(s) >= 2 else s.lower()
-        parts = [f"m{len(selected_models)}"] + [f"{_abbr(m)}-{int(rates[m])}" for m in selected_models]
-        # Append display flag to filename when use_display_view is checked
-        display_suffix = ""
-        try:
-            if bool(self.use_display_view.isChecked()):
-                display_suffix = "_display"
-        except Exception:
-            display_suffix = ""
-        filename = f"schedule_{'_'.join(parts)}{display_suffix}.yaml"
-        out_path = os.path.join(out_dir, filename)
-
-        # Write YAML
-        try:
-            with open(out_path, 'w', encoding='utf-8') as f:
-                f.write("# model_schedules.yaml\n")
-                f.write("# Auto-generated from top-level ONNX selection\n\n")
-                f.write(yaml.dump(schedules, default_flow_style=False))
-        except Exception as e:
-            raise RuntimeError(f"Failed to write schedule YAML '{out_path}': {e}")
-
-        # Update the default generated path for downstream steps
-        try:
-            self.generated_schedule_path = out_path
-        except Exception:
-            pass
-        return out_path
+        out_path = self.generated_schedule_path
+        # Delegate to existing builder (kept for compatibility)
+        return self.build_schedule_from_selection(models_root, checked_dirs, device_conf, out_path)
 
     def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.2):
         """Predict best combination using two-target XGBoost JSON models.
@@ -972,25 +484,13 @@ class BestDeployFinderApp(QMainWindow):
         models = [m for m in models if m]
         if not models:
             raise ValueError("No models selected. Please check model folders in the tree.")
-        # No cap on model count; display mapping still limited to 4 views.
+        # Limit to 4 views for viewer layout consistency (mirrors other code paths)
+        if len(models) > 4:
+            self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
+            models = models[:4]
         schedules = {
             "combination_1": {}
         }
-        # Determine display mapping according to use_display_view checkbox
-        use_display_checked = False
-        try:
-            use_display_checked = bool(self.use_display_view.isChecked())
-        except Exception:
-            use_display_checked = False
-        preferred = ["mnasnet", "resnet50", "resnext50", "yolov4"]
-        display_map = {m: "none" for m in models}
-        if use_display_checked:
-            v = 1
-            for name in preferred:
-                for m in models:
-                    if m.lower() == name and v <= 4:
-                        display_map[m] = f"view{v}"
-                        v += 1
         for j, model in enumerate(models):
             infps = None
             if isinstance(getattr(self, 'input_fps_by_model', None), dict):
@@ -1012,7 +512,7 @@ class BestDeployFinderApp(QMainWindow):
             entry = {
                 "model": model,
                 "execution": "cpu",
-                "display": display_map.get(model, "none"),
+                "display": f"view{j+1}",
                 "infps": int(infps),
             }
             schedules["combination_1"][f"{model}_cpu"] = entry
@@ -1303,21 +803,14 @@ class BestDeployFinderApp(QMainWindow):
         self.log(f"[Predict] device_config={device_conf}")
         self.log(f"[Predict] checked_top_level_dirs={checked_dirs}")
 
-        # Validate (do not require checked folders; selection is driven by Input Rate dialog)
+        # Validate
         try:
+            if not checked_dirs:
+                raise ValueError("No model folders selected. Please check model folders in the tree.")
             if not device_conf or not os.path.exists(device_conf):
                 raise FileNotFoundError(f"Device config not found: {device_conf}")
             if not pred_model or not os.path.exists(pred_model):
                 raise FileNotFoundError(f"Prediction model not found: {pred_model}")
-            if not checked_dirs:
-                try:
-                    sel_idx = [idx for idx in self.model_tree_view.selectedIndexes() if idx.column() == 0]
-                except Exception:
-                    sel_idx = []
-                if sel_idx:
-                    self.log("[Info] No checked folders; will use highlighted selections in the tree.")
-                else:
-                    self.log("[Info] No checked folders; will use Input Rate selections under models_onnx.")
         except Exception as e:
             self.log(f"[Error] {e}")
             if hasattr(self, 'label_best_deploy_value'):
@@ -1357,14 +850,7 @@ class BestDeployFinderApp(QMainWindow):
                 new_score = float(df.iloc[0]['pred_score']) if len(df) > 0 else None
             except Exception:
                 new_score = None
-            # Determine current selection set: prefer checked dirs; fallback to Input Rate selections
-            try:
-                from_checked = set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]))
-            except Exception:
-                from_checked = set()
-            rate_selected = getattr(self, '_last_selected_models_from_rates', set()) or set()
-            current_sel_set = from_checked if from_checked else set(sorted(list(rate_selected)))
-            same_selection = (current_sel_set == (getattr(self, '_prev_selected_models', set()) or set()))
+            same_selection = (set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)])) == (getattr(self, '_prev_selected_models', set()) or set()))
             prev_score = getattr(self, '_prev_score', None)
             prev_best = getattr(self, '_prev_best_combo', None)
             new_best = str(best_combo)
@@ -1432,10 +918,8 @@ class BestDeployFinderApp(QMainWindow):
                 pass
             # Update internal current-state tracking
             try:
-                # derive current selected model names: prefer checked dirs; fallback to Input Rate selections
-                from_checked = set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]))
-                rate_selected = getattr(self, '_last_selected_models_from_rates', set()) or set()
-                current_models = from_checked if from_checked else set(sorted(list(rate_selected)))
+                # derive current selected model names from checked_dirs
+                current_models = set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]))
                 self._current_selected_models = current_models
                 self._current_best_combo = str(best_combo)
                 self._current_score = float(df.iloc[0]['pred_score']) if len(df) > 0 else None
@@ -1454,7 +938,7 @@ class BestDeployFinderApp(QMainWindow):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Best Deploy Finder GUI')
-    parser.add_argument('--models-root', type=str, help='Path to the models root folder (default: ./models_onnx)')
+    parser.add_argument('--models-root', type=str, help='Path to the models root folder (default: ./models)')
     return parser.parse_args()
 
 
