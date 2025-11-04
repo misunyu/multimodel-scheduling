@@ -43,11 +43,15 @@ Predict from YAML schedule (planned combinations):
     [--alpha 0.2] [--topk 5]
 """
 
+
+#python3 xgboost_model/deploy_selector_xgb_suite.py predict   --schedule_dir ./xgboost_model/schedules/test   --static_json ./xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json   --model_in ./xgboost_model/artifacts/deploy_xgb   --alpha 0.2 --topk 1   --repeats 10
+
 import argparse
 import json
 import math
 import sys
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
@@ -556,13 +560,16 @@ def main():
     ap_tr.add_argument("--model_out", type=str, required=True, help="Prefix path for saving models (without _y*.json).")
     ap_tr.add_argument("--dump_csv", type=str, default="", help="Optional: path to dump engineered dataset CSV.")
 
-    # PREDICT (YAML만 사용)
-    ap_pc = sub.add_parser("predict", help="Predict for planned combinations from a YAML/JSON schedule.")
-    ap_pc.add_argument("--schedule_yaml", type=str, required=True, help="Path to YAML schedule with one or more combinations.")
+    # PREDICT (YAML/JSON 스케줄, 디렉토리 또는 단일 파일)
+    ap_pc = sub.add_parser("predict", help="Predict for planned combinations from schedules (single file or directory).")
+    mx = ap_pc.add_mutually_exclusive_group(required=True)
+    mx.add_argument("--schedule_yaml", type=str, help="Path to a YAML/JSON schedule with one or more combinations.")
+    mx.add_argument("--schedule_dir", type=str, help="Directory containing YAML/JSON schedule files to run sequentially.")
     ap_pc.add_argument("--static_json", type=str, required=True, help="Path to sample_profiling_data.json.")
     ap_pc.add_argument("--model_in", type=str, required=True, help="Model prefix (expects _y1.json and _y2.json).")
     ap_pc.add_argument("--alpha", type=float, default=0.2, help="Score = FPS - alpha * DropRate (default: 0.2)")
     ap_pc.add_argument("--topk", type=int, default=0, help="If >0, print top-K combinations by score at the end.")
+    ap_pc.add_argument("--repeats", type=int, default=1, help="Number of times to repeat prediction per schedule (default: 1).")
 
     args = ap.parse_args()
 
@@ -584,72 +591,154 @@ def main():
         print(f"[OK] saved -> {model_prefix}_y1.json, {model_prefix}_y2.json")
 
     elif args.cmd == "predict":
-        sched_path = Path(args.schedule_yaml)
         static_json = Path(args.static_json)
         model_prefix = _normalize_model_prefix(args.model_in)
 
-        S = load_static_profiles(static_json)
-        schedule = _load_yaml_or_json(sched_path)
-        combos = _iter_combos_from_schedule(schedule)
+        # Build list of schedule files
+        sched_paths: List[Path] = []
+        if getattr(args, "schedule_yaml", None):
+            sched_paths = [Path(args.schedule_yaml)]
+        elif getattr(args, "schedule_dir", None):
+            d = Path(args.schedule_dir)
+            if not d.exists() or not d.is_dir():
+                print(f"[ERROR] schedule_dir not found or not a directory: {d}", file=sys.stderr)
+                sys.exit(2)
+            # collect .yaml/.yml/.json
+            for ext in ("*.yaml", "*.yml", "*.json"):
+                sched_paths.extend(sorted(d.glob(ext)))
+            if not sched_paths:
+                print(f"[ERROR] no schedule files (*.yaml|*.yml|*.json) under {d}", file=sys.stderr)
+                sys.exit(2)
+        else:
+            print("[ERROR] either --schedule_yaml or --schedule_dir must be provided", file=sys.stderr)
+            sys.exit(2)
 
-        # Preload models once
+        # Validate repeats
+        repeats = int(getattr(args, "repeats", 1))
+        if repeats < 1:
+            print(f"[WARN] repeats < 1 ({repeats}); forcing to 1")
+            repeats = 1
+
+        # Preload static profiles and models once
+        S = load_static_profiles(static_json)
         bst1, bst2 = load_two_models(model_prefix)
         xgb = _lazy_import_xgb()
 
-        results: List[Tuple[str, float, float, float]] = []
-        total_infer_s: float = 0.0
-        total_y1_s: float = 0.0
-        total_y2_s: float = 0.0
-        for name, combo_blob in combos:
-            X = featurize_from_combo(S, combo_blob)
-            feat_names = list(X.columns)
-            dmat = xgb.DMatrix(X.values, feature_names=feat_names)
+        # Accumulators for per-schedule averages across repeats
+        per_sched_infer_avgs: Dict[str, List[float]] = {}
+        per_sched_y1_avgs: Dict[str, List[float]] = {}
+        per_sched_y2_avgs: Dict[str, List[float]] = {}
+        # Buffer to collect final summary lines for optional file output
+        summary_lines: List[str] = []
 
-            t0 = time.perf_counter()
-            y1_pred = bst1.predict(dmat)
-            t1 = time.perf_counter()
-            y1_ms = (t1 - t0) * 1000.0
-            total_y1_s += (t1 - t0)
+        for sched_path in sched_paths:
+            schedule = _load_yaml_or_json(Path(sched_path))
+            combos = _iter_combos_from_schedule(schedule)
+            base = Path(sched_path).name
 
-            t2 = time.perf_counter()
-            y2_pred = bst2.predict(dmat)
-            t3 = time.perf_counter()
-            y2_ms = (t3 - t2) * 1000.0
-            total_y2_s += (t3 - t2)
+            for r in range(repeats):
+                # Per-run accumulators
+                results: List[Tuple[str, float, float, float]] = []
+                total_infer_s: float = 0.0
+                total_y1_s: float = 0.0
+                total_y2_s: float = 0.0
 
-            infer_ms = y1_ms + y2_ms
-            total_infer_s += (t1 - t0) + (t3 - t2)
+                # Optional run banner (no tabs to avoid interfering with parsers)
+                if repeats > 1 or len(sched_paths) > 1:
+                    print(f"-- Run {r+1}/{repeats} for {base} --")
 
-            fps = float(y1_pred[0]); dropr = float(y2_pred[0])
-            score = fps - float(args.alpha) * dropr
-            results.append((name, fps, dropr, score))
-            print(f"{name}\t"
-                  f"pred_total_throughput_fps={fps:.4f}\t"
-                  f"pred_drop_rate_fps={dropr:.4f}\t"
-                  f"pred_score(alpha={args.alpha:g})={score:.4f}\t"
-                  f"infer_y1_ms={y1_ms:.2f}\t"
-                  f"infer_y2_ms={y2_ms:.2f}\t"
-                  f"infer_time_ms={infer_ms:.2f}")
-        if results:
-            total_ms = total_infer_s * 1000.0
-            avg_ms = total_ms / max(len(results), 1)
-            total_y1_ms = total_y1_s * 1000.0
-            total_y2_ms = total_y2_s * 1000.0
-            avg_y1_ms = total_y1_ms / max(len(results), 1)
-            avg_y2_ms = total_y2_ms / max(len(results), 1)
-            print(f"TOTAL\tcombinations={len(results)}\ttotal_infer_time_ms={total_ms:.2f}\tavg_infer_time_ms={avg_ms:.2f}")
-            print(f"TOTAL_Y1\ttotal_infer_time_ms={total_y1_ms:.2f}\tavg_infer_time_ms={avg_y1_ms:.2f}")
-            print(f"TOTAL_Y2\ttotal_infer_time_ms={total_y2_ms:.2f}\tavg_infer_time_ms={avg_y2_ms:.2f}")
+                for name, combo_blob in combos:
+                    X = featurize_from_combo(S, combo_blob)
+                    feat_names = list(X.columns)
+                    dmat = xgb.DMatrix(X.values, feature_names=feat_names)
 
-        if results:
-            best_name, best_fps, best_drop, best_score = max(results, key=lambda x: x[3])
-            print(f"BEST\t{best_name}\t"
-                  f"pred_total_throughput_fps={best_fps:.4f}\t"
-                  f"pred_drop_rate_fps={best_drop:.4f}\t"
-                  f"pred_score(alpha={args.alpha:g})={best_score:.4f}")
-            if int(args.topk) > 0:
-                topk = sorted(results, key=lambda x: x[3], reverse=True)[: int(args.topk)]
-                print("TOPK\t" + ", ".join([f"{n}:{s:.4f}" for n, _, __, s in topk]))
+                    t0 = time.perf_counter()
+                    y1_pred = bst1.predict(dmat)
+                    t1 = time.perf_counter()
+                    y1_ms = (t1 - t0) * 1000.0
+                    total_y1_s += (t1 - t0)
+
+                    t2 = time.perf_counter()
+                    y2_pred = bst2.predict(dmat)
+                    t3 = time.perf_counter()
+                    y2_ms = (t3 - t2) * 1000.0
+                    total_y2_s += (t3 - t2)
+
+                    infer_ms = y1_ms + y2_ms
+                    total_infer_s += (t1 - t0) + (t3 - t2)
+
+                    fps = float(y1_pred[0]); dropr = float(y2_pred[0])
+                    score = fps - float(args.alpha) * dropr
+                    results.append((name, fps, dropr, score))
+                    print(f"{name}\t"
+                          f"pred_total_throughput_fps={fps:.4f}\t"
+                          f"pred_drop_rate_fps={dropr:.4f}\t"
+                          f"pred_score(alpha={args.alpha:g})={score:.4f}\t"
+                          f"infer_y1_ms={y1_ms:.2f}\t"
+                          f"infer_y2_ms={y2_ms:.2f}\t"
+                          f"infer_time_ms={infer_ms:.2f}")
+                if results:
+                    total_ms = total_infer_s * 1000.0
+                    avg_ms = total_ms / max(len(results), 1)
+                    total_y1_ms = total_y1_s * 1000.0
+                    total_y2_ms = total_y2_s * 1000.0
+                    avg_y1_ms = total_y1_ms / max(len(results), 1)
+                    avg_y2_ms = total_y2_ms / max(len(results), 1)
+                    print(f"TOTAL\tcombinations={len(results)}\ttotal_infer_time_ms={total_ms:.2f}\tavg_infer_time_ms={avg_ms:.2f}")
+                    print(f"TOTAL_Y1\ttotal_infer_time_ms={total_y1_ms:.2f}\tavg_infer_time_ms={avg_y1_ms:.2f}")
+                    print(f"TOTAL_Y2\ttotal_infer_time_ms={total_y2_ms:.2f}\tavg_infer_time_ms={avg_y2_ms:.2f}")
+
+                    # Save per-run averages for final summary
+                    per_sched_infer_avgs.setdefault(base, []).append(avg_ms)
+                    per_sched_y1_avgs.setdefault(base, []).append(avg_y1_ms)
+                    per_sched_y2_avgs.setdefault(base, []).append(avg_y2_ms)
+
+                if results:
+                    best_name, best_fps, best_drop, best_score = max(results, key=lambda x: x[3])
+                    print(f"BEST\t{best_name}\t"
+                          f"pred_total_throughput_fps={best_fps:.4f}\t"
+                          f"pred_drop_rate_fps={best_drop:.4f}\t"
+                          f"pred_score(alpha={args.alpha:g})={best_score:.4f}")
+                    if int(args.topk) > 0:
+                        topk = sorted(results, key=lambda x: x[3], reverse=True)[: int(args.topk)]
+                        print("TOPK\t" + ", ".join([f"{n}:{s:.4f}" for n, _, __, s in topk]))
+
+        # Final summary across repeats per schedule (printed once before program exits)
+        if per_sched_infer_avgs:
+            line_all = "SUMMARY_ALL\t" + f"schedules={len(per_sched_infer_avgs)}"
+            print(line_all)
+            summary_lines.append(line_all)
+            # Keep original order of sched_paths
+            for sched_path in sched_paths:
+                base = Path(sched_path).name
+                if base not in per_sched_infer_avgs:
+                    continue
+                inf_list = per_sched_infer_avgs.get(base, [])
+                y1_list = per_sched_y1_avgs.get(base, [])
+                y2_list = per_sched_y2_avgs.get(base, [])
+                # Use numpy for mean; guard against empty
+                def _mean(lst: List[float]) -> float:
+                    return float(np.mean(lst)) if lst else float("nan")
+                line = (
+                    f"SUMMARY\t{base}\t"
+                    f"repeats={len(inf_list)}\t"
+                    f"avg_infer_ms={_mean(inf_list):.2f}\t"
+                    f"avg_y1_ms={_mean(y1_list):.2f}\t"
+                    f"avg_y2_ms={_mean(y2_list):.2f}"
+                )
+                print(line)
+                summary_lines.append(line)
+
+            # Write summary to results/prediction_time_cpu_YYYYMMDD_HHMMSS.txt
+            try:
+                out_dir = Path("results")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_path = out_dir / f"prediction_time_cpu_{stamp}.txt"
+                out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+                print(f"[INFO] wrote final summary -> {out_path}")
+            except Exception as e:
+                print(f"[WARN] failed to write summary file: {e}", file=sys.stderr)
 
     else:
         ap.print_help()
