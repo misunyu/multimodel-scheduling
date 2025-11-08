@@ -703,6 +703,46 @@ def main():
                         topk = sorted(results, key=lambda x: x[3], reverse=True)[: int(args.topk)]
                         print("TOPK\t" + ", ".join([f"{n}:{s:.4f}" for n, _, __, s in topk]))
 
+                    # Save minimal prediction summary JSON (backward compatibility)
+                    try:
+                        out_dir = Path("xgboost_model/performance_data/prediction_test_results")
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        sched_stem = Path(sched_path).stem
+                        out_path = out_dir / f"predict_performance_{stamp}_{sched_stem}.json"
+
+                        # Build per-combination data list to include under the minimal summary as well
+                        now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        data_entries: List[Dict[str, Any]] = []
+                        for (n, fps_v, drop_v, score_v) in results:
+                            data_entries.append({
+                                "timestamp": now_ts,
+                                "window_sec": None,
+                                "combination": n,
+                                "total": {"total_throughput_fps": round(float(fps_v), 4)},
+                                "derived": {"drop_rate_fps": round(float(drop_v), 4), "window_sec": 1.0},
+                                "score": round(float(score_v), 4),
+                            })
+
+                        payload = {
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "schedule file": Path(sched_path).name,
+                            "best deployment": best_name,
+                            # We only predict total throughput and drop rate; use total as avg proxy
+                            "total_throughput_fps": round(float(best_fps), 4),
+                            "avg_throughput_fps": round(float(best_fps), 4),
+                            "drop_rate_fps": round(float(best_drop), 4),
+                            "score": round(float(best_score), 4),
+                            "alpha": float(args.alpha),
+                            "data": data_entries,
+                        }
+                        with out_path.open("w", encoding="utf-8") as f:
+                            json.dump(payload, f, ensure_ascii=False, indent=2)
+                        print(f"[INFO] wrote prediction summary -> {out_path}")
+                    except Exception as e:
+                        print(f"[WARN] failed to write prediction summary JSON: {e}", file=sys.stderr)
+
+
         # Final summary across repeats per schedule (printed once before program exits)
         if per_sched_infer_avgs:
             line_all = "SUMMARY_ALL\t" + f"schedules={len(per_sched_infer_avgs)}"
@@ -729,9 +769,9 @@ def main():
                 print(line)
                 summary_lines.append(line)
 
-            # Write summary to results/prediction_time_cpu_YYYYMMDD_HHMMSS.txt
+            # Write summary to xgboost_model/performance_data/prediction_test_results/prediction_time_cpu_YYYYMMDD_HHMMSS.txt
             try:
-                out_dir = Path("results")
+                out_dir = Path("xgboost_model/performance_data/prediction_test_results")
                 out_dir.mkdir(parents=True, exist_ok=True)
                 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 out_path = out_dir / f"prediction_time_cpu_{stamp}.txt"
