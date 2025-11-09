@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-results 폴더 안의 모든 .json 파일을 확인하여,
+지정한 폴더(기본: 프로젝트의 results 폴더) 안의 모든 .json 파일을 확인하여,
 각 파일의 JSON 내용 중 "schedule file" 값(예: "exp_2_model_schedules_1.yaml")의
 베이스 이름(확장자 제거 및 경로 제거, 예: "exp_2_model_schedules_1")이
 현재 파일 이름(확장자 제외)에 포함되어 있지 않으면 확장자 앞에 붙여서 파일명을 변경한다.
@@ -12,15 +12,23 @@ results 폴더 안의 모든 .json 파일을 확인하여,
 - 예외/오류 시: "오류: <파일명> - <사유>" 출력
 
 사용법:
-- 프로젝트 루트에서 실행: python fix_results_json_filenames.py
+- 기본(프로젝트 results 폴더 기준):
+    python fix_results_json_filenames.py
+- 임의의 폴더를 지정:
+    python fix_results_json_filenames.py /full/path/to/dir
+    python fix_results_json_filenames.py ../some/relative/dir
+
+참고:
+- 입력 디렉토리는 절대/상대 경로, ~ (홈) 표기가 모두 가능합니다.
 """
 
 from __future__ import annotations
+import argparse
 import json
 import os
 from pathlib import Path
 
-RESULTS_DIR = Path(__file__).parent / "../results"
+DEFAULT_RESULTS_DIR = (Path(__file__).parent / "../results").resolve()
 
 
 def ensure_schedule_in_filename(json_path: Path) -> None:
@@ -88,18 +96,42 @@ def ensure_schedule_in_filename(json_path: Path) -> None:
         print(f"오류: {json_path.name} - {e}")
 
 
-def main() -> None:
-    if not RESULTS_DIR.exists() or not RESULTS_DIR.is_dir():
-        print(f"오류: results 디렉토리를 찾을 수 없습니다: {RESULTS_DIR}")
+def process_dir(dir_path: Path) -> None:
+    if not dir_path.exists() or not dir_path.is_dir():
+        print(f"오류: 디렉토리를 찾을 수 없습니다: {dir_path}")
         return
 
-    json_files = sorted(p for p in RESULTS_DIR.iterdir() if p.suffix.lower() == ".json")
+    json_files = sorted(p for p in dir_path.iterdir() if p.suffix.lower() == ".json")
     if not json_files:
-        print("정보: results 디렉토리에 .json 파일이 없습니다")
+        print(f"정보: 지정한 디렉토리에 .json 파일이 없습니다: {dir_path}")
         return
 
     for json_path in json_files:
         ensure_schedule_in_filename(json_path)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="지정한 디렉토리 안의 .json 파일명을 'schedule file' 기반으로 정리합니다.")
+    parser.add_argument(
+        "dir",
+        nargs="?",
+        default=str(DEFAULT_RESULTS_DIR),
+        help=f"처리할 디렉토리 경로 (기본: {DEFAULT_RESULTS_DIR})",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
+    # Normalize the directory path: support ~ and relative paths
+    dir_arg = Path(str(args.dir)).expanduser()
+    if not dir_arg.is_absolute():
+        dir_arg = (Path.cwd() / dir_arg).resolve()
+
+    process_dir(dir_arg)
 
 
 if __name__ == "__main__":
