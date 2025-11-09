@@ -86,7 +86,7 @@ invoke_one() {
 
   if [[ -x "$ROOT_DIR/schedule_executor_main.sh" ]]; then
     if (( TIMEOUT_SECS > 0 )); then
-      timeout "$TIMEOUT_SECS" bash -c '"$0" -schedule "$1" --duration 30 --auto_start_all' "$ROOT_DIR/schedule_executor_main.sh" "$schedule_file"
+      timeout "$TIMEOUT_SECS" bash -c '"$0" -schedule "$1" --duration 10 --auto_start_all' "$ROOT_DIR/schedule_executor_main.sh" "$schedule_file"
     else
       "$ROOT_DIR/schedule_executor_main.sh" -schedule "$schedule_file" --duration 30 --auto_start_all
     fi
@@ -102,6 +102,51 @@ invoke_one() {
   local status=$?
   echo "End: $(date '+%Y-%m-%d %H:%M:%S') (status=$status)"
   return $status
+}
+
+# Wait until the performance results file for the last run is fully written
+wait_for_results_file() {
+  local since_epoch="$1"
+  local results_dir="$ROOT_DIR/results"
+  local max_wait=120
+  local waited=0
+  local latest_file=""
+
+  # Wait for a new or updated performance_*.json file since the run started
+  while (( waited < max_wait )); do
+    latest_file=$(ls -1t "$results_dir"/performance_*.json 2>/dev/null | head -n1 || true)
+    if [[ -n "$latest_file" && -f "$latest_file" ]]; then
+      local mtime
+      mtime=$(stat -c %Y "$latest_file" 2>/dev/null || echo 0)
+      if [[ -n "$mtime" && $mtime -ge $since_epoch ]]; then
+        # Now wait until the file size is stable and JSON is valid
+        local last_size=-1
+        local stable_rounds=0
+        while (( stable_rounds < 2 )); do
+          local sz
+          sz=$(stat -c %s "$latest_file" 2>/dev/null || echo 0)
+          if [[ "$sz" == "$last_size" && "$sz" -gt 0 ]]; then
+            ((stable_rounds++))
+          else
+            stable_rounds=0
+            last_size="$sz"
+          fi
+          sleep 1
+        done
+        # Validate JSON to ensure writing is complete
+        if "$PY" -c 'import sys,json; json.load(open(sys.argv[1],"rb"))' "$latest_file" >/dev/null 2>&1; then
+          echo "Detected completed results file: $latest_file"
+          return 0
+        else
+          echo "Results file detected but JSON not yet complete, waiting... ($latest_file)"
+        fi
+      fi
+    fi
+    sleep 1
+    ((waited++))
+  done
+  echo "Warning: No completed results file detected within ${max_wait}s after run start." >&2
+  return 1
 }
 
 force_cleanup() {
