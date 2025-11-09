@@ -191,15 +191,15 @@ class ScheduleExecutor:
 
         self._viewer.show()
 
-        # Apply 1-second warmup: run for duration+1, but measurement starts after 1s inside viewer
+        # Apply 5-second warmup: run for duration+5, but measurement starts after 5s inside viewer
         measured_duration = self.default_duration
-        # If capped, ensure we don't exceed remaining time (include 1s warm-up)
+        # If capped, ensure we don't exceed remaining time (include 5s warm-up)
         if getattr(self, '_end_time', None) is not None:
             remaining = max(0, int(self._end_time - time.time()))
-            # Reserve 1 second for warm-up; run for at least 1 second if remaining is small
-            run_duration = max(1, min(measured_duration + 1, remaining))
+            # Reserve 5 seconds for warm-up; run for at least 1 second if remaining is small
+            run_duration = max(1, min(measured_duration + 5, remaining))
         else:
-            run_duration = measured_duration + 1
+            run_duration = measured_duration + 5
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)
