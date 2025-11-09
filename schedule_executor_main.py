@@ -68,9 +68,7 @@ class ScheduleExecutor:
         os.makedirs(results_dir, exist_ok=True)
         from datetime import datetime
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        # Include schedule stem (basename of schedule file without extension) in filename
-        schedule_stem = os.path.splitext(os.path.basename(self.schedule_file))[0]
-        self._results_path = os.path.join(results_dir, f'performance_{ts}_{schedule_stem}.json')
+        self._results_path = os.path.join(results_dir, f'performance_{ts}.json')
         self._reset_results_file()
         self._set_start_button_enabled(False)
         print(f"[Executor] Starting execution from the first schedule. Results will be saved to {self._results_path}")
@@ -321,88 +319,6 @@ class Controller:
         self._executor.stop()
 
 
-def _insert_suffix_before_ext(filename: str, suffix: str) -> str:
-    """Return filename with `_suffix` inserted before the extension.
-
-    If the filename already ends with `_<suffix>` before the extension, return as-is.
-    Works for names with multiple dots by only touching the last extension.
-    """
-    base = os.path.basename(filename)
-    root, ext = os.path.splitext(base)
-    if root.endswith(f"_{suffix}"):
-        return base  # already suffixed
-    return f"{root}_{suffix}{ext}"
-
-
-def fix_results_filenames(results_dir: str) -> dict:
-    """Rename existing result files to include `_schedule_stem` before the extension.
-
-    For JSON files, derive `schedule_stem` from the JSON field "schedule file"
-    (basename without extension). For non-JSON, try to leave as-is.
-
-    Returns a summary dict with counts.
-    """
-    summary = {"processed": 0, "renamed": 0, "skipped": 0, "errors": 0}
-    try:
-        entries = os.listdir(results_dir)
-    except Exception:
-        return summary
-
-    for name in entries:
-        src_path = os.path.join(results_dir, name)
-        if not os.path.isfile(src_path):
-            continue
-        summary["processed"] += 1
-        root, ext = os.path.splitext(name)
-        try:
-            schedule_stem = None
-            if ext.lower() == '.json':
-                try:
-                    with open(src_path, 'r', encoding='utf-8') as rf:
-                        content = rf.read().strip()
-                    data = None
-                    if content:
-                        try:
-                            data = json.loads(content)
-                        except json.JSONDecodeError:
-                            # Strip comments or trailing commas heuristically
-                            cleaned = '\n'.join(line for line in content.splitlines() if not line.strip().startswith('#'))
-                            data = json.loads(cleaned)
-                    if isinstance(data, dict):
-                        schedule_file_val = data.get('schedule file')
-                        if isinstance(schedule_file_val, str) and schedule_file_val:
-                            schedule_stem = os.path.splitext(os.path.basename(schedule_file_val))[0]
-                except Exception:
-                    schedule_stem = None
-            # If we couldn't determine schedule_stem, skip safely
-            if not schedule_stem:
-                summary["skipped"] += 1
-                continue
-            # Compute target filename with suffix
-            target_name = _insert_suffix_before_ext(name, schedule_stem)
-            if target_name == name:
-                summary["skipped"] += 1
-                continue
-            dst_path = os.path.join(results_dir, target_name)
-            # Avoid overwriting: if target exists, append numeric index
-            if os.path.exists(dst_path):
-                i = 1
-                root2, ext2 = os.path.splitext(target_name)
-                while True:
-                    alt = f"{root2}_{i}{ext2}"
-                    alt_path = os.path.join(results_dir, alt)
-                    if not os.path.exists(alt_path):
-                        dst_path = alt_path
-                        target_name = alt
-                        break
-                    i += 1
-            os.rename(src_path, dst_path)
-            summary["renamed"] += 1
-        except Exception:
-            summary["errors"] += 1
-    return summary
-
-
 def main():
     """Entry point: parse args, create app/windows, and run event loop."""
     parser = argparse.ArgumentParser(description='Schedule Executor GUI application')
@@ -414,16 +330,7 @@ def main():
                         help='When set, run only the specified combination name from the schedule file in executor-only mode (no controller).')
     parser.add_argument('--auto_start_all', action='store_true',
                         help='Automatically start running all combinations and quit the app when done (no Start button needed).')
-    parser.add_argument('--fix_results_filenames', action='store_true',
-                        help='Rename files under ./results to include _<schedule_stem> before extension using the JSON "schedule file" field.')
     args = parser.parse_args()
-
-    # Optional one-off: rename existing result files under ./results to include _<schedule_stem>
-    if args.fix_results_filenames:
-        results_dir = os.path.join(os.getcwd(), 'results')
-        summary = fix_results_filenames(results_dir)
-        print(f"[Main] fix_results_filenames summary: processed={summary.get('processed')}, renamed={summary.get('renamed')}, skipped={summary.get('skipped')}, errors={summary.get('errors')}")
-        os._exit(0)
 
     # Resolve schedule path: if given path doesn't exist, try tests/<basename>
     schedule_path = args.schedule
