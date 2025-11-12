@@ -39,6 +39,10 @@ def ensure_schedule_in_filename(json_path: Path) -> None:
     - Extract schedule base name (basename without extension).
     - If base name not contained in current filename stem, rename to
       f"{stem}_{base}{suffix}".
+    - Additionally, when renaming performance JSON files, append the execution
+      window seconds ("window_sec") before the extension in the form
+      "_w실행시간" (e.g., "_w30"). If the value is a whole number, omit
+      the decimal part; otherwise keep it (e.g., "_w30.5").
     - If target path exists already, append numeric suffix "_1", "_2", ...
       to avoid overwrite.
     """
@@ -72,16 +76,61 @@ def ensure_schedule_in_filename(json_path: Path) -> None:
         schedule_base = Path(schedule_file_value).name  # remove directories
         schedule_base = os.path.splitext(schedule_base)[0]  # remove extension
 
+        # Try to extract window_sec (execution time window in seconds)
+        def extract_window_sec_anywhere(obj) -> float | None:
+            """Recursively search for a numeric 'window_sec' in dicts/lists."""
+            try:
+                if isinstance(obj, dict):
+                    # direct key
+                    if isinstance(obj.get("window_sec"), (int, float)):
+                        return float(obj["window_sec"])
+                    # common nesting
+                    derived = obj.get("derived")
+                    if isinstance(derived, dict) and isinstance(derived.get("window_sec"), (int, float)):
+                        return float(derived["window_sec"])
+                    # search all values
+                    for v in obj.values():
+                        val = extract_window_sec_anywhere(v)
+                        if val is not None:
+                            return val
+                elif isinstance(obj, list):
+                    for v in obj:
+                        val = extract_window_sec_anywhere(v)
+                        if val is not None:
+                            return val
+            except Exception:
+                pass
+            return None
+
+        window_val = extract_window_sec_anywhere(data)
+
+        def format_window(v: float | None) -> str | None:
+            if v is None:
+                return None
+            # Normalize formatting: no trailing .0 for integer values
+            if abs(v - round(v)) < 1e-9:
+                return str(int(round(v)))
+            return str(v)
+
+        window_str = format_window(window_val)
+
         stem = json_path.stem
         suffix = json_path.suffix  # typically .json
 
         # Already contains schedule_base?
         if schedule_base in stem:
+            # We only append window info when we are performing a rename due to
+            # missing schedule base, to keep current behavior minimal.
             print(f"미변경: {json_path.name}")
             return
 
         # Build new name and avoid collisions
         new_stem = f"{stem}_{schedule_base}"
+
+        # Append window seconds if available and not already present in the new stem
+        if window_str and f"w{window_str}" not in new_stem:
+            new_stem = f"{new_stem}_w{window_str}"
+
         target = json_path.with_name(new_stem + suffix)
         counter = 1
         while target.exists():
