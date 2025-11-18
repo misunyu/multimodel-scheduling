@@ -4,9 +4,6 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 
-import npu
-from NeublaDriver import NeublaDriver
-
 from typing import List, Tuple, Dict, Any, Optional
 
 # Custom operation prefixes for detection
@@ -49,6 +46,9 @@ class ModelProfiler:
         Returns:
             Numpy array with appropriate shape and data type
         """
+        name_l = (getattr(input_tensor, 'name', '') or '').lower()
+        t = str(getattr(input_tensor, 'type', '') or '').lower()
+
         shape = [self.safe_shape_value(s) for s in input_tensor.shape]
         
         # Handle dynamic dimensions with reasonable defaults
@@ -61,10 +61,69 @@ class ModelProfiler:
                 elif "width" in input_tensor.name.lower() or input_tensor.name.lower() in ("w",):
                     shape[i] = 224  # Common image width
                 else:
-                    shape[i] = 128  # Default for other dimensions
+                    # For sequence-like dims, keep it small (e.g., 16) to avoid long runs
+                    if any(k in name_l for k in ("seq", "token", "position", "input_ids", "attention")):
+                        shape[i] = 16
+                    else:
+                        shape[i] = 128  # Default for other dimensions
         
+        # NLP-aware fast path to avoid out-of-range Gather indices
+        # Heuristics by common input names
+        # Default vocab size for LLMs if not inferred elsewhere
+        default_vocab = 32000
+        # Helper to choose best integer dtype matching the declared type
+        def int_dtype_for_type():
+            if 'int64' in t:
+                return np.int64
+            if 'uint64' in t:
+                return np.uint64
+            if 'int16' in t:
+                return np.int16
+            if 'uint16' in t:
+                return np.uint16
+            if 'int8' in t:
+                return np.int8
+            if 'uint8' in t:
+                return np.uint8
+            if 'uint32' in t:
+                return np.uint32
+            # default
+            return np.int32
+
+        try:
+            if any(k in name_l for k in ("input_ids", "token", "tokens")):
+                # Token IDs must be within [0, vocab_size-1]
+                low, high = 0, max(1, default_vocab) - 1
+                return np.random.randint(low, high + 1, size=shape, dtype=int_dtype_for_type())
+            if "attention" in name_l and "mask" in name_l:
+                # Binary attention mask with leading ones (valid tokens) then zeros
+                dtype = int_dtype_for_type()
+                mask = np.zeros(shape, dtype=dtype)
+                # Assume shape is [B, S] or [B, 1, 1, S]; handle common cases
+                if len(shape) == 2:
+                    B, S = shape
+                    valid = min(S, 16)
+                    mask[:, :valid] = 1
+                elif len(shape) == 4:
+                    B, H1, H2, S = shape
+                    valid = min(S, 16)
+                    mask[:, :, :, :valid] = 1
+                else:
+                    mask[...] = 1
+                return mask
+            if "position" in name_l and ("ids" in name_l or "index" in name_l or "indices" in name_l):
+                dtype = int_dtype_for_type()
+                if len(shape) == 2:
+                    B, S = shape
+                    base = np.arange(S, dtype=dtype)[None, :]
+                    return np.tile(base, (B, 1))
+                # fallback
+                return np.zeros(shape, dtype=dtype)
+        except Exception:
+            # Fall through to generic generation on any error
+            pass
+
         # Map ONNXRuntime type string (e.g., 'tensor(uint8)') to numpy dtype
-        t = str(getattr(input_tensor, 'type', '') or '').lower()
         # Also handle raw ONNX ElementType names like 'FLOAT', 'INT32'
         def rand_float(dtype, low=0.0, high=1.0):
             arr = np.random.rand(*shape).astype(np.float32)
@@ -150,94 +209,57 @@ class ModelProfiler:
         
         return load_time, inference_time, model_info
 
-    def profile_model_npu(self, o_path: str, label: str) -> Tuple[float, float, Dict[str, Any]]:
+    def profile_model_gpu(self, model_path: str) -> Tuple[float, float, Dict[str, Any]]:
         """
-        Profile a model on NPU.
+        Apple GPU profiling using ONNX Runtime CoreML Execution Provider.
+        Falls back to CPU if CoreML EP is not available.
         
         Args:
-            o_path: Path to the .o model file
-            label: NPU label (e.g., "NPU1", "NPU2")
-            
+            model_path: Path to the ONNX model file
         Returns:
             Tuple of (load_time_ms, inference_time_ms, model_info)
         """
-        # Previous simulated implementation (commented out as per requirement):
-        # load_time = np.random.uniform(5, 15)
-        # inference_time = np.random.uniform(2, 10)
-        # model_info = {
-        #     "path": o_path,
-        #     "device": label,
-        #     "load_time_ms": load_time,
-        #     "inference_time_ms": inference_time
-        # }
-        # return load_time, inference_time, model_info
+        model_info: Dict[str, Any] = {}
 
-        # Determine NPU index from label (e.g., "NPU1" -> 0, "NPU2" -> 1)
-        npu_num = 0
-        try:
-            lbl = label.strip().upper()
-            if lbl.startswith("NPU"):
-                idx = int(lbl[3:])
-                # Convert to zero-based index
-                npu_num = max(0, idx - 1)
-            else:
-                # Try parse as integer directly
-                npu_num = int(lbl)
-        except Exception:
-            npu_num = 0
+        # Measure model loading time (ONNX parse)
+        start_time = time.time()
+        _ = onnx.load(model_path)
+        load_time = (time.time() - start_time) * 1000.0
 
-        # Choose input shape based on model type inferred from file path/name
-        path_lower = (o_path or "").lower()
-        if "yolo" in path_lower:
-            c, h, w = 3, 608, 608
-        elif "resnet" in path_lower:
-            c, h, w = 3, 224, 224
-        else:
-            # Default to resnet-like input if unknown
-            c, h, w = 3, 224, 224
+        # Determine providers
+        available = ort.get_available_providers()
+        providers = []
+        if 'CoreMLExecutionProvider' in available:
+            providers.append('CoreMLExecutionProvider')
+        # Always include CPU as fallback
+        providers.append('CPUExecutionProvider')
 
-        driver = None
-        try:
-            driver = NeublaDriver()
-            assert driver.Init(npu_num) == 0
+        # Create session
+        sess_options = ort.SessionOptions()
+        session = ort.InferenceSession(model_path, sess_options, providers=providers)
 
-            start_load = time.time()
-            assert driver.LoadModel(o_path) == 0
-            end_load = time.time()
-            load_time_ms = (end_load - start_load) * 1000.0
+        # Prepare inputs
+        input_tensors = {}
+        for input_tensor in session.get_inputs():
+            input_tensors[input_tensor.name] = self.get_dummy_input(input_tensor)
 
-            # Generate dummy uint8 input matching expected size
-            random_input = np.random.rand(c, h, w).astype(np.uint8)
-            input_data = random_input.tobytes()
+        # Warm-up
+        session.run(None, input_tensors)
 
-            start_infer = time.time()
-            assert driver.SendInput(input_data, c * h * w) == 0
-            assert driver.Launch() == 0
-            _ = driver.ReceiveOutputs()
-            end_infer = time.time()
-            infer_time_ms = (end_infer - start_infer) * 1000.0
+        # Timed runs
+        num_runs = 10
+        t0 = time.time()
+        for _ in range(num_runs):
+            session.run(None, input_tensors)
+        t1 = time.time()
+        infer_time = (t1 - t0) * 1000.0 / num_runs
 
-            assert driver.Close() == 0
-            driver = None
-        except Exception as e:
-            # Ensure the driver is closed if initialized
-            try:
-                if driver is not None:
-                    driver.Close()
-            except:
-                pass
-            self.log(f"[Error] {label}: {e}")
-            # Re-raise to allow caller to handle/log if needed
-            raise
+        model_info["path"] = model_path
+        model_info["device"] = "GPU"
+        model_info["load_time_ms"] = load_time
+        model_info["inference_time_ms"] = infer_time
 
-        model_info = {
-            "path": o_path,
-            "device": label,
-            "load_time_ms": load_time_ms,
-            "inference_time_ms": infer_time_ms
-        }
-
-        return load_time_ms, infer_time_ms, model_info
+        return load_time, infer_time, model_info
 
     def contains_custom_op(self, onnx_path: str) -> bool:
         """

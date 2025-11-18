@@ -6,9 +6,9 @@ import numpy as np
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QMainWindow, QApplication, QFileDialog, QDialog,
+    QMainWindow, QApplication, QDialog,
     QTreeView, QPlainTextEdit, QTableWidget, QAction,
-    QFileSystemModel, QCheckBox, QTabWidget, QWidget,
+    QFileSystemModel, QTabWidget, QWidget,
     QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
     QHeaderView, QLabel, QAbstractItemView
 )
@@ -20,7 +20,6 @@ from image_processing import (
     yolo_preprocess_local,
     resnet50_preprocess_local,
     yolo_postprocess_cpu,
-    yolo_postprocess_npu,
     resnet50_postprocess_local,
 )
 
@@ -77,9 +76,7 @@ class ONNXProfilerApp(QMainWindow):
     def setup_ui_elements(self):
         """Find and set up UI elements."""
         # Find main UI elements
-        self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
         self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")
-        self.npu2_tab = self.findChild(QWidget, "npu1_tab")
         
         # Set up main layout
         main_layout = self.findChild(QHBoxLayout, "mainLayout")
@@ -89,7 +86,6 @@ class ONNXProfilerApp(QMainWindow):
         
         # Find input and control elements
         self.folder_input = self.findChild(QLineEdit, "folder_input")
-        self.browse_button = self.findChild(QPushButton, "browse_button")
         self.profile_button = self.findChild(QPushButton, "profile_button")
         self.generate_static_button = self.findChild(QPushButton, "generate_static_button")
         self.generate_all_button = self.findChild(QPushButton, "generate_all_button")
@@ -99,15 +95,17 @@ class ONNXProfilerApp(QMainWindow):
         
         # Find table elements
         self.cpu_table = self.findChild(QTableWidget, "cpu_table")
-        self.npu1_table = self.findChild(QTableWidget, "npu0_table")
-        self.npu2_table = self.findChild(QTableWidget, "npu1_table")
+        # GPU table (renamed from NPU0)
+        self.gpu_table = self.findChild(QTableWidget, "gpu_table")
+        # For backward compatibility in downstream functions, alias gpu table as npu1_table
+        self.npu1_table = self.gpu_table
+        # Create hidden placeholder for legacy NPU2 table
+        self.npu2_table = QTableWidget(self)
+        self.npu2_table.setVisible(False)
         self.pre_post_table = self.findChild(QTableWidget, "pre_post_table")
         
-        # Set up NPU2 visibility
-        self.npu2_table.setVisible(self.enable_npu2_checkbox.isChecked())
-        
         # Set up table headers
-        for table in [self.cpu_table, self.npu1_table, self.npu2_table]:
+        for table in [self.cpu_table, self.npu1_table]:
             header = table.horizontalHeader()
             header.setStretchLastSection(True)
             header.setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -127,8 +125,7 @@ class ONNXProfilerApp(QMainWindow):
         self.legend_label = QLabel()
         self.legend_label.setText(
             "<span style='background-color:#cce6ff;'>&nbsp;&nbsp;&nbsp;</span> CPU &nbsp;&nbsp;"
-            "<span style='background-color:#ffffcc;'>&nbsp;&nbsp;&nbsp;</span> use NPU1 &nbsp;&nbsp;"
-            "<span style='background-color:#ffd699;'>&nbsp;&nbsp;&nbsp;</span> use NPU2"
+            "<span style='background-color:#ffffcc;'>&nbsp;&nbsp;&nbsp;</span> GPU (Apple M-series)"
         )
         self.legend_label.setStyleSheet("font-size: 12px; padding: 2px;")
         
@@ -149,20 +146,7 @@ class ONNXProfilerApp(QMainWindow):
     
     def connect_signals(self):
         """Connect UI signals to slots."""
-        # Connect NPU2 checkbox
-        def update_npu2_tab_enabled():
-            index = self.result_tabs.indexOf(self.npu2_tab)
-            if index != -1:
-                self.result_tabs.setTabEnabled(index, self.enable_npu2_checkbox.isChecked())
-        
-        self.enable_npu2_checkbox.stateChanged.connect(update_npu2_tab_enabled)
-        self.enable_npu2_checkbox.stateChanged.connect(
-            lambda: self.npu2_table.setVisible(self.enable_npu2_checkbox.isChecked())
-        )
-        update_npu2_tab_enabled()
-        
         # Connect buttons
-        self.browse_button.clicked.connect(self.browse_folder)
         self.profile_button.clicked.connect(self.run_profiling)
         self.generate_static_button.clicked.connect(
             lambda: self.ui_components.highlight_deploy_results(
@@ -192,7 +176,7 @@ class ONNXProfilerApp(QMainWindow):
         """Set up the file system model for the tree view."""
         self.fs_model = QFileSystemModel()
         self.fs_model.setReadOnly(True)
-        self.fs_model.setNameFilters(["*.onnx", "*.o"])
+        self.fs_model.setNameFilters(["*.onnx"])
         self.fs_model.setNameFilterDisables(False)
         self.model_tree_view.setModel(self.fs_model)
         self.model_tree_view.setMinimumWidth(320)
@@ -206,11 +190,11 @@ class ONNXProfilerApp(QMainWindow):
         # Connect selection changed signal
         self.model_tree_view.selectionModel().selectionChanged.connect(self.handle_tree_selection_changed)
         
-        # Set default folder
-        default_folder = os.path.join(os.getcwd(), "models")
+        # Set default folder to models_onnx instead of models
+        default_folder = os.path.join(os.getcwd(), "models_onnx")
         if not os.path.isdir(default_folder):
             default_folder = os.getcwd()
-        
+
         self.folder_input.setText(default_folder)
         self.set_tree_root(default_folder)
         QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(default_folder))
@@ -220,14 +204,6 @@ class ONNXProfilerApp(QMainWindow):
         if self.log_output:
             self.log_output.appendPlainText(message)
             QApplication.processEvents()
-    
-    def browse_folder(self):
-        """Browse for a folder to profile."""
-        folder = QFileDialog.getExistingDirectory(self, "Select Folder", os.getcwd())
-        if folder:
-            self.folder_input.setText(folder)
-            self.set_tree_root(folder)
-            QTimer.singleShot(100, lambda: self.expand_parents_of_onnx_files(folder))
     
     def handle_tree_selection_changed(self, selected, deselected):
         """
@@ -274,7 +250,7 @@ class ONNXProfilerApp(QMainWindow):
         """Expand tree view items that contain ONNX or O files."""
         for dirpath, _, filenames in os.walk(root_folder):
             for f in filenames:
-                if f.endswith(".onnx") or f.endswith(".o"):
+                if f.endswith(".onnx"):
                     file_path = os.path.join(dirpath, f)
                     index = self.fs_model.index(file_path)
                     parent = index.parent()
@@ -299,22 +275,28 @@ class ONNXProfilerApp(QMainWindow):
             # Initialize UI for profiling
             self._initialize_profiling_ui()
             
-            # Get selected paths
-            selected_paths = self.file_manager.get_selected_paths(
-                self.model_tree_view, self.fs_model, root_folder
-            )
-            
-            if not selected_paths:
-                return
-            
-            # Collect model files
+            # Collect ALL ONNX files under the tree root (ignore selection)
+            # per requirement: run every ONNX in model_tree_view (models_onnx)
+            selected_paths = [root_folder]
             onnx_files, o_files = self.file_manager.collect_model_files(selected_paths)
+
+            # Special rule: for tiny-llama-chat-onnx folder, only run its model.onnx
+            filtered_onnx_files = []
+            for p in onnx_files:
+                parts = os.path.normpath(p).split(os.sep)
+                if 'tiny-llama-chat-onnx' in parts:
+                    # keep only if the file name is exactly model.onnx
+                    if os.path.basename(p) == 'model.onnx':
+                        filtered_onnx_files.append(p)
+                else:
+                    filtered_onnx_files.append(p)
+            onnx_files = filtered_onnx_files
             
             # Profile ONNX models
             valid_model_onnx = self._profile_onnx_models(onnx_files, root_folder)
             
-            # Profile O models
-            self._profile_o_models(o_files, root_folder)
+            # Profile ONNX models on GPU (Apple CoreML EP)
+            self._profile_onnx_models_gpu(onnx_files, root_folder)
             
             # Process profiling results
             if self.total_table:
@@ -340,7 +322,6 @@ class ONNXProfilerApp(QMainWindow):
         # Clear previous results
         self.ui_components.init_table(self.cpu_table)
         self.ui_components.init_table(self.npu1_table)
-        self.ui_components.init_table(self.npu2_table)
         
         # Reset Pre/Post table
         if hasattr(self, 'pre_post_table') and self.pre_post_table is not None:
@@ -382,23 +363,18 @@ class ONNXProfilerApp(QMainWindow):
                 self.log_message(f"[Error] Skipping {path}: {str(e)}\n")
         
         return valid_model_onnx
-    
-    def _profile_o_models(self, o_files, root_folder):
-        """Profile O models and update NPU tables."""
-        for path in o_files:
-            name = os.path.relpath(path, root_folder)
-            load_npu1, infer_npu1, _ = self.profiler.profile_model_npu(path, "NPU1")
-            self.ui_components.insert_result_row(self.npu1_table, name, load_npu1, infer_npu1)
-            
-            self.log_message(f"[NPU1] {name}")
-            self.log_message(f"       Load: {load_npu1:.1f} ms, Inference: {infer_npu1:.1f} ms\n")
-            
-            if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
-                load_npu2, infer_npu2, _ = self.profiler.profile_model_npu(path, "NPU2")
-                self.ui_components.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
-                
-                self.log_message(f"[NPU2] {name}")
-                self.log_message(f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
+
+    def _profile_onnx_models_gpu(self, onnx_files, root_folder):
+        """Profile ONNX models on Apple GPU (CoreML EP) and update GPU table."""
+        for path in onnx_files:
+            try:
+                rel_path = os.path.relpath(path, root_folder)
+                load_ms, infer_ms, _ = self.profiler.profile_model_gpu(path)
+                self.ui_components.insert_result_row(self.npu1_table, rel_path, load_ms, infer_ms)
+                self.log_message(f"[GPU] {rel_path}")
+                self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+            except Exception as e:
+                self.log_message(f"[Error] GPU profiling failed for {path}: {e}\n")
     
     def _process_profiling_results(self, valid_model_onnx, root_folder):
         """Process profiling results and update total table."""
@@ -481,17 +457,6 @@ class ONNXProfilerApp(QMainWindow):
         yolo_cpu_output0[:, 5:] = np.random.rand(rows_cpu, cols_cpu - 5).astype(np.float32)
         yolo_cpu_output = [yolo_cpu_output0]
 
-        # For YOLO NPU postprocess: output[0]=[left, top, right, bottom, conf], output[1]=class_ids
-        rows_npu = 50
-        left = np.random.rand(rows_npu).astype(np.float32) * 608.0
-        top = np.random.rand(rows_npu).astype(np.float32) * 608.0
-        right = left + np.random.rand(rows_npu).astype(np.float32) * 100.0 + 1.0
-        bottom = top + np.random.rand(rows_npu).astype(np.float32) * 100.0 + 1.0
-        conf = np.random.rand(rows_npu).astype(np.float32)
-        yolo_npu_output0 = np.stack([left, top, right, bottom, conf], axis=1)
-        yolo_npu_output1 = np.random.randint(0, 80, size=(rows_npu,), dtype=np.int32)
-        yolo_npu_output = [yolo_npu_output0, yolo_npu_output1]
-
         # Compute averages
         results = []
         try:
@@ -512,12 +477,7 @@ class ONNXProfilerApp(QMainWindow):
             results.append(("yolo_postprocess_cpu", avg3))
         except Exception as e:
             self.log_message(f"[Warn] yolo_postprocess_cpu timing failed: {e}")
-        try:
-            meta_dummy = {"orig_w": img_w, "orig_h": img_h, "ratio": 1.0, "pad": (0, 0), "input_size": (608, 608)}
-            avg4 = avg_time_ms(yolo_postprocess_npu, yolo_npu_output, raw_img.copy(), meta_dummy)
-            results.append(("yolo_postprocess_npu", avg4))
-        except Exception as e:
-            self.log_message(f"[Warn] yolo_postprocess_npu timing failed: {e}")
+        # Note: NPU-specific postprocess removed
         try:
             # Dummy logits for ResNet50: 1 x 1000
             logits_dummy = np.random.randn(1, 1000).astype(np.float32)
@@ -574,7 +534,7 @@ class ONNXProfilerApp(QMainWindow):
 
         # Extract model names from paths
         models = []
-        for path in onnx_files + o_files:
+        for path in onnx_files:
             rel_path = os.path.relpath(path, root_folder)
             parts = rel_path.split(os.sep)
             if len(parts) >= 1:
@@ -598,40 +558,37 @@ class ONNXProfilerApp(QMainWindow):
                 
             # Extract device information
             cpu_count = device_config.get("devices", {}).get("cpu", {}).get("count", 1)
-            npu_count = device_config.get("devices", {}).get("npu", {}).get("count", 0)
-            npu_ids = device_config.get("devices", {}).get("npu", {}).get("ids", [])
+            gpu_count = device_config.get("devices", {}).get("gpu", {}).get("count", 1)
+            gpu_ids = device_config.get("devices", {}).get("gpu", {}).get("ids", [0])
             
-            self.log_message(f"[Info] Found {cpu_count} CPU(s) and {npu_count} NPU(s) with IDs {npu_ids}")
+            self.log_message(f"[Info] Found {cpu_count} CPU(s) and {gpu_count} GPU(s) with IDs {gpu_ids}")
         except Exception as e:
             self.log_message(f"[Error] Failed to load {self.device_settings_file}: {e}")
             return
-            
+        
         # Generate all possible combinations
         combinations = []
         
         # Helper function to generate combinations recursively
-        def generate_combinations(model_idx, current_assignment, available_npus):
+        def generate_combinations(model_idx, current_assignment):
             # Base case: all models have been assigned
             if model_idx >= len(models):
                 combinations.append(current_assignment.copy())
                 return
-                
+            
             model = models[model_idx]
             
             # Option 1: Assign to CPU (always possible since CPU can run multiple models)
             current_assignment[model] = "cpu"
-            generate_combinations(model_idx + 1, current_assignment, available_npus)
+            generate_combinations(model_idx + 1, current_assignment)
             
-            # Option 2: Assign to available NPUs (one model per NPU)
-            for npu_id in available_npus:
-                current_assignment[model] = f"npu{npu_id}"
-                # Remove this NPU from available NPUs for recursive calls
-                new_available = available_npus.copy()
-                new_available.remove(npu_id)
-                generate_combinations(model_idx + 1, current_assignment, new_available)
+            # Option 2: Assign to GPU (assume single GPU device on Apple M-series)
+            if gpu_count > 0:
+                current_assignment[model] = "gpu"
+                generate_combinations(model_idx + 1, current_assignment)
                 
         # Start the recursive generation
-        generate_combinations(0, {}, set(npu_ids))
+        generate_combinations(0, {})
         
         # Update assignment_results for display in the UI
         # Only include unique model-device pairs from the first combination
@@ -675,14 +632,14 @@ class ONNXProfilerApp(QMainWindow):
             with open("../tests/model_schedules.yaml", "w") as f:
                 # Add header comments
                 f.write("# model_schedules.yaml\n")
-                f.write("# Auto-generated configuration for model execution on CPU or NPU\n\n")
+                f.write("# Auto-generated configuration for model execution on CPU or GPU\n\n")
                 
                 # Add target device file information
                 f.write(f"# Target device file: {self.device_settings_file}\n")
                 f.write("# Available devices:\n")
                 f.write(f"# - CPU: {cpu_count}\n")
-                if npu_count > 0:
-                    f.write(f"# - NPU: {npu_count} (IDs: {', '.join(map(str, npu_ids))})\n")
+                if gpu_count > 0:
+                    f.write(f"# - GPU: {gpu_count} (IDs: {', '.join(map(str, gpu_ids))})\n")
                 f.write("\n")
                 
                 # Add available models comment
