@@ -71,20 +71,18 @@ class UIComponents:
             total_table: QTableWidget for total results
         """
         total_table.clear()
-        total_table.setColumnCount(6)
+        # Result tab: remove NPU2 column; rename NPU1 to GPU (+ CPU Offloading)
+        total_table.setColumnCount(3)
         total_table.setHorizontalHeaderLabels([
             "Model",
             "CPU Inf. (ms)",
-            "NPU1 Load (ms)",
-            "NPU1 + CPU Inf. (ms)",
-            "NPU2 Load (ms)",
-            "NPU2 + CPU Inf. (ms)"
+            "GPU + CPU Offloading (ms)"
         ])
         total_table.setRowCount(0)
 
         header = total_table.horizontalHeader()
         header.setStretchLastSection(True)
-        for i in range(6):
+        for i in range(3):
             header.setSectionResizeMode(i, QHeaderView.Stretch)
     
     def populate_total_table(self, total_table, all_models, valid_model_onnx, 
@@ -109,36 +107,25 @@ class UIComponents:
             # Model name
             total_table.setItem(row, 0, QTableWidgetItem(model))
             
-            # CPU inference time
+            # CPU inference time: cpu_tab의 값(모든 항목 합계)을 사용
             cpu_infer = 0.0
-            if model in valid_model_onnx:
-                cpu_infer = valid_model_onnx[model][1]
-            elif model in cpu_infer_per_partition:
+            if model in cpu_infer_per_partition:
                 cpu_infer = sum(cpu_infer_per_partition[model])
             total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
             
-            # NPU1 load and inference times
-            npu1_load_time = npu1_load.get(model, 0.0)
+            # GPU inference time (previously NPU1; Load columns removed)
             npu1_infer_time = npu1_infer.get(model, 0.0)
-            total_table.setItem(row, 2, QTableWidgetItem(f"{npu1_load_time:.1f}"))
-            total_table.setItem(row, 3, QTableWidgetItem(f"{npu1_infer_time:.1f}"))
-            
-            # NPU2 load and inference times
-            npu2_load_time = npu2_load.get(model, 0.0)
-            npu2_infer_time = npu2_infer.get(model, 0.0)
-            total_table.setItem(row, 4, QTableWidgetItem(f"{npu2_load_time:.1f}"))
-            total_table.setItem(row, 5, QTableWidgetItem(f"{npu2_infer_time:.1f}"))
+            total_table.setItem(row, 2, QTableWidgetItem(f"{npu1_infer_time:.1f}"))
     
-    def add_total_row(self, total_table, cpu_infer_total, npu1_load_total, 
-                     npu1_infer_total, npu2_load_total, npu2_infer_total):
+    def add_total_row(self, total_table, cpu_infer_total, 
+                     gpu_infer_total):
         """
         Add a total row to the total results table.
         
         Args:
             total_table: QTableWidget for total results
             cpu_infer_total: Total CPU inference time
-            npu1_load_total, npu1_infer_total: Total NPU1 load and inference times
-            npu2_load_total, npu2_infer_total: Total NPU2 load and inference times
+            gpu_infer_total: Total GPU inference time
         """
         row = total_table.rowCount()
         total_table.insertRow(row)
@@ -157,25 +144,10 @@ class UIComponents:
         cpu_item.setFont(bold_font)
         total_table.setItem(row, 1, cpu_item)
         
-        # NPU1 load total
-        npu1_load_item = QTableWidgetItem(f"{npu1_load_total:.1f}")
-        npu1_load_item.setFont(bold_font)
-        total_table.setItem(row, 2, npu1_load_item)
-        
-        # NPU1 inference total
-        npu1_infer_item = QTableWidgetItem(f"{npu1_infer_total:.1f}")
-        npu1_infer_item.setFont(bold_font)
-        total_table.setItem(row, 3, npu1_infer_item)
-        
-        # NPU2 load total
-        npu2_load_item = QTableWidgetItem(f"{npu2_load_total:.1f}")
-        npu2_load_item.setFont(bold_font)
-        total_table.setItem(row, 4, npu2_load_item)
-        
-        # NPU2 inference total
-        npu2_infer_item = QTableWidgetItem(f"{npu2_infer_total:.1f}")
-        npu2_infer_item.setFont(bold_font)
-        total_table.setItem(row, 5, npu2_infer_item)
+        # GPU inference total
+        gpu_infer_item = QTableWidgetItem(f"{gpu_infer_total:.1f}")
+        gpu_infer_item.setFont(bold_font)
+        total_table.setItem(row, 2, gpu_infer_item)
     
     def highlight_deploy_results(self, total_table, times, models):
         """
@@ -204,12 +176,11 @@ class UIComponents:
 
         # Define colors for different devices
         cpu_color = QColor(204, 230, 255)   # Light blue for CPU
-        npu1_color = QColor(255, 255, 204)  # Light yellow for NPU1 (UI label)
-        npu2_color = QColor(255, 214, 153)  # Light orange for NPU2 (UI label)
+        gpu_color = QColor(255, 255, 204)   # Light yellow for GPU
 
         # Collect per-model timing options from the table
-        # Columns: 0=Model, 1=CPU Inf, 2=NPU1 Load, 3=NPU1+CPU Inf, 4=NPU2 Load, 5=NPU2+CPU Inf
-        models_data = []  # list of dicts: {name, cpu, npu1_total, npu2_total, npu1_inf, npu2_inf}
+        # Columns: 0=Model, 1=CPU Inf, 2=GPU(+CPU Offloading)
+        models_data = []  # list of dicts: {name, cpu, gpu_total, gpu_inf}
         last_row_index = total_table.rowCount() - 1  # last row is the Total row
         for row in range(max(0, last_row_index)):
             name_item = total_table.item(row, 0)
@@ -221,21 +192,9 @@ class UIComponents:
             except Exception:
                 cpu_time = 0.0
             try:
-                npu1_load = float(total_table.item(row, 2).text()) if total_table.item(row, 2) else 0.0
+                gpu_infer = float(total_table.item(row, 2).text()) if total_table.item(row, 2) else 0.0
             except Exception:
-                npu1_load = 0.0
-            try:
-                npu1_infer = float(total_table.item(row, 3).text()) if total_table.item(row, 3) else 0.0
-            except Exception:
-                npu1_infer = 0.0
-            try:
-                npu2_load = float(total_table.item(row, 4).text()) if total_table.item(row, 4) else 0.0
-            except Exception:
-                npu2_load = 0.0
-            try:
-                npu2_infer = float(total_table.item(row, 5).text()) if total_table.item(row, 5) else 0.0
-            except Exception:
-                npu2_infer = 0.0
+                gpu_infer = 0.0
 
             # Treat non-positive or 0 times as unavailable
             def norm(x):
@@ -244,29 +203,26 @@ class UIComponents:
             models_data.append({
                 "name": model_name,
                 "cpu": norm(cpu_time),
-                # For scheduling on NPU we consider load + inference time occupying the NPU
-                "npu1_total": norm(npu1_load) + norm(npu1_infer) if norm(npu1_load) < float('inf') and norm(npu1_infer) < float('inf') else float('inf'),
-                "npu2_total": norm(npu2_load) + norm(npu2_infer) if norm(npu2_load) < float('inf') and norm(npu2_infer) < float('inf') else float('inf'),
-                # Keep pure inference times for JSON reporting (historical format)
-                "npu1_inf": norm(npu1_infer),
-                "npu2_inf": norm(npu2_infer),
+                # For scheduling on GPU we consider inference time occupying the GPU (Load removed)
+                "gpu_total": norm(gpu_infer),
+                # Keep pure inference times for JSON reporting
+                "gpu_inf": norm(gpu_infer),
             })
 
         if not models_data:
             return
 
         # Brute-force search over assignments to minimize makespan
-        # Device indices: 0=CPU, 1=NPU1, 2=NPU2
+        # Device indices: 0=CPU, 1=GPU
         n = len(models_data)
         best_assignment = None
         best_makespan = float('inf')
 
         # Early exit: if n is large, we could add heuristics, but typical n is small
         from itertools import product
-        for choices in product((0, 1, 2), repeat=n):
+        for choices in product((0, 1), repeat=n):
             cpu_bucket = 0.0
-            npu1_bucket = 0.0
-            npu2_bucket = 0.0
+            gpu_bucket = 0.0
             feasible = True
             for i, d in enumerate(choices):
                 m = models_data[i]
@@ -278,20 +234,14 @@ class UIComponents:
                     # CPU runs in parallel: bucket is max
                     cpu_bucket = max(cpu_bucket, t)
                 elif d == 1:
-                    t = m["npu1_total"]
+                    t = m["gpu_total"]
                     if t == float('inf'):
                         feasible = False
                         break
-                    npu1_bucket += t
-                else:  # d == 2
-                    t = m["npu2_total"]
-                    if t == float('inf'):
-                        feasible = False
-                        break
-                    npu2_bucket += t
+                    gpu_bucket += t
             if not feasible:
                 continue
-            makespan = max(cpu_bucket, npu1_bucket, npu2_bucket)
+            makespan = max(cpu_bucket, gpu_bucket)
             if makespan < best_makespan:
                 best_makespan = makespan
                 best_assignment = choices
@@ -316,14 +266,10 @@ class UIComponents:
                 chosen_label = "CPU"
                 chosen_time = models_data[i]["cpu"] if models_data[i]["cpu"] < float('inf') else 0.0
             elif d == 1:
-                color = npu1_color
-                chosen_label = "NPU1"  # UI label; JSON will map to NPU0
+                color = gpu_color
+                chosen_label = "GPU"
                 # For times list, keep inference part (for external expectations)
-                chosen_time = models_data[i]["npu1_inf"] if models_data[i]["npu1_inf"] < float('inf') else 0.0
-            else:
-                color = npu2_color
-                chosen_label = "NPU2"  # UI label; JSON will map to NPU1
-                chosen_time = models_data[i]["npu2_inf"] if models_data[i]["npu2_inf"] < float('inf') else 0.0
+                chosen_time = models_data[i]["gpu_inf"] if models_data[i]["gpu_inf"] < float('inf') else 0.0
 
             # Highlight the entire row
             for col in range(total_table.columnCount()):
@@ -338,15 +284,12 @@ class UIComponents:
         # After highlighting, save best schedule to static_best_schedule.json
         try:
             # Map UI device labels to execution names for JSON output
-            # UI labels: CPU, NPU1, NPU2 -> JSON execution: CPU, NPU0, NPU1
             def to_execution_label(label: str) -> str:
                 up = label.upper()
                 if up == "CPU":
                     return "CPU"
-                if up == "NPU1":
-                    return "NPU0"  # Map UI NPU1 to NPU0
-                if up == "NPU2":
-                    return "NPU1"  # Map UI NPU2 to NPU1
+                if up == "GPU":
+                    return "GPU"
                 return up
 
             # Build a single-entry results object
@@ -363,14 +306,11 @@ class UIComponents:
                     item = total_table.item(row, 0)
                     if item and item.text() == model_name:
                         cpu_item = total_table.item(row, 1)
-                        npu0_inf_item = total_table.item(row, 3)
-                        npu1_inf_item = total_table.item(row, 5)
+                        gpu_inf_item = total_table.item(row, 2)
                         if exec_label == "CPU":
                             ref = cpu_item
-                        elif exec_label == "NPU0":
-                            ref = npu0_inf_item
-                        else:
-                            ref = npu1_inf_item
+                        else:  # GPU
+                            ref = gpu_inf_item
                         try:
                             avg_time_ms = float(ref.text()) if ref and ref.text() else 0.0
                         except Exception:

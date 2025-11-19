@@ -49,7 +49,7 @@ class DataProcessor:
     
     def collect_cpu_infer_per_partition(self, cpu_table):
         """
-        Collect CPU inference times per partition.
+        Collect CPU inference times from the CPU tab, grouped by model.
         
         Args:
             cpu_table: QTableWidget containing CPU profiling data
@@ -66,9 +66,9 @@ class DataProcessor:
             rel_path = path_item.text()
             infer_time = float(infer_item.text())
             model_key = rel_path.split(os.sep)[0]
-            part_name = os.path.basename(rel_path)
-            if "_p0" in part_name or "_p2" in part_name:
-                cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
+            # 수집 기준 변경: 특정 파티션명(_p0/_p2)로 제한하지 않고,
+            # cpu_tab에 입력된 해당 모델의 모든 파티션/항목의 추론 시간을 합산 대상으로 포함
+            cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
         return cpu_infer_per_partition
     
     def collect_npu_values(self, npu1_table, npu2_table):

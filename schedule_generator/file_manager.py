@@ -316,17 +316,20 @@ class FileManager:
                 
             model = total_table.item(row, 0).text() if total_table.item(row, 0) else ""
             cpu_infer = float(total_table.item(row, 1).text()) if total_table.item(row, 1) else 0.0
-            npu1_load = float(total_table.item(row, 2).text()) if total_table.item(row, 2) else 0.0
-            npu1_infer = float(total_table.item(row, 3).text()) if total_table.item(row, 3) else 0.0
-            npu2_load = float(total_table.item(row, 4).text()) if total_table.item(row, 4) else 0.0
-            npu2_infer = float(total_table.item(row, 5).text()) if total_table.item(row, 5) else 0.0
+            npu1_infer = float(total_table.item(row, 2).text()) if total_table.item(row, 2) else 0.0
+            # After UI change, column 3 (index) may not exist; guard access
+            if total_table.columnCount() > 3 and total_table.item(row, 3):
+                try:
+                    npu2_infer = float(total_table.item(row, 3).text())
+                except Exception:
+                    npu2_infer = 0.0
+            else:
+                npu2_infer = 0.0
             
             sample_data["total_data"].append({
                 "model": model,
                 "cpu_infer": cpu_infer,
-                "npu1_load": npu1_load,
                 "npu1_infer": npu1_infer,
-                "npu2_load": npu2_load,
                 "npu2_infer": npu2_infer
             })
         

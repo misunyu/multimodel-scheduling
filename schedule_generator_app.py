@@ -1,10 +1,7 @@
 import os
 import sys
-import time
-import json
-import numpy as np
 from PyQt5 import uic
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, QThread
 from PyQt5.QtWidgets import (
     QMainWindow, QApplication, QDialog,
     QTreeView, QPlainTextEdit, QTableWidget, QAction,
@@ -16,12 +13,64 @@ from PyQt5.QtWidgets import (
 from schedule_generator import (
     ModelProfiler, DataProcessor, UIComponents, FileManager
 )
-from image_processing import (
-    yolo_preprocess_local,
-    resnet50_preprocess_local,
-    yolo_postprocess_cpu,
-    resnet50_postprocess_local,
-)
+
+class CPUProfileWorker(QObject):
+    """Background worker to profile models on CPU without blocking UI."""
+    result = pyqtSignal(str, float, float)  # rel_path, load_ms, infer_ms
+    progress = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal(dict)  # valid_model_onnx mapping
+
+    def __init__(self, onnx_files, root_folder):
+        super().__init__()
+        self.onnx_files = list(onnx_files)
+        self.root_folder = root_folder
+        self.profiler = ModelProfiler()  # no UI callback inside worker
+
+    def run(self):
+        valid_model_onnx = {}
+        for path in self.onnx_files:
+            try:
+                if self.profiler.contains_custom_op(path):
+                    self.progress.emit(f"[Skip] {path} contains custom ops\n")
+                    continue
+                load_ms, infer_ms, _ = self.profiler.profile_model_cpu(path)
+                rel_path = os.path.relpath(path, self.root_folder)
+                self.result.emit(rel_path, load_ms, infer_ms)
+                parts = rel_path.split(os.sep)
+                if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
+                    model_key = parts[0]
+                    if model_key not in valid_model_onnx:
+                        valid_model_onnx[model_key] = [0.0, 0.0]
+                    valid_model_onnx[model_key][0] += load_ms
+                    valid_model_onnx[model_key][1] += infer_ms
+            except Exception as e:
+                self.error.emit(f"Skipping {path}: {e}")
+        self.finished.emit(valid_model_onnx)
+
+
+class GPUProfileWorker(QObject):
+    """Background worker to profile models on GPU without blocking UI."""
+    result = pyqtSignal(str, float, float)  # rel_path, load_ms, infer_ms
+    progress = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, onnx_files, root_folder):
+        super().__init__()
+        self.onnx_files = list(onnx_files)
+        self.root_folder = root_folder
+        self.profiler = ModelProfiler()  # no UI callback inside worker
+
+    def run(self):
+        for path in self.onnx_files:
+            try:
+                rel_path = os.path.relpath(path, self.root_folder)
+                load_ms, infer_ms, _ = self.profiler.profile_model_gpu(path)
+                self.result.emit(rel_path, load_ms, infer_ms)
+            except Exception as e:
+                self.error.emit(f"GPU profiling failed for {path}: {e}")
+        self.finished.emit()
 
 class ONNXProfilerApp(QMainWindow):
     """
@@ -72,6 +121,12 @@ class ONNXProfilerApp(QMainWindow):
         
         # Flag to prevent multiple simultaneous profiling runs
         self._profiling_in_progress = False
+        # Threads
+        self._cpu_thread = None
+        self._gpu_thread = None
+        # Cache tab pages
+        self.cpu_tab_widget = self.findChild(QWidget, "cpu_tab")
+        self.gpu_tab_widget = self.findChild(QWidget, "gpu_tab")
     
     def setup_ui_elements(self):
         """Find and set up UI elements."""
@@ -102,7 +157,6 @@ class ONNXProfilerApp(QMainWindow):
         # Create hidden placeholder for legacy NPU2 table
         self.npu2_table = QTableWidget(self)
         self.npu2_table.setVisible(False)
-        self.pre_post_table = self.findChild(QTableWidget, "pre_post_table")
         
         # Set up table headers
         for table in [self.cpu_table, self.npu1_table]:
@@ -110,16 +164,7 @@ class ONNXProfilerApp(QMainWindow):
             header.setStretchLastSection(True)
             header.setSectionResizeMode(QHeaderView.ResizeToContents)
         
-        # Initialize Pre/Post table headers
-        if self.pre_post_table:
-            self.pre_post_table.clear()
-            self.pre_post_table.setColumnCount(2)
-            self.pre_post_table.setHorizontalHeaderLabels(["Function", "Avg (ms)"])
-            self.pre_post_table.setRowCount(0)
-            ph = self.pre_post_table.horizontalHeader()
-            ph.setStretchLastSection(True)
-            ph.setSectionResizeMode(0, QHeaderView.Stretch)
-            ph.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        # Removed Pre/Post table (pre_post_table) and related UI setup
         
         # Create and add legend label
         self.legend_label = QLabel()
@@ -292,26 +337,85 @@ class ONNXProfilerApp(QMainWindow):
                     filtered_onnx_files.append(p)
             onnx_files = filtered_onnx_files
             
-            # Profile ONNX models
-            valid_model_onnx = self._profile_onnx_models(onnx_files, root_folder)
-            
-            # Profile ONNX models on GPU (Apple CoreML EP)
-            self._profile_onnx_models_gpu(onnx_files, root_folder)
-            
-            # Process profiling results
-            if self.total_table:
-                self._process_profiling_results(valid_model_onnx, root_folder)
-
-            # At the end of profiling, compute and display pre/post average times
-            self._profile_pre_post_avg_times()
+            # Start non-blocking profiling using background threads
+            self._start_cpu_profiling_async(onnx_files, root_folder)
         
         except Exception as e:
             self.log_message(f"[Error] Profiling failed: {str(e)}\n")
-        finally:
-            # Re-enable button and reset progress flag
+            # If setup failed before starting workers, re-enable UI here
             self._profiling_in_progress = False
             self.profile_button.setEnabled(True)
-            self.log_message("[Complete] Profiling finished.\n")
+        finally:
+            # UI re-enable will be handled when workers finish
+            pass
+
+    # ----------------------
+    # Async profiling (QThread)
+    # ----------------------
+    def _start_cpu_profiling_async(self, onnx_files, root_folder):
+        # Switch to CPU tab while filling
+        if self.result_tabs and self.cpu_tab_widget:
+            self.result_tabs.setCurrentWidget(self.cpu_tab_widget)
+        # Set up worker and thread
+        self._cpu_thread = QThread(self)
+        self._cpu_worker = CPUProfileWorker(onnx_files, root_folder)
+        self._cpu_worker.moveToThread(self._cpu_thread)
+        # Connect signals
+        self._cpu_thread.started.connect(self._cpu_worker.run)
+        self._cpu_worker.result.connect(self._on_cpu_result)
+        self._cpu_worker.progress.connect(self.log_message)
+        self._cpu_worker.error.connect(lambda msg: self.log_message(f"[Error] {msg}"))
+        self._cpu_worker.finished.connect(lambda valid_map: self._on_cpu_finished(valid_map, onnx_files, root_folder))
+        self._cpu_worker.finished.connect(self._cpu_thread.quit)
+        self._cpu_worker.finished.connect(self._cpu_worker.deleteLater)
+        self._cpu_thread.finished.connect(self._cpu_thread.deleteLater)
+        # Start thread
+        self._cpu_thread.start()
+
+    def _on_cpu_result(self, rel_path, load_ms, infer_ms):
+        # Update CPU table in GUI thread
+        self.ui_components.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms)
+        self.log_message(f"[CPU] {rel_path}")
+        self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+
+    def _on_cpu_finished(self, valid_model_onnx, onnx_files, root_folder):
+        # After CPU finished, start GPU profiling
+        self._start_gpu_profiling_async(onnx_files, root_folder, valid_model_onnx)
+
+    def _start_gpu_profiling_async(self, onnx_files, root_folder, valid_model_onnx):
+        # Switch to GPU tab while filling
+        if self.result_tabs and self.gpu_tab_widget:
+            self.result_tabs.setCurrentWidget(self.gpu_tab_widget)
+        # Set up worker and thread
+        self._gpu_thread = QThread(self)
+        self._gpu_worker = GPUProfileWorker(onnx_files, root_folder)
+        self._gpu_worker.moveToThread(self._gpu_thread)
+        # Connect signals
+        self._gpu_thread.started.connect(self._gpu_worker.run)
+        self._gpu_worker.result.connect(self._on_gpu_result)
+        self._gpu_worker.progress.connect(self.log_message)
+        self._gpu_worker.error.connect(lambda msg: self.log_message(f"[Error] {msg}"))
+        # When GPU finished, process totals and wrap up
+        def _gpu_done():
+            try:
+                if self.total_table:
+                    self._process_profiling_results(valid_model_onnx, root_folder)
+            finally:
+                self._profiling_in_progress = False
+                self.profile_button.setEnabled(True)
+                self.log_message("[Complete] Profiling finished.\n")
+        self._gpu_worker.finished.connect(_gpu_done)
+        self._gpu_worker.finished.connect(self._gpu_thread.quit)
+        self._gpu_worker.finished.connect(self._gpu_worker.deleteLater)
+        self._gpu_thread.finished.connect(self._gpu_thread.deleteLater)
+        # Start thread
+        self._gpu_thread.start()
+
+    def _on_gpu_result(self, rel_path, load_ms, infer_ms):
+        # Update GPU table (aliased as npu1_table) in GUI thread
+        self.ui_components.insert_result_row(self.npu1_table, rel_path, load_ms, infer_ms)
+        self.log_message(f"[GPU] {rel_path}")
+        self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
     
     def _initialize_profiling_ui(self):
         """Initialize UI for profiling."""
@@ -323,12 +427,7 @@ class ONNXProfilerApp(QMainWindow):
         self.ui_components.init_table(self.cpu_table)
         self.ui_components.init_table(self.npu1_table)
         
-        # Reset Pre/Post table
-        if hasattr(self, 'pre_post_table') and self.pre_post_table is not None:
-            self.pre_post_table.clear()
-            self.pre_post_table.setColumnCount(2)
-            self.pre_post_table.setHorizontalHeaderLabels(["Function", "Avg (ms)"])
-            self.pre_post_table.setRowCount(0)
+        # Pre/Post table removed
         
         # Clear profiled data
         self.profiled_times = []
@@ -406,112 +505,22 @@ class ONNXProfilerApp(QMainWindow):
         """Calculate and display total values in the total table."""
         # Calculate totals
         cpu_infer_total = 0.0
-        npu1_load_total = 0.0
-        npu1_infer_total = 0.0
-        npu2_load_total = 0.0
-        npu2_infer_total = 0.0
+        gpu_infer_total = 0.0
         
         for row in range(self.total_table.rowCount()):
             try:
                 cpu_infer_total += float(self.total_table.item(row, 1).text())
-                npu1_load_total += float(self.total_table.item(row, 2).text())
-                npu1_infer_total += float(self.total_table.item(row, 3).text())
-                npu2_load_total += float(self.total_table.item(row, 4).text())
-                npu2_infer_total += float(self.total_table.item(row, 5).text())
+                gpu_infer_total += float(self.total_table.item(row, 2).text())
             except:
                 pass
         
         # Add total row
         self.ui_components.add_total_row(
-            self.total_table, cpu_infer_total, npu1_load_total, 
-            npu1_infer_total, npu2_load_total, npu2_infer_total
+            self.total_table, cpu_infer_total, 
+            gpu_infer_total
         )
 
-    def _profile_pre_post_avg_times(self):
-        """Run specified pre/post-processing functions 10 times with dummy inputs and display their average times in pre_post_table."""
-        if not hasattr(self, 'pre_post_table') or self.pre_post_table is None:
-            return
-
-        # Prepare dummy images
-        img_h, img_w = 720, 1280
-        raw_img = (np.random.randint(0, 256, size=(img_h, img_w, 3), dtype=np.uint8))
-
-        # Helper to time a callable 10 times
-        def avg_time_ms(fn, *args, **kwargs):
-            total = 0.0
-            for _ in range(10):
-                t0 = time.perf_counter()
-                _ = fn(*args, **kwargs)
-                t1 = time.perf_counter()
-                total += (t1 - t0) * 1000.0
-            return total / 10.0
-
-        # Build dummy outputs for postprocess functions
-        # For YOLO CPU postprocess: output[0] -> rows of [cx, cy, w, h, obj_conf, class_probs...]
-        rows_cpu = 50
-        cols_cpu = 85  # 4 + 1 + 80 class probs (typical YOLOv5), enough for indexing
-        yolo_cpu_output0 = np.zeros((rows_cpu, cols_cpu), dtype=np.float32)
-        # center x,y around input size 608 used inside image_processing, but any values ok
-        yolo_cpu_output0[:, 0:4] = np.random.rand(rows_cpu, 4).astype(np.float32) * 608.0
-        yolo_cpu_output0[:, 4] = np.random.rand(rows_cpu).astype(np.float32)  # object confidence
-        yolo_cpu_output0[:, 5:] = np.random.rand(rows_cpu, cols_cpu - 5).astype(np.float32)
-        yolo_cpu_output = [yolo_cpu_output0]
-
-        # Compute averages
-        results = []
-        try:
-            avg1 = avg_time_ms(yolo_preprocess_local, raw_img)
-            results.append(("yolo_preprocess_local", avg1))
-        except Exception as e:
-            self.log_message(f"[Warn] yolo_preprocess_local timing failed: {e}")
-        try:
-            avg2 = avg_time_ms(resnet50_preprocess_local, raw_img)
-            results.append(("resnet50_preprocess_local", avg2))
-        except Exception as e:
-            self.log_message(f"[Warn] resnet50_preprocess_local timing failed: {e}")
-        try:
-            # Wrap CPU output to include batch dimension and build meta with no letterbox
-            cpu_out_wrapped = [yolo_cpu_output0[None, ...]]
-            meta_dummy = {"orig_w": img_w, "orig_h": img_h, "ratio": 1.0, "pad": (0, 0), "input_size": (608, 608)}
-            avg3 = avg_time_ms(yolo_postprocess_cpu, cpu_out_wrapped, raw_img.copy(), meta_dummy)
-            results.append(("yolo_postprocess_cpu", avg3))
-        except Exception as e:
-            self.log_message(f"[Warn] yolo_postprocess_cpu timing failed: {e}")
-        # Note: NPU-specific postprocess removed
-        try:
-            # Dummy logits for ResNet50: 1 x 1000
-            logits_dummy = np.random.randn(1, 1000).astype(np.float32)
-            avg5 = avg_time_ms(resnet50_postprocess_local, logits_dummy, raw_img.copy(), True)
-            results.append(("resnet50_postprocess_local", avg5))
-        except Exception as e:
-            self.log_message(f"[Warn] resnet50_postprocess_local timing failed: {e}")
-
-        # Update table
-        self.pre_post_table.setRowCount(0)
-        self.pre_post_table.setColumnCount(2)
-        self.pre_post_table.setHorizontalHeaderLabels(["Function", "Avg (ms)"])
-        for name, avg_ms in results:
-            row = self.pre_post_table.rowCount()
-            self.pre_post_table.insertRow(row)
-            from PyQt5.QtWidgets import QTableWidgetItem
-            self.pre_post_table.setItem(row, 0, QTableWidgetItem(name))
-            self.pre_post_table.setItem(row, 1, QTableWidgetItem(f"{avg_ms:.2f}"))
-
-        # Log results
-        if results:
-            self.log_message("[Pre-Post] Average times (10 runs):")
-            for name, avg_ms in results:
-                self.log_message(f"  - {name}: {avg_ms:.2f} ms")
-        
-        # Save results to static_pre_post_time.json in project root
-        try:
-            data = {name: round(float(avg_ms), 2) for name, avg_ms in results}
-            out_path = os.path.join(os.path.dirname(__file__), "static_pre_post_time.json")
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-            self.log_message(f"[Pre-Post] Saved averages to {out_path}\n")
-        except Exception as e:
-            self.log_message(f"[Warn] Failed to save static_pre_post_time.json: {e}\n")
+    # Removed _profile_pre_post_avg_times and related functionality
     
     def generate_all_combinations(self, models=None):
         """Generate all possible model-to-device combinations."""
@@ -721,11 +730,12 @@ class ONNXProfilerApp(QMainWindow):
         # Process results
         all_models = set(item["model"] for item in sample_data.get("total_data", []))
         
-        # Extract NPU data
-        npu1_load = {item["model"]: item["npu1_load"] for item in sample_data.get("total_data", [])}
-        npu1_infer = {item["model"]: item["npu1_infer"] for item in sample_data.get("total_data", [])}
-        npu2_load = {item["model"]: item["npu2_load"] for item in sample_data.get("total_data", [])}
-        npu2_infer = {item["model"]: item["npu2_infer"] for item in sample_data.get("total_data", [])}
+        # Extract NPU data (Load columns removed in total_data schema)
+        npu1_infer = {item["model"]: item.get("npu1_infer", 0.0) for item in sample_data.get("total_data", [])}
+        npu2_infer = {item["model"]: item.get("npu2_infer", 0.0) for item in sample_data.get("total_data", [])}
+        # For backward compatibility, ignore potential npu1_load/npu2_load fields if present.
+        npu1_load = {}
+        npu2_load = {}
         
         # Populate total table
         self.ui_components.populate_total_table(
