@@ -29,6 +29,10 @@ class ModelProfiler:
         if self.log_callback:
             self.log_callback(message)
     
+    def _is_llm(self, model_path: str) -> bool:
+        name = os.path.basename(model_path).lower() if model_path else ""
+        return ("gpt2" in name) or ("tiny-llama" in name)
+    
     def safe_shape_value(self, s):
         """Convert shape dimension to int if possible, otherwise keep as is."""
         try:
@@ -186,17 +190,21 @@ class ModelProfiler:
             input_tensors = {}
             for input_tensor in session.get_inputs():
                 input_tensors[input_tensor.name] = self.get_dummy_input(input_tensor)
-            
-            # Warm-up run
+
+            # Warm-up run (always exclude from average); log only for LLM
+            t0w = time.time()
             session.run(None, input_tensors)
-            
-            # Timed runs
+            warmup_ms = (time.time() - t0w) * 1000.0
+            if self._is_llm(model_path):
+                self.log(f"[Warmup][CPU] {os.path.basename(model_path)}: {warmup_ms:.1f} ms")
+
+            # Timed runs (10x) average in ms
             num_runs = 10
             start_time = time.time()
             for _ in range(num_runs):
                 session.run(None, input_tensors)
             end_time = time.time()
-            
+
             return (end_time - start_time) * 1000 / num_runs  # Average time in ms
         
         # Profile inference
@@ -243,8 +251,12 @@ class ModelProfiler:
         for input_tensor in session.get_inputs():
             input_tensors[input_tensor.name] = self.get_dummy_input(input_tensor)
 
-        # Warm-up
+        # Warm-up (exclude from average); log only for LLM
+        t0w = time.time()
         session.run(None, input_tensors)
+        warmup_ms = (time.time() - t0w) * 1000.0
+        if self._is_llm(model_path):
+            self.log(f"[Warmup][GPU] {os.path.basename(model_path)}: {warmup_ms:.1f} ms")
 
         # Timed runs
         num_runs = 10

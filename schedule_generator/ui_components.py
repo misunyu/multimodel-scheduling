@@ -43,11 +43,11 @@ class UIComponents:
             table: QTableWidget to initialize
         """
         table.clear()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Model", "Load (ms)", "Inference (ms)"])
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Model", "Load (ms)", "Inference (ms)", "Tokens/s"])
         table.setRowCount(0)
     
-    def insert_result_row(self, table, model_file, load_ms, infer_ms):
+    def insert_result_row(self, table, model_file, load_ms, infer_ms, tokens_per_s: Optional[float] = None):
         """
         Insert a result row into a table.
         
@@ -62,6 +62,8 @@ class UIComponents:
         table.setItem(row, 0, QTableWidgetItem(model_file))
         table.setItem(row, 1, QTableWidgetItem(f"{load_ms:.1f}"))
         table.setItem(row, 2, QTableWidgetItem(f"{infer_ms:.1f}"))
+        tok_text = "-" if tokens_per_s is None else f"{tokens_per_s:.2f}"
+        table.setItem(row, 3, QTableWidgetItem(tok_text))
     
     def initialize_total_table(self, total_table):
         """
@@ -72,17 +74,20 @@ class UIComponents:
         """
         total_table.clear()
         # Result tab: remove NPU2 column; rename NPU1 to GPU (+ CPU Offloading)
-        total_table.setColumnCount(3)
+        # Add separate Tokens/s columns for CPU and GPU
+        total_table.setColumnCount(5)
         total_table.setHorizontalHeaderLabels([
             "Model",
             "CPU Inf. (ms)",
-            "GPU + CPU Offloading (ms)"
+            "GPU + CPU Offloading (ms)",
+            "CPU Tokens/s",
+            "GPU Tokens/s"
         ])
         total_table.setRowCount(0)
 
         header = total_table.horizontalHeader()
         header.setStretchLastSection(True)
-        for i in range(3):
+        for i in range(5):
             header.setSectionResizeMode(i, QHeaderView.Stretch)
     
     def populate_total_table(self, total_table, all_models, valid_model_onnx, 
@@ -100,22 +105,60 @@ class UIComponents:
             cpu_infer_per_partition: CPU inference times per partition
         """
         # Add rows for each model
+        def is_llm(name: str) -> bool:
+            n = (name or "").lower()
+            return ("gpt2" in n) or ("tiny-llama" in n)
+
+        # Common test sentence for LLM throughput (tokens/s)
+        # Widely used pangram
+        test_sentence = "The quick brown fox jumps over the lazy dog."
+        test_tokens = max(1, len(test_sentence.strip().split()))
+
         for model in sorted(all_models):
             row = total_table.rowCount()
             total_table.insertRow(row)
             
-            # Model name
-            total_table.setItem(row, 0, QTableWidgetItem(model))
+            # Model name (ensure tiny-llama shows folder + filename when needed)
+            disp = model
+            try:
+                ml = (model or "").lower()
+                if ("tiny-llama" in ml) and ("/" not in model) and ("\\" not in model):
+                    disp = "tiny-llama-chat-onnx/model.onnx"
+            except Exception:
+                pass
+            total_table.setItem(row, 0, QTableWidgetItem(disp))
             
             # CPU inference time: cpu_tab의 값(모든 항목 합계)을 사용
             cpu_infer = 0.0
+            # 우선 원래 key(model)로 조회하고, 실패 시 표시용 이름(disp)으로 보조 조회
             if model in cpu_infer_per_partition:
                 cpu_infer = sum(cpu_infer_per_partition[model])
+            elif disp in cpu_infer_per_partition:
+                cpu_infer = sum(cpu_infer_per_partition[disp])
             total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
             
             # GPU inference time (previously NPU1; Load columns removed)
             npu1_infer_time = npu1_infer.get(model, 0.0)
+            # 모델명이 표기용으로 정규화(disp)된 경우 보조 조회
+            if (not isinstance(npu1_infer_time, (int, float)) or npu1_infer_time <= 0) and disp != model:
+                npu1_infer_time = npu1_infer.get(disp, npu1_infer_time)
             total_table.setItem(row, 2, QTableWidgetItem(f"{npu1_infer_time:.1f}"))
+
+            # Tokens/s (LLM only): compute separately for CPU and GPU
+            cpu_tps_item = QTableWidgetItem("-")
+            gpu_tps_item = QTableWidgetItem("-")
+            # LLM 감지는 표시용 이름(disp)을 기준으로 수행해야 tiny-llama 정규화 케이스를 놓치지 않음
+            if is_llm(disp):
+                # CPU tokens/s
+                if isinstance(cpu_infer, (int, float)) and cpu_infer > 0:
+                    cpu_tps = test_tokens / (cpu_infer / 1000.0)
+                    cpu_tps_item = QTableWidgetItem(f"{cpu_tps:.2f}")
+                # GPU tokens/s
+                if isinstance(npu1_infer_time, (int, float)) and npu1_infer_time > 0:
+                    gpu_tps = test_tokens / (npu1_infer_time / 1000.0)
+                    gpu_tps_item = QTableWidgetItem(f"{gpu_tps:.2f}")
+            total_table.setItem(row, 3, cpu_tps_item)
+            total_table.setItem(row, 4, gpu_tps_item)
     
     def add_total_row(self, total_table, cpu_infer_total, 
                      gpu_infer_total):
@@ -148,6 +191,9 @@ class UIComponents:
         gpu_infer_item = QTableWidgetItem(f"{gpu_infer_total:.1f}")
         gpu_infer_item.setFont(bold_font)
         total_table.setItem(row, 2, gpu_infer_item)
+        # Tokens/s columns for Total: not applicable
+        total_table.setItem(row, 3, QTableWidgetItem("-"))
+        total_table.setItem(row, 4, QTableWidgetItem("-"))
     
     def highlight_deploy_results(self, total_table, times, models):
         """
@@ -371,34 +417,10 @@ class UIComponents:
         # Add subplot
         ax = figure.add_subplot(111)
         
-        # Helper function to get inference time for a partition
-        def get_inference_time(partition_name, primary_device):
-            if primary_device == "CPU":
-                table = cpu_table
-            elif primary_device == "NPU1":
-                table = npu1_table
-            elif primary_device == "NPU2":
-                table = npu2_table
-            else:
-                return 0.0
-                
-            for row in range(table.rowCount()):
-                path_item = table.item(row, 0)
-                if not path_item:
-                    continue
-                    
-                path = path_item.text()
-                if partition_name in path:
-                    infer_item = table.item(row, 2)
-                    if infer_item:
-                        return float(infer_item.text())
-            return 0.0
-        
-        # Prepare data for plotting
+        # Prepare data for plotting (모델 분할 미사용: 파일 이름 기준으로 그룹핑)
         model_names = []
         cpu_times = []
-        npu1_times = []
-        npu2_times = []
+        gpu_times = []
         
         for model in models:
             model_names.append(model)
@@ -407,45 +429,34 @@ class UIComponents:
             cpu_time = 0.0
             for row in range(cpu_table.rowCount()):
                 path_item = cpu_table.item(row, 0)
-                if path_item and model in path_item.text():
+                if path_item and model in os.path.splitext(os.path.basename(path_item.text()))[0]:
                     infer_item = cpu_table.item(row, 2)
                     if infer_item:
                         cpu_time += float(infer_item.text())
             cpu_times.append(cpu_time)
             
-            # Get NPU1 inference time
+            # Get GPU(NPU1) inference time
             npu1_time = 0.0
             for row in range(npu1_table.rowCount()):
                 path_item = npu1_table.item(row, 0)
-                if path_item and model in path_item.text():
+                if path_item and model in os.path.splitext(os.path.basename(path_item.text()))[0]:
                     infer_item = npu1_table.item(row, 2)
                     if infer_item:
                         npu1_time += float(infer_item.text())
-            npu1_times.append(npu1_time)
-            
-            # Get NPU2 inference time
-            npu2_time = 0.0
-            for row in range(npu2_table.rowCount()):
-                path_item = npu2_table.item(row, 0)
-                if path_item and model in path_item.text():
-                    infer_item = npu2_table.item(row, 2)
-                    if infer_item:
-                        npu2_time += float(infer_item.text())
-            npu2_times.append(npu2_time)
+            gpu_times.append(npu1_time)
         
         # Set up bar positions
         x = range(len(model_names))
-        width = 0.25
+        width = 0.35
         
         # Create bars
-        ax.bar([i - width for i in x], cpu_times, width, label='CPU', color='skyblue')
-        ax.bar(x, npu1_times, width, label='NPU1', color='gold')
-        ax.bar([i + width for i in x], npu2_times, width, label='NPU2', color='orange')
+        ax.bar([i - width/2 for i in x], cpu_times, width, label='CPU', color='skyblue')
+        ax.bar([i + width/2 for i in x], gpu_times, width, label='GPU', color='gold')
         
         # Add labels and legend
         ax.set_xlabel('Models')
         ax.set_ylabel('Inference Time (ms)')
-        ax.set_title('Inference Time Comparison')
+        ax.set_title('Inference Time Comparison (CPU vs GPU)')
         ax.set_xticks(x)
         ax.set_xticklabels(model_names, rotation=45, ha='right')
         ax.legend()
@@ -467,7 +478,7 @@ class UIComponents:
             QDialog instance
         """
         dialog = QDialog(parent)
-        dialog.setWindowTitle("Partition Assignments")
+        dialog.setWindowTitle("Model Assignments")
         dialog.setMinimumWidth(400)
         dialog.setMinimumHeight(300)
         

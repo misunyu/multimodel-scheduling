@@ -266,10 +266,10 @@ class FileManager:
             Path to the saved file
         """
         # Prepare data structure
+        # Requirement: remove NPU2-related contents and rename NPU1 to GPU
         sample_data = {
             "cpu_data": [],
-            "npu1_data": [],
-            "npu2_data": [],
+            "gpu_data": [],
             "total_data": []
         }
         
@@ -285,52 +285,95 @@ class FileManager:
                 "infer": infer
             })
         
-        # Extract NPU1 data
+        # Extract GPU data (previously NPU1)
         for row in range(npu1_table.rowCount()):
             model = npu1_table.item(row, 0).text() if npu1_table.item(row, 0) else ""
             load = float(npu1_table.item(row, 1).text()) if npu1_table.item(row, 1) else 0.0
             infer = float(npu1_table.item(row, 2).text()) if npu1_table.item(row, 2) else 0.0
-            
-            sample_data["npu1_data"].append({
+
+            sample_data["gpu_data"].append({
                 "model": model,
                 "load": load,
                 "infer": infer
             })
         
-        # Extract NPU2 data
-        for row in range(npu2_table.rowCount()):
-            model = npu2_table.item(row, 0).text() if npu2_table.item(row, 0) else ""
-            load = float(npu2_table.item(row, 1).text()) if npu2_table.item(row, 1) else 0.0
-            infer = float(npu2_table.item(row, 2).text()) if npu2_table.item(row, 2) else 0.0
-            
-            sample_data["npu2_data"].append({
-                "model": model,
-                "load": load,
-                "infer": infer
-            })
+        # Do not extract/save NPU2 data (requirement)
         
         # Extract total data
+        # Previous implementation only copied rows that were present in total_table.
+        # If a model exists in CPU/GPU tables but didn't get a row in total_table,
+        # it was missed. To be robust, collect the union of models from CPU table,
+        # GPU(NPU1) table, and total_table, and then fill values preferring
+        # total_table if present, otherwise falling back to per-device tables.
+
+        def _safe_float(item):
+            try:
+                return float(item.text()) if item else 0.0
+            except Exception:
+                return 0.0
+
+        # 1) Build model sets from each table
+        models_cpu: Set[str] = set()
+        for row in range(cpu_table.rowCount()):
+            name_item = cpu_table.item(row, 0)
+            model = name_item.text() if name_item else ""
+            if model:
+                models_cpu.add(model)
+
+        models_gpu: Set[str] = set()
+        for row in range(npu1_table.rowCount()):
+            name_item = npu1_table.item(row, 0)
+            model = name_item.text() if name_item else ""
+            if model:
+                models_gpu.add(model)
+
+        models_total: Set[str] = set()
+        total_cpu_map: Dict[str, float] = {}
+        total_gpu_map: Dict[str, float] = {}
         for row in range(total_table.rowCount()):
-            if row == total_table.rowCount() - 1:  # Skip total row
+            # Skip the last total summary row if present
+            if row == total_table.rowCount() - 1:
                 continue
-                
-            model = total_table.item(row, 0).text() if total_table.item(row, 0) else ""
-            cpu_infer = float(total_table.item(row, 1).text()) if total_table.item(row, 1) else 0.0
-            npu1_infer = float(total_table.item(row, 2).text()) if total_table.item(row, 2) else 0.0
-            # After UI change, column 3 (index) may not exist; guard access
-            if total_table.columnCount() > 3 and total_table.item(row, 3):
-                try:
-                    npu2_infer = float(total_table.item(row, 3).text())
-                except Exception:
-                    npu2_infer = 0.0
-            else:
-                npu2_infer = 0.0
-            
+            name_item = total_table.item(row, 0)
+            model = name_item.text() if name_item else ""
+            if not model:
+                continue
+            models_total.add(model)
+            total_cpu_map[model] = _safe_float(total_table.item(row, 1))
+            total_gpu_map[model] = _safe_float(total_table.item(row, 2))
+
+        # 2) Build fallback sums from CPU/GPU tables
+        cpu_sum_map: Dict[str, float] = {}
+        for row in range(cpu_table.rowCount()):
+            name_item = cpu_table.item(row, 0)
+            model = name_item.text() if name_item else ""
+            if not model:
+                continue
+            infer_val = _safe_float(cpu_table.item(row, 2))
+            cpu_sum_map[model] = cpu_sum_map.get(model, 0.0) + infer_val
+
+        gpu_sum_map: Dict[str, float] = {}
+        for row in range(npu1_table.rowCount()):
+            name_item = npu1_table.item(row, 0)
+            model = name_item.text() if name_item else ""
+            if not model:
+                continue
+            infer_val = _safe_float(npu1_table.item(row, 2))
+            gpu_sum_map[model] = gpu_sum_map.get(model, 0.0) + infer_val
+
+        # 3) Union of all models and emit total_data for each
+        all_models: Set[str] = set()
+        all_models.update(models_cpu)
+        all_models.update(models_gpu)
+        all_models.update(models_total)
+
+        for model in sorted(all_models):
+            cpu_infer = total_cpu_map.get(model, cpu_sum_map.get(model, 0.0))
+            gpu_infer = total_gpu_map.get(model, gpu_sum_map.get(model, 0.0))
             sample_data["total_data"].append({
                 "model": model,
                 "cpu_infer": cpu_infer,
-                "npu1_infer": npu1_infer,
-                "npu2_infer": npu2_infer
+                "gpu_infer": gpu_infer
             })
         
         # Save to file

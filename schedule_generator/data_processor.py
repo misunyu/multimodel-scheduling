@@ -39,7 +39,10 @@ class DataProcessor:
             name_item = table.item(row, 0)
             if not name_item:
                 continue
-            model_name = name_item.text().split(os.sep)[0]
+            # 모델 키는 파일 경로의 최상위 폴더가 아니라 파일 이름(확장자 제거)을 사용
+            path_text = name_item.text()
+            base = os.path.basename(path_text)
+            model_name, _ = os.path.splitext(base)
             try:
                 val = float(table.item(row, col_index).text())
                 values.setdefault(model_name, []).append(val)
@@ -65,9 +68,10 @@ class DataProcessor:
                 continue
             rel_path = path_item.text()
             infer_time = float(infer_item.text())
-            model_key = rel_path.split(os.sep)[0]
-            # 수집 기준 변경: 특정 파티션명(_p0/_p2)로 제한하지 않고,
-            # cpu_tab에 입력된 해당 모델의 모든 파티션/항목의 추론 시간을 합산 대상으로 포함
+            # 모델 키는 파일 이름(확장자 제거)
+            base = os.path.basename(rel_path)
+            model_key, _ = os.path.splitext(base)
+            # cpu_tab에 입력된 해당 모델의 모든 항목의 추론 시간을 합산 대상으로 포함
             cpu_infer_per_partition.setdefault(model_key, []).append(infer_time)
         return cpu_infer_per_partition
     
@@ -107,8 +111,9 @@ class DataProcessor:
         # Collect NPU values
         npu1_load, npu1_infer, npu2_load, npu2_infer = self.collect_npu_values(npu1_table, npu2_table)
         
-        # Get all unique model names
-        all_models = set(valid_model_onnx.keys()).union(
+        # Get all unique model names (명시적 분할 미사용: 파일 이름 기준 키)
+        # valid_model_onnx에 있는 키는 무시하고, 실제 테이블에서 수집한 키들만 사용
+        all_models = set(cpu_infer_per_partition.keys()).union(
             npu1_load.keys(), npu1_infer.keys(), npu2_load.keys(), npu2_infer.keys()
         )
         
@@ -170,33 +175,4 @@ class DataProcessor:
             
         return assignments
     
-    def find_partition_files(self, root_folder, model_prefix, device):
-        """
-        Find partition files for a model and device.
-        
-        Args:
-            root_folder: Root folder containing model files
-            model_prefix: Model prefix/name
-            device: Device name (CPU, NPU1, NPU2)
-            
-        Returns:
-            List of partition file paths
-        """
-        partition_files = []
-        model_dir = os.path.join(root_folder, model_prefix, "model")
-        
-        if not os.path.isdir(model_dir):
-            return []
-        
-        # For CPU, look for ONNX files
-        if device == "CPU":
-            for f in os.listdir(model_dir):
-                if f.endswith(".onnx"):
-                    partition_files.append(os.path.join(model_dir, f))
-        # For NPU, look for .o files
-        elif device in ["NPU1", "NPU2"]:
-            for f in os.listdir(model_dir):
-                if f.endswith(".o"):
-                    partition_files.append(os.path.join(model_dir, f))
-        
-        return partition_files
+    # 파티션 파일 관련 기능은 더 이상 사용하지 않음 (명시적 분할 미사용)

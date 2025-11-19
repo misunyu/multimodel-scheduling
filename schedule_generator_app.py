@@ -25,7 +25,8 @@ class CPUProfileWorker(QObject):
         super().__init__()
         self.onnx_files = list(onnx_files)
         self.root_folder = root_folder
-        self.profiler = ModelProfiler()  # no UI callback inside worker
+        # Forward profiler logs (e.g., LLM warmup) to GUI via progress signal
+        self.profiler = ModelProfiler(log_callback=self.progress.emit)
 
     def run(self):
         valid_model_onnx = {}
@@ -60,7 +61,8 @@ class GPUProfileWorker(QObject):
         super().__init__()
         self.onnx_files = list(onnx_files)
         self.root_folder = root_folder
-        self.profiler = ModelProfiler()  # no UI callback inside worker
+        # Forward profiler logs (e.g., LLM warmup) to GUI via progress signal
+        self.profiler = ModelProfiler(log_callback=self.progress.emit)
 
     def run(self):
         for path in self.onnx_files:
@@ -374,9 +376,14 @@ class ONNXProfilerApp(QMainWindow):
 
     def _on_cpu_result(self, rel_path, load_ms, infer_ms):
         # Update CPU table in GUI thread
-        self.ui_components.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms)
-        self.log_message(f"[CPU] {rel_path}")
-        self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+        disp_path = self._normalize_display_model(rel_path)
+        tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
+        self.ui_components.insert_result_row(self.cpu_table, disp_path, load_ms, infer_ms, tokens_per_s)
+        self.log_message(f"[CPU] {disp_path}")
+        if tokens_per_s is not None:
+            self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms, Throughput: {tokens_per_s:.2f} tokens/s\n")
+        else:
+            self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
 
     def _on_cpu_finished(self, valid_model_onnx, onnx_files, root_folder):
         # After CPU finished, start GPU profiling
@@ -413,9 +420,50 @@ class ONNXProfilerApp(QMainWindow):
 
     def _on_gpu_result(self, rel_path, load_ms, infer_ms):
         # Update GPU table (aliased as npu1_table) in GUI thread
-        self.ui_components.insert_result_row(self.npu1_table, rel_path, load_ms, infer_ms)
-        self.log_message(f"[GPU] {rel_path}")
-        self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+        disp_path = self._normalize_display_model(rel_path)
+        tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
+        self.ui_components.insert_result_row(self.npu1_table, disp_path, load_ms, infer_ms, tokens_per_s)
+        self.log_message(f"[GPU] {disp_path}")
+        if tokens_per_s is not None:
+            self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms, Throughput: {tokens_per_s:.2f} tokens/s\n")
+        else:
+            self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+
+    def _is_llm_model(self, model_path_or_rel: str) -> bool:
+        n = (model_path_or_rel or "").lower()
+        return ("gpt2" in n) or ("tiny-llama" in n)
+
+    def _test_sentence_tokens(self) -> int:
+        # Widely used English pangram for testing
+        sent = "The quick brown fox jumps over the lazy dog."
+        return max(1, len(sent.strip().split()))
+
+    def _compute_tokens_per_s(self, rel_path: str, infer_ms: float):
+        if not self._is_llm_model(rel_path):
+            return None
+        if not isinstance(infer_ms, (int, float)) or infer_ms <= 0:
+            return None
+        tokens = self._test_sentence_tokens()
+        return tokens / (infer_ms / 1000.0)
+
+    def _normalize_display_model(self, rel_path: str) -> str:
+        """
+        Normalize model display name for known cases. In particular, when the user
+        profiles inside the tiny-llama directory, rel_path can be just 'model.onnx'
+        (or even 'model'). In such a case, show folder + filename to make it clear
+        and to allow LLM detection to work for tokens/s.
+        """
+        try:
+            low = (rel_path or "").lower()
+            # If it already contains tiny-llama keyword, keep as is
+            if "tiny-llama" in low:
+                return rel_path
+            base = os.path.basename(rel_path).lower()
+            if base in ("model.onnx", "model"):
+                return "tiny-llama-chat-onnx/model.onnx"
+            return rel_path
+        except Exception:
+            return rel_path
     
     def _initialize_profiling_ui(self):
         """Initialize UI for profiling."""
@@ -485,7 +533,61 @@ class ONNXProfilerApp(QMainWindow):
             self.data_processor.process_profiling_results(
                 valid_model_onnx, self.cpu_table, self.npu1_table, self.npu2_table
             )
-        
+        # Normalize model identifiers for Total tab so that tiny-llama shows as
+        # 'tiny-llama-chat-onnx/model.onnx' instead of bare 'model' and to ensure
+        # LLM detection/tokens per second calculations work.
+        def _build_base_to_display(table):
+            mapping = {}
+            for row in range(table.rowCount()):
+                name_item = table.item(row, 0)
+                if not name_item:
+                    continue
+                disp = name_item.text() or ""
+                base = os.path.splitext(os.path.basename(disp))[0]
+                # Prefer a mapping that includes folder info when available
+                # If multiple rows share the same base, keep the one that contains
+                # a slash (more informative path) or the longest string.
+                prev = mapping.get(base)
+                if prev is None or ("/" in disp or "\\" in disp) or len(disp) > len(prev):
+                    mapping[base] = disp
+            return mapping
+
+        # Build mapping from base model key (e.g., 'model') to display path used in tables
+        base_to_disp = {}
+        for t in (self.cpu_table, self.npu1_table):
+            m = _build_base_to_display(t)
+            base_to_disp.update(m)
+
+        def _remap_dict_of_float(d: dict) -> dict:
+            remapped = {}
+            for k, v in d.items():
+                disp = base_to_disp.get(k, k)
+                remapped[disp] = v if isinstance(v, (int, float)) else v
+            return remapped
+
+        def _remap_dict_of_list(d: dict) -> dict:
+            remapped = {}
+            for k, v in d.items():
+                disp = base_to_disp.get(k, k)
+                remapped.setdefault(disp, [])
+                remapped[disp].extend(v if isinstance(v, list) else [v])
+            return remapped
+
+        cpu_infer_per_partition = _remap_dict_of_list(cpu_infer_per_partition)
+        npu1_load = _remap_dict_of_float(npu1_load)
+        npu1_infer = _remap_dict_of_float(npu1_infer)
+        # npu2_* kept for interface compatibility though not shown/used
+        npu2_load = _remap_dict_of_float(npu2_load)
+        npu2_infer = _remap_dict_of_float(npu2_infer)
+
+        # Rebuild all_models set from remapped keys
+        all_models = set()
+        all_models.update(cpu_infer_per_partition.keys())
+        all_models.update(npu1_load.keys())
+        all_models.update(npu1_infer.keys())
+        all_models.update(npu2_load.keys())
+        all_models.update(npu2_infer.keys())
+
         # Prepare profiled_times and profiled_models for highlight_deploy_results
         self.profiled_times = []
         self.profiled_models = []
@@ -541,15 +643,13 @@ class ONNXProfilerApp(QMainWindow):
         # Collect model files (same as run_profiling)
         onnx_files, o_files = self.file_manager.collect_model_files(selected_paths)
 
-        # Extract model names from paths
+        # Extract model names from paths (use filename stem; no explicit partitions)
         models = []
         for path in onnx_files:
-            rel_path = os.path.relpath(path, root_folder)
-            parts = rel_path.split(os.sep)
-            if len(parts) >= 1:
-                model_name = parts[0]
-                if model_name not in models:
-                    models.append(model_name)
+            base = os.path.basename(path)
+            model_name, _ = os.path.splitext(base)
+            if model_name not in models:
+                models.append(model_name)
 
         if models is None or len(models) == 0:
             self.log_message("[Warning] No models selected for assignment.")
