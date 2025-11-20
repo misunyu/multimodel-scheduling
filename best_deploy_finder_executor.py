@@ -64,8 +64,8 @@ class BestDeployFinderApp(QMainWindow):
         super().__init__()
         uic.loadUi(os.path.join(os.path.dirname(__file__), 'best_deploy_finder_executor.ui'), self)
 
-        # Default models root to ./models
-        self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models')
+        # Default models root to ./models_onnx
+        self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models_onnx')
 
         # Setup file system model and tree view
         self.fs_model = CheckableFileSystemModel(self)
@@ -149,10 +149,55 @@ class BestDeployFinderApp(QMainWindow):
         fm = FileManager(log_callback=self._log)
         return fm.get_models_from_selection(self.model_tree_view, self.fs_model, self.models_root)
 
+    def _enumerate_models_under_root(self):
+        """Enumerate runnable models under self.models_root for the Input Rate dialog.
+        Rules:
+        - If there is a top-level file with .onnx extension, include it with model name = file stem.
+        - If there is a top-level directory and it contains a file named 'model.onnx', include it with model name = folder name.
+        - If both a file and a folder would yield the same model name, prefer the folder/model.onnx entry.
+        Returns an ordered list of model names (sorted) and an internal mapping name->path kept on self for potential future use.
+        """
+        root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
+        try:
+            entries = os.listdir(root)
+        except Exception as e:
+            self._log(f"[Error] Failed to list models root '{root}': {e}")
+            return []
+
+        name_to_path = {}
+        # First, collect files (*.onnx)
+        for name in entries:
+            path = os.path.join(root, name)
+            if os.path.isfile(path) and name.lower().endswith('.onnx'):
+                model_name = os.path.splitext(name)[0]
+                if model_name and model_name not in name_to_path:
+                    name_to_path[model_name] = path
+        # Then, collect directories containing model.onnx (override if name clashes)
+        for name in entries:
+            path = os.path.join(root, name)
+            if os.path.isdir(path):
+                candidate = os.path.join(path, 'model.onnx')
+                if os.path.isfile(candidate):
+                    model_name = name
+                    # Prefer folder/model.onnx over top-level file with same name
+                    name_to_path[model_name] = candidate
+
+        # Store for potential later usage; dialog only needs names for now
+        try:
+            self._input_rate_model_paths = dict(name_to_path)
+        except Exception:
+            self._input_rate_model_paths = name_to_path
+
+        model_names = sorted(name_to_path.keys())
+        self._log(f"[Info] Detected {len(model_names)} models under root for Input Rate: {', '.join(model_names) if model_names else '(none)'}")
+        return model_names
+
     def on_input_rate_clicked(self):
-        models = self._get_selected_model_names()
+        # New requirement: target files under ./models_onnx and directories containing model.onnx.
+        # Model naming: file .onnx -> file stem; directory/model.onnx -> directory name.
+        models = self._enumerate_models_under_root()
         if not models:
-            self._log("[Warning] No models selected. Please select folders in the model tree.")
+            self._log("[Warning] 모델 루트 폴더에서 실행 대상 모델을 찾지 못했습니다. (.onnx 파일 또는 <folder>/model.onnx)")
             return
         # Load the dialog UI
         dialog_ui_path = os.path.join(os.path.dirname(__file__), 'input_rate_dialog.ui')
@@ -938,7 +983,7 @@ class BestDeployFinderApp(QMainWindow):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Best Deploy Finder GUI')
-    parser.add_argument('--models-root', type=str, help='Path to the models root folder (default: ./models)')
+    parser.add_argument('--models-root', type=str, help='Path to the models root folder (default: ./models_onnx)')
     return parser.parse_args()
 
 
