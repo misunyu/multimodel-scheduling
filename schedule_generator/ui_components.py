@@ -195,14 +195,18 @@ class UIComponents:
         total_table.setItem(row, 3, QTableWidgetItem("-"))
         total_table.setItem(row, 4, QTableWidgetItem("-"))
     
-    def highlight_deploy_results(self, total_table, times, models):
+    def highlight_deploy_results(self, total_table, times, models, device_settings=None):
         """
-        Compute and highlight a globally optimal deployment schedule that minimizes
-        the overall completion time (makespan), considering that:
-        - CPU can execute multiple models/partitions concurrently (parallel), so
-          its total time is the maximum of assigned CPU model times.
-        - Each NPU device is exclusive: it can run only one model/partition at a time,
-          so multiple assignments to the same NPU serialize (sum of their times).
+        Compute and highlight a deployment schedule that (approximately) minimizes
+        the overall completion time (makespan), considering device concurrency limits.
+        Limits come from device_settings if provided (fallback to 1 each):
+          - CPU parallel slots: devices.cpu.count (>=1)
+          - GPU device count:  devices.gpu.count or devices.npu.count (>=1)
+
+        Scheduling model:
+          - CPU side: up to K parallel slots; makespan is computed via LPT list scheduling.
+          - GPU side: up to D devices in parallel; makespan is computed via LPT list scheduling.
+
         The function also saves the chosen assignments to static_best_schedule.json.
         
         Args:
@@ -258,6 +262,63 @@ class UIComponents:
         if not models_data:
             return
 
+        # Resolve concurrency limits from settings
+        def _get_int(d, *path, default=1):
+            try:
+                cur = d
+                for k in path:
+                    if cur is None:
+                        return default
+                    cur = cur.get(k)
+                if isinstance(cur, int) and cur >= 1:
+                    return cur
+                # If nested dict with 'count'
+                if isinstance(cur, dict):
+                    c = cur.get('count')
+                    if isinstance(c, int) and c >= 1:
+                        return c
+            except Exception:
+                pass
+            return default
+
+        cpu_parallel = 1
+        gpu_devices = 1
+        if isinstance(device_settings, dict):
+            devs = device_settings.get('devices') or {}
+            # support both lowercase and uppercase keys and legacy 'npu'
+            # CPU
+            cpu_parallel = _get_int(device_settings, 'devices', 'cpu', default=1)
+            if cpu_parallel == 1:
+                cpu_parallel = _get_int(device_settings, 'devices', 'CPU', default=1)
+            # GPU from either 'gpu' or legacy 'npu'
+            gpu_devices = _get_int(device_settings, 'devices', 'gpu', default=1)
+            if gpu_devices == 1:
+                gpu_devices = _get_int(device_settings, 'devices', 'GPU', default=1)
+            if gpu_devices == 1:
+                gpu_devices = _get_int(device_settings, 'devices', 'npu', default=1)
+            if gpu_devices == 1:
+                gpu_devices = _get_int(device_settings, 'devices', 'NPU', default=1)
+
+        # Safety clamps
+        cpu_parallel = max(1, int(cpu_parallel))
+        gpu_devices = max(1, int(gpu_devices))
+
+        # Helper: LPT list scheduling makespan for m parallel identical machines
+        def lpt_makespan(task_times, m):
+            # Filter out non-positive or inf
+            task_times = [t for t in task_times if isinstance(t, (int, float)) and t > 0 and t < float('inf')]
+            if not task_times:
+                return 0.0
+            m = max(1, int(m))
+            # initialize m machine loads to 0
+            loads = [0.0] * m
+            # assign largest tasks first
+            for t in sorted(task_times, reverse=True):
+                # place t on machine with current minimum load
+                idx = min(range(m), key=lambda i: loads[i])
+                loads[idx] += t
+            return max(loads)
+
         # Brute-force search over assignments to minimize makespan
         # Device indices: 0=CPU, 1=GPU
         n = len(models_data)
@@ -267,8 +328,8 @@ class UIComponents:
         # Early exit: if n is large, we could add heuristics, but typical n is small
         from itertools import product
         for choices in product((0, 1), repeat=n):
-            cpu_bucket = 0.0
-            gpu_bucket = 0.0
+            cpu_tasks = []
+            gpu_tasks = []
             feasible = True
             for i, d in enumerate(choices):
                 m = models_data[i]
@@ -277,17 +338,19 @@ class UIComponents:
                     if t == float('inf'):
                         feasible = False
                         break
-                    # CPU runs in parallel: bucket is max
-                    cpu_bucket = max(cpu_bucket, t)
+                    cpu_tasks.append(t)
                 elif d == 1:
                     t = m["gpu_total"]
                     if t == float('inf'):
                         feasible = False
                         break
-                    gpu_bucket += t
+                    gpu_tasks.append(t)
             if not feasible:
                 continue
-            makespan = max(cpu_bucket, gpu_bucket)
+            # Compute bounded-parallel makespans
+            cpu_ms = lpt_makespan(cpu_tasks, cpu_parallel)
+            gpu_ms = lpt_makespan(gpu_tasks, gpu_devices)
+            makespan = max(cpu_ms, gpu_ms)
             if makespan < best_makespan:
                 best_makespan = makespan
                 best_assignment = choices

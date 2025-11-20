@@ -197,7 +197,7 @@ class ONNXProfilerApp(QMainWindow):
         self.profile_button.clicked.connect(self.run_profiling)
         self.generate_static_button.clicked.connect(
             lambda: self.ui_components.highlight_deploy_results(
-                self.total_table, self.profiled_times, self.profiled_models
+                self.total_table, self.profiled_times, self.profiled_models, self.device_settings
             )
         )
         self.generate_all_button.clicked.connect(self.generate_all_combinations)
