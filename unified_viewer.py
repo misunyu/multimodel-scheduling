@@ -269,6 +269,7 @@ class UnifiedViewer(QMainWindow):
         """Initialize model settings from YAML configuration."""
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
+        self.hidden_views = set()  # Views that run models but suppress on-screen drawing
         # Default combination, can be overridden by requested_combination
         self.current_combination = self.requested_combination or "combination1"
         
@@ -290,16 +291,58 @@ class UnifiedViewer(QMainWindow):
                 self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
                 
             # Use the selected combination configuration
+            hidden_models = []  # models with display suppressed; still run but don't draw
             if self.current_combination in config:
                 for model_config_name, model_config in (config[self.current_combination] or {}).items():
                     if isinstance(model_config, dict) and "display" in model_config:
                         view_name = model_config.get("display")
-                        if view_name:
-                            view_to_model_map[view_name] = {
+                        vnorm = str(view_name).strip().lower() if view_name is not None else ""
+                        # If display is set to a 'none/off' value, schedule as hidden (no on-screen drawing)
+                        if (not vnorm) or (vnorm in {"none", "off", "hidden", "no", "false", "0"}):
+                            hidden_models.append({
                                 "model": model_config.get("model", ""),
                                 "execution": model_config.get("execution", "cpu"),
                                 "infps": model_config.get("infps", None)
-                            }
+                            })
+                            continue
+                        # Only allow known view labels
+                        if vnorm in {"view1", "view2", "view3", "view4"}:
+                            view_key = vnorm
+                        else:
+                            try:
+                                print(f"[UnifiedViewer] Unknown display label '{view_name}' for {model_config_name}; scheduling hidden")
+                            except Exception:
+                                pass
+                            # Treat unknown labels as hidden to be safe
+                            hidden_models.append({
+                                "model": model_config.get("model", ""),
+                                "execution": model_config.get("execution", "cpu"),
+                                "infps": model_config.get("infps", None)
+                            })
+                            continue
+                        view_to_model_map[view_key] = {
+                            "model": model_config.get("model", ""),
+                            "execution": model_config.get("execution", "cpu"),
+                            "infps": model_config.get("infps", None)
+                        }
+            
+            # Fill remaining views with hidden models (run but hide)
+            for view in ["view1", "view2", "view3", "view4"]:
+                if not hidden_models:
+                    break
+                if view not in view_to_model_map:
+                    cfg = hidden_models.pop(0)
+                    view_to_model_map[view] = cfg
+                    try:
+                        self.hidden_views.add(view)
+                        print(f"[UnifiedViewer] Assigned hidden model to {view} (no on-screen output)")
+                    except Exception:
+                        pass
+            if hidden_models:
+                try:
+                    print(f"[UnifiedViewer] Warning: {len(hidden_models)} hidden models could not be scheduled due to lack of free views")
+                except Exception:
+                    pass
             
             # Assign model configurations to views
             for view in ["view1", "view2", "view3", "view4"]:
@@ -636,21 +679,29 @@ class UnifiedViewer(QMainWindow):
     # View update methods
     def update_view1_display(self, pixmap):
         """Update view1 display."""
+        if hasattr(self, 'hidden_views') and 'view1' in self.hidden_views:
+            return  # suppress drawing when hidden
         self.view1.setPixmap(pixmap)
         self.view1.setScaledContents(True)
     
     def update_view2_display(self, pixmap):
         """Update view2 display."""
+        if hasattr(self, 'hidden_views') and 'view2' in self.hidden_views:
+            return
         self.view2.setPixmap(pixmap)
         self.view2.setScaledContents(True)
     
     def update_view3_display(self, pixmap):
         """Update view3 display."""
+        if hasattr(self, 'hidden_views') and 'view3' in self.hidden_views:
+            return
         self.view3.setPixmap(pixmap)
         self.view3.setScaledContents(True)
     
     def update_view4_display(self, pixmap):
         """Update view4 display."""
+        if hasattr(self, 'hidden_views') and 'view4' in self.hidden_views:
+            return
         self.view4.setPixmap(pixmap)
         self.view4.setScaledContents(True)
     
