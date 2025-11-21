@@ -15,6 +15,7 @@ import yaml
 import json
 import signal
 import time
+import multiprocessing as mp
 from typing import List
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer, Qt
@@ -35,6 +36,12 @@ class ScheduleExecutor:
         self._running: bool = False
         self._end_time = None  # wall-clock end time for capped runs (epoch seconds)
         self._combinations: List[str] = self._load_combinations(schedule_file)
+        # Delay between schedules (ms) to ensure file writes and cleanup settle
+        self._inter_schedule_delay_ms: int = 1000
+        try:
+            print(f"[DBG Executor.__init__] combinations={self._combinations} (count={len(self._combinations)}) selected_combo={self._selected_combo}")
+        except Exception:
+            pass
 
         # If a specific combination is requested, filter list to that single name
         if self._selected_combo:
@@ -42,11 +49,13 @@ class ScheduleExecutor:
                 self._combinations = [self._selected_combo]
             else:
                 print(f"[Executor] ERROR: requested combination '{self._selected_combo}' not found in {os.path.basename(schedule_file)}")
-                os._exit(2)
+                import sys
+                sys.exit(2)
 
         if not self._combinations:
             print('[Executor] No combinations found in schedule file. Exiting.')
-            os._exit(1)
+            import sys
+            sys.exit(1)
 
     # ------------------------------ Public API ------------------------------ #
 
@@ -54,6 +63,7 @@ class ScheduleExecutor:
         if self._running:
             print('[Executor] Start requested but execution is already running.')
             return
+        print(f"[DBG Executor.start] requested_duration={duration} default_duration(before)={self.default_duration}")
         self._running = True
         self._index = 0
         if duration is not None:
@@ -127,9 +137,11 @@ class ScheduleExecutor:
             pass
 
     def _run_next(self):
+        print(f"[DBG Executor._run_next] entering: index={self._index} total={len(self._combinations)} running={self._running}")
         # Enforce max continuous runtime (1 hour) in selected-combo mode
         if getattr(self, '_end_time', None) is not None:
             remaining = int(self._end_time - time.time())
+            print(f"[DBG Executor._run_next] remaining_cap_sec={remaining}")
             if remaining <= 0:
                 print('[Executor] Reached 1-hour cap for selected combination. Stopping execution.')
                 self.stop()
@@ -139,7 +151,8 @@ class ScheduleExecutor:
             # If a specific combination was requested (executor-only mode), loop until cap or stop
             if getattr(self, '_selected_combo', None):
                 self._index = 0
-                QTimer.singleShot(300, self._run_next)
+                # Short delay before repeating the same combination to avoid tight loop
+                QTimer.singleShot(self._inter_schedule_delay_ms, self._run_next)
                 return
             print('[Executor] All combinations executed. Leaving windows open.')
             self._write_best_header()
@@ -200,22 +213,30 @@ class ScheduleExecutor:
             run_duration = max(1, min(measured_duration + 5, remaining))
         else:
             run_duration = measured_duration + 5
+        print(f"[DBG Executor._run_next] starting viewer for combo={combo} run_duration={run_duration}s (measured={measured_duration}s + warmup 5s)")
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)
         buffer_ms = 1000
-        QTimer.singleShot((run_duration * 1000) + buffer_ms, self._after_stop)
+        next_delay_ms = (run_duration * 1000) + buffer_ms
+        print(f"[DBG Executor._run_next] scheduling _after_stop in {next_delay_ms} ms")
+        QTimer.singleShot(next_delay_ms, self._after_stop)
 
     def _after_stop(self):
+        print(f"[DBG Executor._after_stop] called: running={self._running} index(before)={self._index}")
         if not self._running:
+            print("[DBG Executor._after_stop] not running; returning")
             return
         try:
             if self._viewer is not None:
+                print("[DBG Executor._after_stop] requesting viewer.stop_execution()")
                 self._viewer.stop_execution()
         except Exception as e:
             print(f"[Executor] Warning: stop_execution error: {e}")
         self._index += 1
-        QTimer.singleShot(300, self._run_next)  # short delay to flush file writes
+        print(f"[DBG Executor._after_stop] index(after)={self._index}; scheduling _run_next after {self._inter_schedule_delay_ms} ms")
+        # Delay before moving to next schedule to ensure results are flushed and resources cleaned
+        QTimer.singleShot(self._inter_schedule_delay_ms, self._run_next)  # short delay to flush file writes
 
     def _write_best_header(self):
         """Rewrite the run results file into required object format with best deployment."""
@@ -345,6 +366,19 @@ def main():
     # No legacy pre-clean: results are now saved per-run under results/performance_*.json
 
     app = QApplication(sys.argv)
+    try:
+        mp.set_start_method('spawn', force=True)
+        print(f"[Main] multiprocessing start method set to: {mp.get_start_method()}")
+    except Exception as e:
+        try:
+            print(f"[Main] Failed to set multiprocessing start method to 'spawn': {e}")
+        except Exception:
+            pass
+    try:
+        app.setQuitOnLastWindowClosed(False)
+        print("[Main] Qt setQuitOnLastWindowClosed(False)")
+    except Exception:
+        pass
 
     # Create the InfoWindow instance
     info = InfoWindow(parent=None)
@@ -415,7 +449,7 @@ def main():
             print(f"[Main] QApplication error: {e}")
             exit_code = 1
         print('[Main] QApplication loop exited.')
-        os._exit(exit_code)
+        sys.exit(exit_code)
 
     # Otherwise, show InfoWindow and use full GUI mode
     info.show()
@@ -477,7 +511,7 @@ def main():
         exit_code = 1
 
     print('[Main] QApplication loop exited.')
-    os._exit(exit_code)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
