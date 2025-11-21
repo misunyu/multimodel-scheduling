@@ -14,7 +14,7 @@ from multiprocessing import Process, Queue, Event
 import threading
 
 # Import local modules
-from utils import get_cpu_metrics
+from utils import get_cpu_metrics, create_x_image, convert_cv_to_qt
 from view_handlers import ModelSignals, YoloViewHandler, ResNetViewHandler, VideoFeeder, ResnetImageFeeder
 from model_processors import (
     video_reader_process,
@@ -180,14 +180,12 @@ class InfoWindow(QWidget):
         # If we have a parent (UnifiedViewer), call its async shutdown method if available
         if self.parent and hasattr(self.parent, 'shutdown_all_async'):
             try:
-                print("[DBG InfoWindow.closeEvent] calling parent.shutdown_all_async()")
                 self.parent.shutdown_all_async()
                 return
             except Exception as e:
-                print(f"[DBG InfoWindow.closeEvent] shutdown_all_async failed: {e}")
+                pass
         # Fallback to synchronous shutdown_all or direct exit
         if self.parent and hasattr(self.parent, 'shutdown_all'):
-            print("[DBG InfoWindow.closeEvent] calling parent.shutdown_all()")
             self.parent.shutdown_all()
         else:
             print("[InfoWindow] Closing application directly")
@@ -195,11 +193,9 @@ class InfoWindow(QWidget):
                 from PyQt5.QtWidgets import QApplication
                 app = QApplication.instance()
                 if app is not None:
-                    print("[DBG InfoWindow.closeEvent] requesting app.quit via QTimer")
                     QTimer.singleShot(50, app.quit)
                 else:
                     import sys
-                    print("[DBG InfoWindow.closeEvent] no app instance; sys.exit(0)")
                     sys.exit(0)
             except Exception:
                 import sys
@@ -398,6 +394,32 @@ class UnifiedViewer(QMainWindow):
         self.model_signals.update_view2_display.connect(self.update_view2_display)
         self.model_signals.update_view3_display.connect(self.update_view3_display)
         self.model_signals.update_view4_display.connect(self.update_view4_display)
+        
+        # Initialize placeholders for views without associated (visible) model
+        try:
+            self._init_placeholders()
+        except Exception:
+            pass
+    
+    def _init_placeholders(self):
+        """Show 'No model specified' placeholder on views with no visible model mapping.
+        - For views in views_without_model: always show placeholder.
+        - For views in hidden_views: show placeholder; actual model will run headlessly and updates are suppressed.
+        """
+        try:
+            x_img = create_x_image()
+            pix = convert_cv_to_qt(x_img)
+        except Exception:
+            pix = None
+        for vname in ["view1", "view2", "view3", "view4"]:
+            try:
+                if (hasattr(self, 'views_without_model') and vname in self.views_without_model) or (hasattr(self, 'hidden_views') and vname in self.hidden_views):
+                    lbl = getattr(self, vname, None)
+                    if lbl is not None and pix is not None and not pix.isNull():
+                        lbl.setPixmap(pix)
+                        lbl.setScaledContents(True)
+            except Exception:
+                continue
     
     def initialize_state_variables(self):
         """Initialize state variables."""
@@ -458,11 +480,11 @@ class UnifiedViewer(QMainWindow):
             )
             self.video_reader_proc.start()
             try:
-                print(f"[DBG UV.initialize_processes] video_reader_proc started pid={self.video_reader_proc.pid} alive={self.video_reader_proc.is_alive()}")
+                _ = self.video_reader_proc.pid
             except Exception:
                 pass
         else:
-            print("[DBG UV.initialize_processes] No yolov4 models scheduled; skipping video reader process")
+            pass
         
         # Start view processes
         self.start_view_process("view1")
@@ -536,7 +558,7 @@ class UnifiedViewer(QMainWindow):
         setattr(self, f"{view_name}_process", process)
         process.start()
         try:
-            print(f"[DBG UV.start_view_process] {view_name} process started model={model} exec={execution} pid={process.pid} alive={process.is_alive()}")
+            _ = process.pid
         except Exception:
             pass
     
@@ -561,9 +583,6 @@ class UnifiedViewer(QMainWindow):
                 model_settings=self.model_settings
             )
             self.video_feeder.start_feed_thread()
-        else:
-            print("[DBG UV.initialize_threads] No yolov4 views; skipping VideoFeeder")
-
         # Start ResNet image feeder honoring per-view infps (defaulting to 2 FPS)
         self.resnet_feeder = ResnetImageFeeder(
             image_dir="./imagenet-sample-images",
@@ -785,12 +804,11 @@ class UnifiedViewer(QMainWindow):
     
     def shutdown_all(self):
         """Clean up resources and shut down the application gracefully."""
-        print("[DBG UV.shutdown_all] begin")
         # First stop all model execution
         try:
             self.stop_execution()
         except Exception as e:
-            print(f"[DBG UV.shutdown_all] stop_execution error: {e}")
+            pass
         # Request application quit without forcing interpreter exit
         try:
             from PyQt5.QtWidgets import QApplication
@@ -799,7 +817,7 @@ class UnifiedViewer(QMainWindow):
                 print("[Shutdown] Requesting application quit")
                 QTimer.singleShot(50, app.quit)
         except Exception as e:
-            print(f"[DBG UV.shutdown_all] app quit error: {e}")
+            pass
     
     # Monitoring and statistics methods
     def start_execution(self, duration):
@@ -839,7 +857,7 @@ class UnifiedViewer(QMainWindow):
         # Reset idempotent stop flag for new run
         self._already_stopped = False
         try:
-            print(f"[DBG UV.start_execution] window_duration_sec={self.window_duration_sec} handlers_exist={[hasattr(self, n) for n in ['view1_handler','view2_handler','view3_handler','view4_handler']]} ")
+            pass
         except Exception:
             pass
 
@@ -857,7 +875,6 @@ class UnifiedViewer(QMainWindow):
         if (vid_proc is None) or (hasattr(vid_proc, 'is_alive') and not vid_proc.is_alive()):
             # Reset runtime state (events/queues/flags) for a fresh run after Stop
             try:
-                print("[DBG UV.start_execution] initializing state variables and processes")
                 self.initialize_state_variables()
                 # Also clear handler references from previous run to aid GC
                 for name in ['view1_handler','view2_handler','view3_handler','view4_handler','video_feeder','resnet_feeder']:
@@ -867,7 +884,7 @@ class UnifiedViewer(QMainWindow):
                         except Exception:
                             pass
             except Exception as e:
-                print(f"[DBG UV.start_execution] init state warning: {e}")
+                pass
             self.initialize_processes()
             self.initialize_threads()
         
@@ -884,7 +901,6 @@ class UnifiedViewer(QMainWindow):
             pass
             
         # Schedule stopping execution after the specified duration (includes warmup)
-        print(f"[DBG UV.start_execution] scheduling timed_shutdown in {duration*1000} ms")
         QTimer.singleShot(duration * 1000, self.timed_shutdown)
     
     def timed_shutdown(self):
@@ -901,13 +917,12 @@ class UnifiedViewer(QMainWindow):
             print("[Stop Execution] Async stop already in progress")
             return
         self._stop_in_progress = True
-        print("[DBG UV.stop_execution_async] spawning StopExecutionThread")
         def _run_stop():
             try:
                 self.stop_execution()
             finally:
                 self._stop_in_progress = False
-                print("[DBG UV.stop_execution_async] StopExecutionThread finished")
+                pass
         try:
             t = threading.Thread(target=_run_stop, name="StopExecutionThread", daemon=True)
             t.start()
@@ -969,7 +984,6 @@ class UnifiedViewer(QMainWindow):
             self._run_active = False
         except Exception:
             pass
-        print("[DBG UV.stop_execution] begin")
 
         # Signal all threads (feeders/handlers) to stop
         try:
@@ -990,8 +1004,7 @@ class UnifiedViewer(QMainWindow):
         process_names = ['view1_process', 'view2_process', 'view3_process', 'view4_process', 'video_reader_proc']
         processes = [getattr(self, name, None) for name in process_names if hasattr(self, name) and getattr(self, name, None)]
         try:
-            dbg_states = [f"{name}=pid:{getattr(getattr(self, name), 'pid', None)} alive:{getattr(getattr(self, name), 'is_alive', lambda: None)()}" for name in process_names if hasattr(self, name)]
-            print(f"[DBG UV.stop_execution] pre-join states: {' | '.join(dbg_states)}")
+            pass
         except Exception:
             pass
         
@@ -1007,21 +1020,18 @@ class UnifiedViewer(QMainWindow):
         for p in processes:
             if p and p.is_alive():
                 try:
-                    print(f"[DBG UV.stop_execution] terminating pid={p.pid}")
                     p.terminate()
                     p.join(timeout=0.5)
                 except Exception as e:
                     print(f"[Stop Execution] Process termination error: {e}")
         try:
-            dbg_states2 = [f"{name}=pid:{getattr(getattr(self, name), 'pid', None)} alive:{getattr(getattr(self, name), 'is_alive', lambda: None)()}" for name in process_names if hasattr(self, name)]
-            print(f"[DBG UV.stop_execution] post-terminate states: {' | '.join(dbg_states2)}")
+            pass
         except Exception:
             pass
                     
         # Save throughput data once
         try:
             self.save_throughput_data()
-            print("[DBG UV.stop_execution] save_throughput_data done")
         except Exception as e:
             print(f"[Stop Execution] Error saving throughput data: {e}")
 
@@ -1030,15 +1040,12 @@ class UnifiedViewer(QMainWindow):
             record_time = int(os.environ.get("RECORD_TIME", "0"))
             if record_time == 1:
                 self.save_pre_post_time_average()
-                print("[DBG UV.stop_execution] save_pre_post_time_average done")
         except Exception as e:
             print(f"[Stop Execution] Error saving pre/post timing averages: {e}")
 
         # After a schedule ends: drain all queues and explicitly close them
         try:
-            print("[DBG UV.stop_execution] draining queues...")
             self._drain_and_close_all_queues()
-            print("[DBG UV.stop_execution] drain complete")
         except Exception as e:
             print(f"[Stop Execution] Queue cleanup error: {e}")
             
@@ -1142,30 +1149,50 @@ class UnifiedViewer(QMainWindow):
         self.info_window.update_trigger_below_metrics(line1 + "\n" + line2)
         trigger_text = ""
 
-        # Build per-view lines only for scheduled views
+        # Build per-view lines only for visible (non-hidden) scheduled views
+        visible_views = [v for v in scheduled_views if v not in getattr(self, 'hidden_views', set())]
         per_view_lines = []
-        if "view1" in scheduled_views:
+        if "view1" in visible_views:
             per_view_lines.append(
                 f"<b>View1 ({view1_model} {view1_mode})</b> Avg FPS: {view1_avg_fps:.1f} (<span style='color: gray;'>{view1_avg_infer_time:.1f} ms</span>)"
             )
-        if "view2" in scheduled_views:
+        if "view2" in visible_views:
             per_view_lines.append(
                 f"<b><span style='color: purple;'>View2 ({view2_model} {view2_mode})</span></b> Avg FPS: <span style='color: purple;'>{view2_avg_fps:.1f}</span> (<span style='color: purple;'>{view2_avg_infer_time:.1f} ms</span>)"
             )
-        if "view3" in scheduled_views:
+        if "view3" in visible_views:
             per_view_lines.append(
                 f"<b><span style='color: green;'>View3 ({view3_model} {view3_mode})</span></b> Avg FPS: <span style='color: green;'>{view3_avg_fps:.1f}</span> (<span style='color: green;'>{view3_avg_infer_time:.1f} ms</span>)"
             )
-        if "view4" in scheduled_views:
+        if "view4" in visible_views:
             per_view_lines.append(
                 f"<b><span style='color: blue;'>View4 ({view4_model} {view4_mode})</span></b> Avg FPS: <span style='color: blue;'>{view4_avg_fps:.1f}</span> (<span style='color: blue;'>{view4_avg_infer_time:.1f} ms</span>)"
             )
 
-        performance_text = (
-            f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
-            f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>"
-            + "<br>".join(per_view_lines)
-        )
+        # Build a section listing models that are running headlessly (no display)
+        hidden_views = list(getattr(self, 'hidden_views', set()) or [])
+        hidden_scheduled = [v for v in scheduled_views if v in hidden_views]
+        hidden_lines = []
+        for v in hidden_scheduled:
+            if v == 'view1':
+                hidden_lines.append(f"<span style='color: gray;'>{view1_model} {view1_mode}</span> Avg FPS: {view1_avg_fps:.1f} (<span style='color: gray;'>{view1_avg_infer_time:.1f} ms</span>)")
+            elif v == 'view2':
+                hidden_lines.append(f"<span style='color: gray;'>{view2_model} {view2_mode}</span> Avg FPS: {view2_avg_fps:.1f} (<span style='color: gray;'>{view2_avg_infer_time:.1f} ms</span>)")
+            elif v == 'view3':
+                hidden_lines.append(f"<span style='color: gray;'>{view3_model} {view3_mode}</span> Avg FPS: {view3_avg_fps:.1f} (<span style='color: gray;'>{view3_avg_infer_time:.1f} ms</span>)")
+            elif v == 'view4':
+                hidden_lines.append(f"<span style='color: gray;'>{view4_model} {view4_mode}</span> Avg FPS: {view4_avg_fps:.1f} (<span style='color: gray;'>{view4_avg_infer_time:.1f} ms</span>)")
+        
+        # Compose performance text: visible per-view lines and then hidden models section (names must be shown even if no view)
+        sections = [
+            f"<b>Total Throughput: {total_fps:.1f} FPS</b>",
+            f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b>",
+        ]
+        if per_view_lines:
+            sections.append("<br>".join(per_view_lines))
+        if hidden_lines:
+            sections.append("<b>Models running without display</b><br>" + "<br>".join(hidden_lines))
+        performance_text = ("<br>".join(sections))
         
         # Create CPU info text
         cpu_info_text = (

@@ -39,7 +39,7 @@ class ScheduleExecutor:
         # Delay between schedules (ms) to ensure file writes and cleanup settle
         self._inter_schedule_delay_ms: int = 1000
         try:
-            print(f"[DBG Executor.__init__] combinations={self._combinations} (count={len(self._combinations)}) selected_combo={self._selected_combo}")
+            pass
         except Exception:
             pass
 
@@ -63,7 +63,6 @@ class ScheduleExecutor:
         if self._running:
             print('[Executor] Start requested but execution is already running.')
             return
-        print(f"[DBG Executor.start] requested_duration={duration} default_duration(before)={self.default_duration}")
         self._running = True
         self._index = 0
         if duration is not None:
@@ -137,11 +136,10 @@ class ScheduleExecutor:
             pass
 
     def _run_next(self):
-        print(f"[DBG Executor._run_next] entering: index={self._index} total={len(self._combinations)} running={self._running}")
+        
         # Enforce max continuous runtime (1 hour) in selected-combo mode
         if getattr(self, '_end_time', None) is not None:
             remaining = int(self._end_time - time.time())
-            print(f"[DBG Executor._run_next] remaining_cap_sec={remaining}")
             if remaining <= 0:
                 print('[Executor] Reached 1-hour cap for selected combination. Stopping execution.')
                 self.stop()
@@ -213,28 +211,22 @@ class ScheduleExecutor:
             run_duration = max(1, min(measured_duration + 5, remaining))
         else:
             run_duration = measured_duration + 5
-        print(f"[DBG Executor._run_next] starting viewer for combo={combo} run_duration={run_duration}s (measured={measured_duration}s + warmup 5s)")
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)
         buffer_ms = 1000
         next_delay_ms = (run_duration * 1000) + buffer_ms
-        print(f"[DBG Executor._run_next] scheduling _after_stop in {next_delay_ms} ms")
         QTimer.singleShot(next_delay_ms, self._after_stop)
 
     def _after_stop(self):
-        print(f"[DBG Executor._after_stop] called: running={self._running} index(before)={self._index}")
         if not self._running:
-            print("[DBG Executor._after_stop] not running; returning")
             return
         try:
             if self._viewer is not None:
-                print("[DBG Executor._after_stop] requesting viewer.stop_execution()")
                 self._viewer.stop_execution()
         except Exception as e:
             print(f"[Executor] Warning: stop_execution error: {e}")
         self._index += 1
-        print(f"[DBG Executor._after_stop] index(after)={self._index}; scheduling _run_next after {self._inter_schedule_delay_ms} ms")
         # Delay before moving to next schedule to ensure results are flushed and resources cleaned
         QTimer.singleShot(self._inter_schedule_delay_ms, self._run_next)  # short delay to flush file writes
 
