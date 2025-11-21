@@ -86,6 +86,7 @@ def _lazy_import_xgb():
 @dataclass
 class StaticProfile:
     cpu_infer: float
+    gpu_infer: float
     npu0_load: float
     npu0_infer: float
     npu1_load: float
@@ -98,6 +99,7 @@ def load_static_profiles(static_json_path: Path) -> Dict[str, StaticProfile]:
     for row in blob.get("total_data", []):
         table[row["model"]] = StaticProfile(
             cpu_infer=float(row.get("cpu_infer", np.nan)),
+            gpu_infer=float(row.get("gpu_infer", np.nan)),
             npu0_load=float(row.get("npu0_load", np.nan)),
             npu0_infer=float(row.get("npu0_infer", np.nan)),
             npu1_load=float(row.get("npu1_load", np.nan)),
@@ -122,6 +124,13 @@ def _device_static_for(model: str, exec_dev: str, S: Dict[str, StaticProfile]) -
     d = str(exec_dev).upper()
     if d == "CPU":
         return (prof.cpu_infer, 0.0)
+    if d == "GPU":
+        # GPU has no separate load time in static profiles; treat load as 0 for prediction features
+        try:
+            return (prof.gpu_infer, 0.0)
+        except Exception:
+            # Backward compatibility: if gpu_infer missing, fall back to NPU1 infer
+            return (getattr(prof, 'npu1_infer', np.nan), 0.0)
     if d == "NPU0":
         return (prof.npu0_infer, prof.npu0_load)
     if d == "NPU1":
@@ -144,6 +153,8 @@ def _norm_exec(dev: str) -> str:
     d = str(dev).strip().lower()
     if d in ("cpu",):
         return "CPU"
+    if d in ("gpu", "apple-gpu", "coreml-gpu"):
+        return "GPU"
     if d in ("npu0", "npu-0", "npu_0", "npu 0"):
         return "NPU0"
     if d in ("npu1", "npu-1", "npu_1", "npu 1"):
@@ -505,15 +516,19 @@ def featurize_from_combo(S: Dict[str, StaticProfile], combo_blob: Dict[str, Any]
 
         inf_cnt = fps * WINDOW_SEC
 
+        # Execution flags: map GPU onto legacy NPU1 flag for backward-compatible models
+        exec_cpu = 1.0 if dev == "CPU" else 0.0
+        exec_npu0 = 1.0 if dev == "NPU0" else 0.0
+        exec_npu1 = 1.0 if dev in ("NPU1", "GPU") else 0.0
         r = {
             "view.throughput_fps": fps,
             "view.avg_inference_time_ms": avg_inf_ms,
             "view.inference_count": inf_cnt,
             "view.avg_wait_to_preprocess_ms": ASSUME_WAIT_MS,
             "view.dropped_frames_due_to_full_queue": 0.0,
-            "view.exec_cpu": 1.0 if dev == "CPU" else 0.0,
-            "view.exec_npu0": 1.0 if dev == "NPU0" else 0.0,
-            "view.exec_npu1": 1.0 if dev == "NPU1" else 0.0,
+            "view.exec_cpu": exec_cpu,
+            "view.exec_npu0": exec_npu0,
+            "view.exec_npu1": exec_npu1,
             "view.static_infer_sel": s_infer,
             "view.static_load_sel": s_load,
             "view.infps": fps,

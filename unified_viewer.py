@@ -422,9 +422,13 @@ class UnifiedViewer(QMainWindow):
         if model.startswith("yolov3"):
             # YOLO model
             self.yolo_views.add(view_name)
-            if execution == "npu0" or execution == "npu1":
-                npu_id = 0 if execution == "npu0" else 1
-                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
+            if execution in ("npu0", "npu1", "gpu"):
+                if execution == "gpu":
+                    npu_id = 0  # Map GPU to single accelerator ID 0
+                    print(f"[UnifiedViewer] Starting {view_name} with {model} GPU")
+                else:
+                    npu_id = 0 if execution == "npu0" else 1
+                    print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
                 process = Process(
                     target=run_yolo_npu_process,
                     args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
@@ -438,9 +442,13 @@ class UnifiedViewer(QMainWindow):
         else:
             # ResNet model
             self.resnet_views.add(view_name)
-            if execution == "npu0" or execution == "npu1":
-                npu_id = 0 if execution == "npu0" else 1
-                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
+            if execution in ("npu0", "npu1", "gpu"):
+                if execution == "gpu":
+                    npu_id = 0  # Map GPU to single accelerator ID 0
+                    print(f"[UnifiedViewer] Starting {view_name} with {model} GPU")
+                else:
+                    npu_id = 0 if execution == "npu0" else 1
+                    print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
                 process = Process(
                     target=run_resnet_npu_process,
                     args=(frame_queue, output_queue, shutdown_event, npu_id, view_name),

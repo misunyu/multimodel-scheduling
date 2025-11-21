@@ -90,12 +90,12 @@ def _load_result_file(path: Path) -> Dict[str, Any] | None:
         return None
 
 
-def collect_scores(result_dir: Path, key_mode: str) -> Dict[Tuple[int, ...], List[Tuple[str, float]]]:
-    """Return mapping keyed by selected mode to list of (combination, score).
+def collect_scores(result_dir: Path, key_mode: str) -> Dict[Tuple[int, ...], List[Tuple[str, float, bool]]]:
+    """Return mapping keyed by selected mode to list of (combination, score, is_best).
 
     key_mode in {'rs-rb', 'rs-rb-yb', 'rs-rb-yb-ys'}
     """
-    scores: Dict[Tuple[int, ...], List[Tuple[str, float]]] = defaultdict(list)
+    scores: Dict[Tuple[int, ...], List[Tuple[str, float, bool]]] = defaultdict(list)
 
     if not result_dir.exists():
         print(f"[WARN] Result directory does not exist: {result_dir}")
@@ -131,6 +131,9 @@ def collect_scores(result_dir: Path, key_mode: str) -> Dict[Tuple[int, ...], Lis
         if not isinstance(items, list):
             continue
 
+        # Detect best deployment name if present
+        best_combo = data.get('best deployment')
+
         for item in items:
             try:
                 combo = item.get('combination')
@@ -138,14 +141,35 @@ def collect_scores(result_dir: Path, key_mode: str) -> Dict[Tuple[int, ...], Lis
                 if combo is None or score is None:
                     continue
                 score_f = float(score)
-                scores[key].append((str(combo), score_f))
+                is_best = (str(combo) == str(best_combo)) if best_combo is not None else False
+                scores[key].append((str(combo), score_f, is_best))
             except Exception:
                 continue
+
+    # Enforce exactly one best deployment per x-axis key (tuple)
+    # If none or multiple are flagged, pick the highest score as best for that key
+    try:
+        for k, lst in list(scores.items()):
+            if not lst:
+                continue
+            best_count = sum(1 for _c, s, is_b in lst if is_b)
+            if best_count != 1:
+                # Select the one with the highest score
+                max_idx = max(range(len(lst)), key=lambda i: lst[i][1])
+                new_lst: List[Tuple[str, float, bool]] = []
+                for i, (cname, sc, is_b) in enumerate(lst):
+                    new_lst.append((cname, sc, i == max_idx))
+                scores[k] = new_lst
+                # Warn the user for transparency
+                print(f"[INFO] Adjusted best deployment for key {k}: had {best_count}, set index {max_idx} (max score) as best.")
+    except Exception:
+        # Do not fail plotting due to consistency step
+        pass
 
     return scores
 
 
-def plot_scores(scores_by_key: Dict[Tuple[int, ...], List[Tuple[str, float]]], out_pdf: Path, key_mode: str) -> None:
+def plot_scores(scores_by_key: Dict[Tuple[int, ...], List[Tuple[str, float, bool]]], out_pdf: Path, key_mode: str) -> None:
     # Order by discovered keys ascending
     ordered_keys: List[Tuple[int, ...]] = sorted(scores_by_key.keys())
     if not ordered_keys:
@@ -163,14 +187,16 @@ def plot_scores(scores_by_key: Dict[Tuple[int, ...], List[Tuple[str, float]]], o
     xs: List[int] = []
     ys: List[float] = []
     base_colors: List[str] = []
+    is_best_flags: List[bool] = []
     palette = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
 
     for idx, key in enumerate(ordered_keys):
         entries = scores_by_key.get(key, [])
-        for _j, (_combo, score) in enumerate(entries):
+        for _j, (_combo, score, is_best) in enumerate(entries):
             xs.append(idx)
             ys.append(score)
             base_colors.append(palette[idx % len(palette)])
+            is_best_flags.append(bool(is_best))
 
     # Compute density-based alpha so overlapping points appear darker
     # Bin y to reduce floating noise and consider near-overlaps as the same bin
@@ -196,12 +222,34 @@ def plot_scores(scores_by_key: Dict[Tuple[int, ...], List[Tuple[str, float]]], o
         rgba = matplotlib.colors.to_rgba(base, alpha=alpha)
         rgba_colors.append(rgba)
 
+    # Split into normal vs best for different markers
+    x_norm: List[int] = []
+    y_norm: List[float] = []
+    c_norm: List[Any] = []
+    x_best: List[int] = []
+    y_best: List[float] = []
+    c_best: List[Any] = []
+    for x, y, c, is_b in zip(xs, ys, rgba_colors, is_best_flags):
+        if is_b:
+            x_best.append(x)
+            y_best.append(y)
+            c_best.append(c)
+        else:
+            x_norm.append(x)
+            y_norm.append(y)
+            c_norm.append(c)
+
     plt.figure(figsize=(max(10, len(ordered_keys) * 0.8), 6))
-    plt.scatter(xs, ys, c=rgba_colors, s=16, edgecolors='none')
+    if x_norm:
+        plt.scatter(x_norm, y_norm, c=c_norm, s=16, marker='o', edgecolors='none')
+    if x_best:
+        plt.scatter(x_best, y_best, c=c_best, s=64, marker='*', edgecolors='k', linewidths=0.4, label='best deployment')
     plt.xticks(ticks=x_positions, labels=x_labels, rotation=90)
     plt.xlabel(f'{key_mode} keys')
     plt.ylabel('score')
     plt.title(f'Combination scores per {key_mode} key')
+    if x_best:
+        plt.legend(loc='best')
     plt.grid(True, axis='y', linestyle='--', alpha=0.3)
     plt.tight_layout()
 

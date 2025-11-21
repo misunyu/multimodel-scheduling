@@ -14,7 +14,7 @@ import sys
 import argparse
 from PyQt5 import uic
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QAbstractItemView
 from schedule_generator.file_manager import FileManager
 
 
@@ -76,6 +76,11 @@ class BestDeployFinderApp(QMainWindow):
         # Hook the model to the tree view defined in the UI
         self.model_tree_view.setModel(self.fs_model)
         self.model_tree_view.setRootIndex(root_index)
+        # Allow multi-selection in the tree view
+        try:
+            self.model_tree_view.setSelectionMode(QAbstractItemView.MultiSelection)
+        except Exception:
+            pass
         # Show only name column
         for col in range(1, self.fs_model.columnCount()):
             self.model_tree_view.setColumnHidden(col, True)
@@ -376,6 +381,22 @@ class BestDeployFinderApp(QMainWindow):
         for i, combo in enumerate(combinations):
             combo_name = f"combination_{i+1}"
             schedules[combo_name] = {}
+            # Determine display mapping based on the 'use_display_view' checkbox.
+            use_display_checked = False
+            try:
+                use_display_checked = bool(self.use_display_view.isChecked())
+            except Exception:
+                use_display_checked = False
+            preferred = ["mnasnet", "resnet50", "resnext50", "yolov4"]
+            models_in_combo = list(combo.keys())
+            display_map = {m: "none" for m in models_in_combo}
+            if use_display_checked:
+                v = 1
+                for name in preferred:
+                    for m in models_in_combo:
+                        if m.lower() == name and v <= 4:
+                            display_map[m] = f"view{v}"
+                            v += 1
             for j, (model, device) in enumerate(combo.items()):
                 model_id = f"{model}_{device}"
                 # Determine default infps
@@ -400,7 +421,7 @@ class BestDeployFinderApp(QMainWindow):
                 entry = {
                     "model": model,
                     "execution": device,
-                    "display": f"view{j+1}",
+                    "display": display_map.get(model, "none"),
                 }
                 if infps is not None:
                     entry["infps"] = int(infps)
@@ -416,23 +437,243 @@ class BestDeployFinderApp(QMainWindow):
         return out_path
 
     def generate_all_combinations(self) -> str:
-        """Generate all possible model-to-device combinations into model_schedules.yaml using:
-        - Checked top-level model folders in the tree.
-        - Device config path from self.device_config_input.
-        - Per-model input rates from input_rate_dialog (self.input_fps_by_model).
+        """Generate model schedules based on ONNX files directly under ./models_onnx and
+        folders that contain a model.onnx (e.g., tiny-llama-chat-onnx/model.onnx).
+        Selection rule:
+        - Use the Input Rate dialog's values (self.input_fps_by_model). Models with infps > 0
+          are considered selected. Model names are:
+            * <file_stem> for top-level *.onnx files
+            * <folder_name> for <folder>/model.onnx
+        Output:
+        - Save into the test_schedules folder.
+        - Filename includes the number of selected models and each model's input rate.
         Returns the output YAML path.
         """
-        # Resolve selections
+        import re
+        import yaml
+
+        # Resolve models root and device config
         models_root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
-        checked_dirs = self.get_checked_top_level_dirs()
-        if not checked_dirs:
-            raise ValueError("No model folders selected. Please check model folders in the tree.")
         device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
         if not device_conf or not os.path.exists(device_conf):
             raise FileNotFoundError(f"Device config not found: {device_conf}")
-        out_path = self.generated_schedule_path
-        # Delegate to existing builder (kept for compatibility)
-        return self.build_schedule_from_selection(models_root, checked_dirs, device_conf, out_path)
+
+        # Enumerate available models under root (top-level *.onnx and */model.onnx)
+        available_models = self._enumerate_models_under_root()  # returns model names
+        if not available_models:
+            raise ValueError("No ONNX models found directly under the models root. (*.onnx or <folder>/model.onnx)")
+
+        # Determine selected models with the following priority:
+        # 1) Highlighted items in the tree view (files or folders). This allows selecting top-level *.onnx files.
+        # 2) Checked top-level directories (legacy checkbox behavior).
+        # 3) Input Rate dialog selections (infps > 0). If none, default all detected models to rate=10.
+        ui_selected: list = []
+        try:
+            # Collect highlighted selections from the tree (column 0 only)
+            selected_indices = [idx for idx in self.model_tree_view.selectedIndexes() if idx.column() == 0]
+            sel_models = set()
+            for idx in selected_indices:
+                p = self.fs_model.filePath(idx)
+                try:
+                    if os.path.isfile(p):
+                        # If a top-level .onnx file was selected, use its stem as model name
+                        if p.lower().endswith('.onnx') and os.path.dirname(p) == self.models_root:
+                            sel_models.add(os.path.splitext(os.path.basename(p))[0])
+                        # If 'model.onnx' inside a top-level folder was selected, use the folder name
+                        elif os.path.basename(p).lower() == 'model.onnx' and os.path.dirname(os.path.dirname(p)) == self.models_root:
+                            sel_models.add(os.path.basename(os.path.dirname(p)))
+                    elif os.path.isdir(p):
+                        # If a top-level folder containing model.onnx was selected, use folder name
+                        if os.path.dirname(p) == self.models_root and os.path.isfile(os.path.join(p, 'model.onnx')):
+                            sel_models.add(os.path.basename(p))
+                except Exception:
+                    continue
+            ui_selected = sorted([m for m in sel_models if m in available_models])
+        except Exception:
+            ui_selected = []
+
+        checked_models: list = []
+        try:
+            checked_dirs = self.get_checked_top_level_dirs()
+            checked_models = sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)])
+            # Only keep those that are valid available models (folder must contain model.onnx)
+            checked_models = [m for m in checked_models if m in available_models]
+        except Exception:
+            checked_models = []
+
+        # Compose final selection list
+        if ui_selected:
+            selected_models = ui_selected
+            try:
+                self.log(f"[Info] Using highlighted selections: {', '.join(selected_models)}")
+            except Exception:
+                pass
+        elif checked_models:
+            selected_models = checked_models
+            try:
+                self.log(f"[Info] Using checked models: {', '.join(selected_models)}")
+            except Exception:
+                pass
+        else:
+            # Fall back to Input Rate dialog mapping
+            selected_models = []
+        
+        # Build per-model rates for the chosen models
+        rates = {}
+        if selected_models:
+            for m in selected_models:
+                v = None
+                if isinstance(getattr(self, 'input_fps_by_model', None), dict):
+                    try:
+                        v = int(self.input_fps_by_model.get(m, 0))
+                    except Exception:
+                        v = 0
+                if not v or v <= 0:
+                    v = 10
+                rates[m] = int(v)
+        else:
+            # Determine selected models via input rates (> 0). If the dialog was never used
+            # or no positive rates were set, default all detected models to rate=10.
+            if isinstance(getattr(self, 'input_fps_by_model', None), dict):
+                for m in available_models:
+                    try:
+                        v = int(self.input_fps_by_model.get(m, 0))
+                    except Exception:
+                        v = 0
+                    if v > 0:
+                        rates[m] = v
+            if not rates:
+                # Fallback: use default rate 10 for all models
+                rates = {m: 10 for m in available_models}
+                try:
+                    self.log("[Info] Input Rate dialog not used or no positive rates provided. Using default infps=10 for all models.")
+                except Exception:
+                    pass
+            selected_models = sorted(rates.keys())
+
+        # Limit to 4 models for viewer layout consistency
+        pre_count = len(selected_models)
+        selected_models = sorted(selected_models)[:4]
+        if pre_count > 4:
+            self.log(f"[Warn] More than 4 models selected. Using only the first 4: {', '.join(selected_models)}")
+        # Persist the currently selected models for downstream logic (predict/load handlers)
+        try:
+            self._last_selected_models_from_rates = set(selected_models)
+        except Exception:
+            self._last_selected_models_from_rates = set(selected_models)
+
+        # Load device info (optional): we only care if a GPU device section exists; we will use a single logical GPU.
+        try:
+            import yaml as _yaml
+            with open(device_conf, 'r') as f:
+                device_config = _yaml.safe_load(f) or {}
+            # Try to read GPU availability for logging only
+            gpu_cfg = device_config.get("devices", {}).get("gpu", {})
+            gpu_count = gpu_cfg.get("count", 1)
+            self.log(f"[Info] Device config loaded. Using single GPU (count reported={gpu_count})")
+        except Exception as e:
+            raise RuntimeError(f"Failed to load device config '{device_conf}': {e}")
+
+        # Generate all combinations with CPU/GPU options only.
+        # GPU has no concurrency limit (each model can choose GPU independently).
+        combinations = []
+        def rec(idx, assign):
+            if idx >= len(selected_models):
+                combinations.append(assign.copy())
+                return
+            model = selected_models[idx]
+            # Option 1: CPU
+            assign[model] = "cpu"
+            rec(idx + 1, assign)
+            # Option 2: GPU
+            assign[model] = "gpu"
+            rec(idx + 1, assign)
+        rec(0, {})
+
+        # Build schedules dict
+        schedules = {}
+        for i, combo in enumerate(combinations):
+            combo_name = f"combination_{i+1}"
+            schedules[combo_name] = {}
+            # Determine display mapping based on the 'use_display_view' checkbox.
+            use_display_checked = False
+            try:
+                use_display_checked = bool(self.use_display_view.isChecked())
+            except Exception:
+                use_display_checked = False
+            preferred = ["mnasnet", "resnet50", "resnext50", "yolov4"]
+            models_in_combo = list(combo.keys())
+            display_map = {m: "none" for m in models_in_combo}
+            if use_display_checked:
+                v = 1
+                for name in preferred:
+                    for m in models_in_combo:
+                        if m.lower() == name and v <= 4:
+                            display_map[m] = f"view{v}"
+                            v += 1
+            for j, (model, device) in enumerate(combo.items()):
+                infps = int(rates.get(model, 0)) if model in rates else 0
+                if infps <= 0:
+                    # Fallback defaults if somehow missing
+                    lname = model.lower()
+                    if "resnet50" in lname:
+                        infps = 2
+                    elif "yolov3" in lname:
+                        infps = 30
+                    else:
+                        infps = 10
+                entry = {
+                    "model": model,
+                    "execution": device,
+                    "display": display_map.get(model, "none"),
+                    "infps": int(infps),
+                }
+                schedules[combo_name][f"{model}_{device}"] = entry
+
+        # Prepare output path under test_schedules with informative filename
+        root_dir = os.path.dirname(__file__)
+        out_dir = os.path.join(root_dir, 'test_schedules')
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except Exception:
+            pass
+        # Compose filename: m{N}_{abbrev-rate}_... .yaml (use only first two letters of model name; join with single underscore)
+        def _sanitize(s: str) -> str:
+            return re.sub(r"[^A-Za-z0-9_.-]", "-", s)
+        def _abbr(model: str) -> str:
+            s = _sanitize(model)
+            # keep only letters/digits for abbreviation base
+            import re as _re
+            alnum = ''.join(_re.findall(r"[A-Za-z0-9]", s))
+            if len(alnum) >= 2:
+                return alnum[:2].lower()
+            return s[:2].lower() if len(s) >= 2 else s.lower()
+        parts = [f"m{len(selected_models)}"] + [f"{_abbr(m)}-{int(rates[m])}" for m in selected_models]
+        # Append display flag to filename when use_display_view is checked
+        display_suffix = ""
+        try:
+            if bool(self.use_display_view.isChecked()):
+                display_suffix = "_display"
+        except Exception:
+            display_suffix = ""
+        filename = f"schedule_{'_'.join(parts)}{display_suffix}.yaml"
+        out_path = os.path.join(out_dir, filename)
+
+        # Write YAML
+        try:
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write("# model_schedules.yaml\n")
+                f.write("# Auto-generated from top-level ONNX selection\n\n")
+                f.write(yaml.dump(schedules, default_flow_style=False))
+        except Exception as e:
+            raise RuntimeError(f"Failed to write schedule YAML '{out_path}': {e}")
+
+        # Update the default generated path for downstream steps
+        try:
+            self.generated_schedule_path = out_path
+        except Exception:
+            pass
+        return out_path
 
     def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.2):
         """Predict best combination using two-target XGBoost JSON models.
@@ -536,6 +777,21 @@ class BestDeployFinderApp(QMainWindow):
         schedules = {
             "combination_1": {}
         }
+        # Determine display mapping according to use_display_view checkbox
+        use_display_checked = False
+        try:
+            use_display_checked = bool(self.use_display_view.isChecked())
+        except Exception:
+            use_display_checked = False
+        preferred = ["mnasnet", "resnet50", "resnext50", "yolov4"]
+        display_map = {m: "none" for m in models}
+        if use_display_checked:
+            v = 1
+            for name in preferred:
+                for m in models:
+                    if m.lower() == name and v <= 4:
+                        display_map[m] = f"view{v}"
+                        v += 1
         for j, model in enumerate(models):
             infps = None
             if isinstance(getattr(self, 'input_fps_by_model', None), dict):
@@ -557,7 +813,7 @@ class BestDeployFinderApp(QMainWindow):
             entry = {
                 "model": model,
                 "execution": "cpu",
-                "display": f"view{j+1}",
+                "display": display_map.get(model, "none"),
                 "infps": int(infps),
             }
             schedules["combination_1"][f"{model}_cpu"] = entry
@@ -848,14 +1104,21 @@ class BestDeployFinderApp(QMainWindow):
         self.log(f"[Predict] device_config={device_conf}")
         self.log(f"[Predict] checked_top_level_dirs={checked_dirs}")
 
-        # Validate
+        # Validate (do not require checked folders; selection is driven by Input Rate dialog)
         try:
-            if not checked_dirs:
-                raise ValueError("No model folders selected. Please check model folders in the tree.")
             if not device_conf or not os.path.exists(device_conf):
                 raise FileNotFoundError(f"Device config not found: {device_conf}")
             if not pred_model or not os.path.exists(pred_model):
                 raise FileNotFoundError(f"Prediction model not found: {pred_model}")
+            if not checked_dirs:
+                try:
+                    sel_idx = [idx for idx in self.model_tree_view.selectedIndexes() if idx.column() == 0]
+                except Exception:
+                    sel_idx = []
+                if sel_idx:
+                    self.log("[Info] No checked folders; will use highlighted selections in the tree.")
+                else:
+                    self.log("[Info] No checked folders; will use Input Rate selections under models_onnx.")
         except Exception as e:
             self.log(f"[Error] {e}")
             if hasattr(self, 'label_best_deploy_value'):
@@ -895,7 +1158,14 @@ class BestDeployFinderApp(QMainWindow):
                 new_score = float(df.iloc[0]['pred_score']) if len(df) > 0 else None
             except Exception:
                 new_score = None
-            same_selection = (set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)])) == (getattr(self, '_prev_selected_models', set()) or set()))
+            # Determine current selection set: prefer checked dirs; fallback to Input Rate selections
+            try:
+                from_checked = set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]))
+            except Exception:
+                from_checked = set()
+            rate_selected = getattr(self, '_last_selected_models_from_rates', set()) or set()
+            current_sel_set = from_checked if from_checked else set(sorted(list(rate_selected)))
+            same_selection = (current_sel_set == (getattr(self, '_prev_selected_models', set()) or set()))
             prev_score = getattr(self, '_prev_score', None)
             prev_best = getattr(self, '_prev_best_combo', None)
             new_best = str(best_combo)
@@ -963,8 +1233,10 @@ class BestDeployFinderApp(QMainWindow):
                 pass
             # Update internal current-state tracking
             try:
-                # derive current selected model names from checked_dirs
-                current_models = set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]))
+                # derive current selected model names: prefer checked dirs; fallback to Input Rate selections
+                from_checked = set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]))
+                rate_selected = getattr(self, '_last_selected_models_from_rates', set()) or set()
+                current_models = from_checked if from_checked else set(sorted(list(rate_selected)))
                 self._current_selected_models = current_models
                 self._current_best_combo = str(best_combo)
                 self._current_score = float(df.iloc[0]['pred_score']) if len(df) > 0 else None
