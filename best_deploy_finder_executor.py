@@ -339,9 +339,8 @@ class BestDeployFinderApp(QMainWindow):
         models = [m for m in models if m]
         if not models:
             raise ValueError("No models selected. Please check at least one top-level model folder.")
-        if len(models) > 4:
-            self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
-            models = models[:4]
+        # Note: We no longer cap the number of selected models to 4.
+        # The display layout still supports up to 4 views; models beyond 4 will have display='none'.
 
         # Load device info
         try:
@@ -551,11 +550,13 @@ class BestDeployFinderApp(QMainWindow):
                     pass
             selected_models = sorted(rates.keys())
 
-        # Limit to 4 models for viewer layout consistency
-        pre_count = len(selected_models)
-        selected_models = sorted(selected_models)[:4]
-        if pre_count > 4:
-            self.log(f"[Warn] More than 4 models selected. Using only the first 4: {', '.join(selected_models)}")
+        # Do not limit the number of models; viewer layout maps at most 4 models to views, others use display='none'.
+        selected_models = sorted(selected_models)
+        if len(selected_models) > 4:
+            try:
+                self.log(f"[Info] {len(selected_models)} models selected; display will show up to 4, others set to 'none'.")
+            except Exception:
+                pass
         # Persist the currently selected models for downstream logic (predict/load handlers)
         try:
             self._last_selected_models_from_rates = set(selected_models)
@@ -770,10 +771,7 @@ class BestDeployFinderApp(QMainWindow):
         models = [m for m in models if m]
         if not models:
             raise ValueError("No models selected. Please check model folders in the tree.")
-        # Limit to 4 views for viewer layout consistency (mirrors other code paths)
-        if len(models) > 4:
-            self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
-            models = models[:4]
+        # No cap on model count; display mapping still limited to 4 views.
         schedules = {
             "combination_1": {}
         }
