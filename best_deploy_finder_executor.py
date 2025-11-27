@@ -14,7 +14,7 @@ import sys
 import argparse
 from PyQt5 import uic
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QAbstractItemView
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QAbstractItemView, QMessageBox
 from schedule_generator.file_manager import FileManager
 
 
@@ -49,6 +49,22 @@ class CheckableFileSystemModel(QFileSystemModel):
     def setData(self, index, value, role=Qt.EditRole):
         if role == Qt.CheckStateRole and index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
             path = self.filePath(index)
+            # Enforce maximum of 4 checked models at top level
+            if value == Qt.Checked:
+                # Count currently checked top-level dirs
+                checked_count = sum(1 for state in self._check_states.values() if state == Qt.Checked)
+                if checked_count >= 4:
+                    # Show warning dialog and revert the last attempted check
+                    parent = self.parent() if isinstance(self.parent(), QWidget) else None
+                    QMessageBox.warning(
+                        parent,
+                        '선택 제한',
+                        '최대 4개의 모델만 선택할 수 있습니다.\n추가로 선택한 항목은 해제됩니다.'
+                    )
+                    # Ensure UI reflects the unchecked state
+                    self._check_states[path] = Qt.Unchecked
+                    self.dataChanged.emit(index, index, [Qt.CheckStateRole])
+                    return False
             self._check_states[path] = Qt.Checked if value == Qt.Checked else Qt.Unchecked
             self.dataChanged.emit(index, index, [Qt.CheckStateRole])
             return True
@@ -86,6 +102,16 @@ class BestDeployFinderApp(QMainWindow):
             self.model_tree_view.setColumnHidden(col, True)
         # Expand one level for visibility
         self.model_tree_view.expand(root_index)
+
+        # Selection limiting state
+        self._suppress_selection_handler = False
+        self._last_selected_top_keys = set()  # distinct top-level model keys currently allowed
+        try:
+            sel_model = self.model_tree_view.selectionModel()
+            if sel_model is not None:
+                sel_model.selectionChanged.connect(self._on_tree_selection_changed)
+        except Exception:
+            pass
 
         # Wire up browse buttons if present
         if hasattr(self, 'deploy_model_browse_button'):
@@ -131,6 +157,156 @@ class BestDeployFinderApp(QMainWindow):
 
         # Default outputs
         self.generated_schedule_path = os.path.join(os.path.dirname(__file__), 'model_schedules.yaml')
+
+    # ------------------------------
+    # Selection limiting helpers (max 4)
+    # ------------------------------
+    def _path_to_top_key(self, path: str):
+        """Map a filesystem path (file or dir) to a top-level 'model key' under models_root.
+        Rules:
+        - Top-level file *.onnx -> key = file stem
+        - Top-level folder containing model.onnx -> key = folder name
+        - Nested selections under such a folder count toward that folder's key
+        Otherwise return None.
+        """
+        try:
+            root = self.models_root
+            if not path:
+                return None
+            # Normalize
+            path = os.path.abspath(path)
+            root = os.path.abspath(root)
+
+            # If it's a file
+            if os.path.isfile(path):
+                dirp = os.path.dirname(path)
+                base = os.path.basename(path)
+                # Direct child .onnx
+                if dirp == root and base.lower().endswith('.onnx'):
+                    return os.path.splitext(base)[0]
+                # model.onnx inside a direct child folder
+                if base.lower() == 'model.onnx' and os.path.dirname(dirp) == root:
+                    return os.path.basename(dirp)
+                # Other files: map to their direct child folder if applicable
+                if os.path.dirname(dirp) == root:
+                    return os.path.basename(dirp)
+                return None
+
+            # If it's a directory
+            if os.path.isdir(path):
+                parent = os.path.dirname(path)
+                if parent == root:
+                    # Count only folders that are direct children; prefer those with model.onnx
+                    if os.path.isfile(os.path.join(path, 'model.onnx')):
+                        return os.path.basename(path)
+                    # If no model.onnx, still treat as a bucket for selection counting
+                    return os.path.basename(path)
+                # If nested, attribute to its top-level parent folder under root
+                while parent and parent != '/' and parent != root:
+                    path, parent = parent, os.path.dirname(parent)
+                if parent == root:
+                    return os.path.basename(path)
+            return None
+        except Exception:
+            return None
+
+    def _collect_selected_top_keys(self):
+        keys = []
+        try:
+            for idx in self.model_tree_view.selectedIndexes():
+                if idx.column() != 0:
+                    continue
+                p = self.fs_model.filePath(idx)
+                k = self._path_to_top_key(p)
+                if k:
+                    keys.append(k)
+        except Exception:
+            return set()
+        return set(keys)
+
+    def _deselect_key(self, key: str):
+        try:
+            sel_model = self.model_tree_view.selectionModel()
+            if sel_model is None:
+                return
+            # Deselect all selected indexes that map to this key
+            for idx in list(self.model_tree_view.selectedIndexes()):
+                if idx.column() != 0:
+                    continue
+                p = self.fs_model.filePath(idx)
+                if self._path_to_top_key(p) == key:
+                    try:
+                        sel_model.select(idx, sel_model.Deselect)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _on_tree_selection_changed(self, selected, deselected):
+        if self._suppress_selection_handler:
+            return
+        try:
+            # Determine keys before applying enforcement
+            current_keys = self._collect_selected_top_keys()
+            if len(current_keys) <= 4:
+                self._last_selected_top_keys = set(current_keys)
+                return
+
+            # Compute which keys were newly added
+            added_keys = set()
+            try:
+                for idx in selected.indexes():
+                    if idx.column() != 0:
+                        continue
+                    p = self.fs_model.filePath(idx)
+                    k = self._path_to_top_key(p)
+                    if k and k not in self._last_selected_top_keys:
+                        added_keys.add(k)
+            except Exception:
+                added_keys = set()
+
+            # Temporarily suppress recursive handling
+            self._suppress_selection_handler = True
+            try:
+                warning_needed = False
+                # First, try to drop newly added keys until we are within limit
+                for k in list(added_keys):
+                    if len(current_keys) <= 4:
+                        break
+                    self._deselect_key(k)
+                    if k in current_keys:
+                        current_keys.remove(k)
+                    warning_needed = True
+
+                # If still over limit (e.g., programmatic selection without 'selected' info), trim extras
+                if len(current_keys) > 4:
+                    # Preserve previously allowed keys as much as possible
+                    keep = list(self._last_selected_top_keys)
+                    # Fill up to 4 with any remaining current keys
+                    for k in sorted(current_keys):
+                        if len(keep) >= 4:
+                            break
+                        if k not in keep:
+                            keep.append(k)
+                    # Deselect all not in keep
+                    for k in list(current_keys):
+                        if k not in keep:
+                            self._deselect_key(k)
+                            warning_needed = True
+                    current_keys = set(keep)
+
+                if warning_needed:
+                    try:
+                        QMessageBox.warning(self, '선택 제한', '최대 4개의 모델만 선택할 수 있습니다.\n추가로 선택한 항목은 해제됩니다.')
+                    except Exception:
+                        pass
+            finally:
+                self._suppress_selection_handler = False
+
+            self._last_selected_top_keys = set(current_keys)
+        except Exception:
+            # On any error, do not block user selection
+            self._suppress_selection_handler = False
 
     def _log(self, message: str):
         if hasattr(self, 'log_text_edit') and self.log_text_edit is not None:
@@ -296,6 +472,19 @@ class BestDeployFinderApp(QMainWindow):
             self.fs_model.set_root_index(root_index)
             self.model_tree_view.setRootIndex(root_index)
             self.model_tree_view.expand(root_index)
+            # Reset selection limiting state and reconnect handler
+            try:
+                self._last_selected_top_keys = set()
+                sel_model = self.model_tree_view.selectionModel()
+                if sel_model is not None:
+                    # Avoid duplicate connections by disconnecting if already connected
+                    try:
+                        sel_model.selectionChanged.disconnect(self._on_tree_selection_changed)
+                    except Exception:
+                        pass
+                    sel_model.selectionChanged.connect(self._on_tree_selection_changed)
+            except Exception:
+                pass
 
     def select_prediction_model(self):
         # Expect a folder that contains <prefix>_y1.json and <prefix>_y2.json

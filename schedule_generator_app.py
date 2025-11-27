@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QTreeView, QPlainTextEdit, QTableWidget, QAction,
     QFileSystemModel, QTabWidget, QWidget,
     QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
-    QHeaderView, QLabel, QAbstractItemView
+    QHeaderView, QLabel, QAbstractItemView, QMessageBox
 )
 
 from schedule_generator import (
@@ -111,6 +111,10 @@ class ONNXProfilerApp(QMainWindow):
         
         # Set up file system model
         self.setup_file_system_model()
+
+        # Selection limiting state (max 4 top-level selections)
+        self._suppress_tree_selection_handler = False
+        self._last_selected_top_keys = set()
         
         # Default device settings file
         self.device_settings_file = target_device_file if target_device_file else "target_device.yaml"
@@ -233,6 +237,11 @@ class ONNXProfilerApp(QMainWindow):
         self.model_tree_view.setColumnHidden(2, True)
         self.model_tree_view.setColumnHidden(3, True)
         self.model_tree_view.setSelectionMode(QAbstractItemView.MultiSelection)
+        # Ensure selection applies to whole rows (all visible columns)
+        try:
+            self.model_tree_view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        except Exception:
+            pass
         
         # Connect selection changed signal
         self.model_tree_view.selectionModel().selectionChanged.connect(self.handle_tree_selection_changed)
@@ -255,43 +264,155 @@ class ONNXProfilerApp(QMainWindow):
     def handle_tree_selection_changed(self, selected, deselected):
         """
         Handle selection changes in the tree view.
-        Only top-level folders (model names) can be toggled.
+        - Only top-level folders (model names) can be toggled.
+        - Limit the number of selected top-level folders to a maximum of 4.
         Subfolders and their Size tabs are automatically deselected.
         
         Args:
             selected: QItemSelection of newly selected items
             deselected: QItemSelection of newly deselected items
         """
-        # Process only if there are selected items
-        if not selected.indexes():
+        # Prevent re-entrancy
+        if self._suppress_tree_selection_handler:
             return
             
         # Get the root path and index
         root_path = self.folder_input.text().strip()
         root_index = self.fs_model.index(root_path)
         
-        # Process each newly selected item
-        for index in selected.indexes():
-            # Get the row index regardless of column
+        def _is_top_level(index):
             row_index = self.fs_model.index(self.fs_model.filePath(index), 0)
-            
-            # Check if this is a top-level folder (direct child of root)
-            parent = row_index.parent()
-            if parent == root_index:
-                # This is a top-level folder, allow it to remain selected
-                continue
-            else:
-                # This is a subfolder or its Size tab, deselect it
-                self.model_tree_view.selectionModel().select(
-                    index, 
-                    self.model_tree_view.selectionModel().Deselect
-                )
+            return row_index.parent() == root_index
+
+        def _key_for_index(index):
+            row_index = self.fs_model.index(self.fs_model.filePath(index), 0)
+            path = self.fs_model.filePath(row_index)
+            return os.path.basename(path)
+
+        try:
+            # First: ensure only top-level entries remain selected (deselect any sub-items)
+            if selected.indexes():
+                self._suppress_tree_selection_handler = True
+                try:
+                    for index in selected.indexes():
+                        if not _is_top_level(index):
+                            # Deselect the entire row (all columns)
+                            row_index = self.fs_model.index(self.fs_model.filePath(index), 0)
+                            cols = self.fs_model.columnCount()
+                            for c in range(cols):
+                                sib = row_index.sibling(row_index.row(), c)
+                                try:
+                                    self.model_tree_view.selectionModel().select(
+                                        sib,
+                                        self.model_tree_view.selectionModel().Deselect
+                                    )
+                                except Exception:
+                                    pass
+                finally:
+                    self._suppress_tree_selection_handler = False
+
+            # Collect all currently selected top-level keys (column 0 only to avoid duplicates)
+            current_keys = set()
+            for idx in self.model_tree_view.selectedIndexes():
+                if idx.column() != 0:
+                    continue
+                if _is_top_level(idx):
+                    current_keys.add(_key_for_index(idx))
+
+            if len(current_keys) <= 4:
+                self._last_selected_top_keys = set(current_keys)
+                return
+
+            # Determine which keys were newly added in this change
+            added_keys = set()
+            for idx in selected.indexes():
+                if idx.column() != 0:
+                    continue
+                if _is_top_level(idx):
+                    k = _key_for_index(idx)
+                    if k and k not in self._last_selected_top_keys:
+                        added_keys.add(k)
+
+            # Enforce limit by deselecting newly added keys first
+            self._suppress_tree_selection_handler = True
+            warning_needed = False
+            try:
+                for k in list(added_keys):
+                    if len(current_keys) <= 4:
+                        break
+                    # Deselect all columns for rows that belong to this key
+                    for idx in list(self.model_tree_view.selectedIndexes()):
+                        if not _is_top_level(idx):
+                            continue
+                        if _key_for_index(idx) == k:
+                            row_index = self.fs_model.index(self.fs_model.filePath(idx), 0)
+                            cols = self.fs_model.columnCount()
+                            for c in range(cols):
+                                sib = row_index.sibling(row_index.row(), c)
+                                try:
+                                    self.model_tree_view.selectionModel().select(
+                                        sib,
+                                        self.model_tree_view.selectionModel().Deselect
+                                    )
+                                except Exception:
+                                    pass
+                    if k in current_keys:
+                        current_keys.remove(k)
+                    warning_needed = True
+
+                # If still over the limit (e.g., bulk selection), keep the previous allowed keys,
+                # and fill up to 4 with remaining current keys deterministically.
+                if len(current_keys) > 4:
+                    keep = list(self._last_selected_top_keys)
+                    for k in sorted(current_keys):
+                        if len(keep) >= 4:
+                            break
+                        if k not in keep:
+                            keep.append(k)
+                    # Deselect everything not in keep (entire row across columns)
+                    for idx in list(self.model_tree_view.selectedIndexes()):
+                        if not _is_top_level(idx):
+                            continue
+                        k = _key_for_index(idx)
+                        if k not in keep:
+                            row_index = self.fs_model.index(self.fs_model.filePath(idx), 0)
+                            cols = self.fs_model.columnCount()
+                            for c in range(cols):
+                                sib = row_index.sibling(row_index.row(), c)
+                                try:
+                                    self.model_tree_view.selectionModel().select(
+                                        sib,
+                                        self.model_tree_view.selectionModel().Deselect
+                                    )
+                                except Exception:
+                                    pass
+                    current_keys = set(keep)
+                    warning_needed = True
+            finally:
+                self._suppress_tree_selection_handler = False
+
+            if warning_needed:
+                try:
+                    QMessageBox.warning(
+                        self,
+                        '선택 제한',
+                        '최대 4개의 모델만 선택할 수 있습니다.\n추가로 선택한 항목은 해제됩니다.'
+                    )
+                except Exception:
+                    pass
+
+            self._last_selected_top_keys = set(current_keys)
+        except Exception:
+            # If anything goes wrong, do not block user selection in a broken state
+            self._suppress_tree_selection_handler = False
     
     def set_tree_root(self, folder):
         """Set the root folder for the tree view."""
         self.fs_model.setRootPath(folder)
         index = self.fs_model.index(folder)
         self.model_tree_view.setRootIndex(index)
+        # Reset selection limiting state when root changes
+        self._last_selected_top_keys = set()
     
     def expand_parents_of_onnx_files(self, root_folder):
         """Expand tree view items that contain ONNX or O files."""
