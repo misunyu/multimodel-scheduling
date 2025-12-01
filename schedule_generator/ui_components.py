@@ -406,6 +406,199 @@ class UIComponents:
                 self.log(f"[Error] Failed to write static_best_schedule.json: {e}")
             except Exception:
                 pass
+
+    def highlight_static_optimal_deploy(self, total_table):
+        """
+        Find the optimal static placement under constraints and color-code rows:
+        - Unlimited models on CPU
+        - At most one model on NPU1 (UI label; maps to NPU0)
+        - At most one model on NPU2 (UI label; maps to NPU1)
+
+        Cost definition per model (inference-only optimization):
+        - CPU: column 1 (CPU Inf. (ms))
+        - NPU1: column 3 (NPU1 + CPU Inf. (ms)) — ignore NPU load
+        - NPU2: column 5 (NPU2 + CPU Inf. (ms)) — ignore NPU load
+
+        The goal is to minimize the sum of costs across all models respecting the constraints.
+        Colors:
+        - CPU: light blue
+        - NPU1: light yellow
+        - NPU2: light orange
+
+        Also writes the chosen plan to static_best_schedule.json (same schema as existing method).
+        """
+        if not total_table or total_table.rowCount() == 0:
+            return
+
+        # Clear any previous highlighting
+        for row in range(total_table.rowCount()):
+            for col in range(total_table.columnCount()):
+                item = total_table.item(row, col)
+                if item:
+                    item.setBackground(QBrush(QColor(255, 255, 255)))
+
+        # Define colors
+        cpu_color = QColor(204, 230, 255)
+        npu1_color = QColor(255, 255, 204)  # UI NPU1 -> JSON NPU0
+        npu2_color = QColor(255, 214, 153)  # UI NPU2 -> JSON NPU1
+
+        last_row_index = total_table.rowCount() - 1  # assume last is Total
+
+        # Gather per-model costs (use inference-only columns per requirement)
+        names = []
+        cpu_costs = []
+        npu1_costs = []
+        npu2_costs = []
+
+        def safe_float(item):
+            try:
+                return float(item.text()) if item and item.text() else 0.0
+            except Exception:
+                return 0.0
+
+        def norm(x):
+            return x if (isinstance(x, (int, float)) and x > 0) else float('inf')
+
+        n_rows = max(0, last_row_index)
+        for row in range(n_rows):
+            name_item = total_table.item(row, 0)
+            if not name_item:
+                continue
+            names.append(name_item.text())
+            cpu = norm(safe_float(total_table.item(row, 1)))
+            # Ignore load columns (2 and 4) for optimization; only consider inference columns (3 and 5)
+            npu1_inf = norm(safe_float(total_table.item(row, 3)))
+            npu2_inf = norm(safe_float(total_table.item(row, 5)))
+            cpu_costs.append(cpu)
+            npu1_costs.append(npu1_inf)
+            npu2_costs.append(npu2_inf)
+
+        m = len(names)
+        if m == 0:
+            return
+
+        # Enumerate choices: pick i for NPU1, j for NPU2; each NPU is optional (at most one per NPU)
+        best_total = float('inf')
+        best_i = None
+        best_j = None
+
+        indices = list(range(m))
+        candidates_i = [None] + indices
+        candidates_j = [None] + indices
+
+        # Precompute CPU sum baseline
+        baseline_cpu_sum = sum(c if c < float('inf') else 0.0 for c in cpu_costs)
+
+        for i in candidates_i:
+            for j in candidates_j:
+                if i is not None and j is not None and i == j:
+                    continue  # cannot assign same model to both NPUs
+
+                total_cost = 0.0
+                feasible = True
+                for k in indices:
+                    if k == i:
+                        c = npu1_costs[k]
+                    elif k == j:
+                        c = npu2_costs[k]
+                    else:
+                        c = cpu_costs[k]
+                    if c == float('inf'):
+                        feasible = False
+                        break
+                    total_cost += c
+
+                if feasible and total_cost < best_total:
+                    best_total = total_cost
+                    best_i, best_j = i, j
+
+        # If no feasible plan (e.g., some models have no valid device), fallback to CPU-only per-model argmin coloring
+        if best_total == float('inf'):
+            # Color only models with finite CPU as CPU, others leave white
+            for row in indices:
+                color = cpu_color if cpu_costs[row] < float('inf') else QColor(255, 255, 255)
+                for col in range(total_table.columnCount()):
+                    item = total_table.item(row, col)
+                    if item:
+                        item.setBackground(QBrush(color))
+            return
+
+        # Apply coloring based on best_i, best_j
+        for row in indices:
+            if row == best_i:
+                color = npu1_color
+            elif row == best_j:
+                color = npu2_color
+            else:
+                color = cpu_color
+            for col in range(total_table.columnCount()):
+                item = total_table.item(row, col)
+                if item:
+                    item.setBackground(QBrush(color))
+
+        # Save to static_best_schedule.json similar to highlight_deploy_results
+        try:
+            def exec_label_for_row(row_idx: int) -> str:
+                if row_idx == best_i:
+                    return "NPU0"  # UI NPU1 maps to NPU0
+                if row_idx == best_j:
+                    return "NPU1"  # UI NPU2 maps to NPU1
+                return "CPU"
+
+            models_dict = {}
+            total_fps_sum = 0.0
+            for idx, row in enumerate(indices, start=1):
+                view_key = f"view{idx}"
+                model_name = names[row]
+                exec_label = exec_label_for_row(row)
+
+                # Determine avg_inference_time_ms for reporting
+                if exec_label == "CPU":
+                    ref = total_table.item(row, 1)
+                elif exec_label == "NPU0":
+                    ref = total_table.item(row, 3)
+                else:
+                    ref = total_table.item(row, 5)
+                avg_time_ms = 0.0
+                try:
+                    avg_time_ms = float(ref.text()) if ref and ref.text() else 0.0
+                except Exception:
+                    avg_time_ms = 0.0
+
+                throughput_fps = round(1000.0 / avg_time_ms, 2) if avg_time_ms > 0 else 0.0
+                total_fps_sum += throughput_fps
+
+                models_dict[view_key] = {
+                    "model": model_name,
+                    "execution": exec_label,
+                    "throughput_fps": throughput_fps,
+                    "avg_inference_time_ms": round(avg_time_ms, 2),
+                    "inference_count": 0
+                }
+
+            active_views = len(models_dict)
+            result_entry = {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "combination": "combination_1",
+                "models": models_dict,
+                "total": {
+                    "total_throughput_fps": round(total_fps_sum, 2),
+                    "avg_throughput_fps": round((total_fps_sum / active_views) if active_views else 0.0, 2)
+                }
+            }
+
+            final_obj = {
+                "best deployment": "combination_1",
+                "data": [result_entry]
+            }
+
+            with open("static_best_schedule.json", "w", encoding="utf-8") as f:
+                json.dump(final_obj, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            try:
+                self.log(f"[Error] Failed to write static_best_schedule.json: {e}")
+            except Exception:
+                pass
     
     def create_inference_bar_chart(self, parent_widget, models, cpu_table, npu1_table, npu2_table):
         """
