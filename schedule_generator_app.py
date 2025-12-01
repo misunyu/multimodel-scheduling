@@ -79,7 +79,11 @@ class ONNXProfilerApp(QMainWindow):
         # Find main UI elements
         self.enable_npu2_checkbox = self.findChild(QCheckBox, "npu2_enable_checkbox")
         self.result_tabs = self.findChild(QTabWidget, "result_tab_widget")
-        self.npu2_tab = self.findChild(QWidget, "npu1_tab")
+        # Tabs in the right panel
+        self.npu0_tab = self.findChild(QWidget, "npu0_tab")
+        self.npu1_tab = self.findChild(QWidget, "npu1_tab")
+        # Backward-compatible alias used elsewhere in code (represents the UI tab for the second NPU)
+        self.npu2_tab = self.npu1_tab
         
         # Set up main layout
         main_layout = self.findChild(QHBoxLayout, "mainLayout")
@@ -352,6 +356,22 @@ class ONNXProfilerApp(QMainWindow):
         # Clear profiled data
         self.profiled_times = []
         self.profiled_models = []
+
+    def _activate_tab(self, tab_widget: QWidget):
+        """Safely activate a tab in the result tab widget if available and enabled."""
+        try:
+            if not self.result_tabs or not tab_widget:
+                return
+            idx = self.result_tabs.indexOf(tab_widget)
+            if idx == -1:
+                return
+            # Do not switch to disabled tab
+            if not self.result_tabs.isTabEnabled(idx):
+                return
+            self.result_tabs.setCurrentIndex(idx)
+        except Exception:
+            # Fail gracefully without affecting profiling
+            pass
     
     def _profile_onnx_models(self, onnx_files, root_folder):
         """Profile ONNX models and update CPU table."""
@@ -389,6 +409,8 @@ class ONNXProfilerApp(QMainWindow):
             name = os.path.relpath(path, root_folder)
             load_npu1, infer_npu1, _ = self.profiler.profile_model_npu(path, "NPU1")
             self.ui_components.insert_result_row(self.npu1_table, name, load_npu1, infer_npu1)
+            # Activate NPU0 tab when NPU0 (first NPU) results are available
+            self._activate_tab(self.npu0_tab)
             
             self.log_message(f"[NPU1] {name}")
             self.log_message(f"       Load: {load_npu1:.1f} ms, Inference: {infer_npu1:.1f} ms\n")
@@ -396,6 +418,8 @@ class ONNXProfilerApp(QMainWindow):
             if self.enable_npu2_checkbox and self.enable_npu2_checkbox.isChecked():
                 load_npu2, infer_npu2, _ = self.profiler.profile_model_npu(path, "NPU2")
                 self.ui_components.insert_result_row(self.npu2_table, name, load_npu2, infer_npu2)
+                # Activate NPU1 tab when second NPU results are available
+                self._activate_tab(self.npu1_tab)
                 
                 self.log_message(f"[NPU2] {name}")
                 self.log_message(f"       Load: {load_npu2:.1f} ms, Inference: {infer_npu2:.1f} ms\n")
@@ -745,11 +769,17 @@ class ONNXProfilerApp(QMainWindow):
             self.ui_components.insert_result_row(
                 self.npu1_table, item["model"], item["load"], item["infer"]
             )
+        # If any first-NPU rows are present, show NPU0 tab
+        if self.npu1_table.rowCount() > 0:
+            self._activate_tab(self.npu0_tab)
         
         for item in sample_data.get("npu2_data", []):
             self.ui_components.insert_result_row(
                 self.npu2_table, item["model"], item["load"], item["infer"]
             )
+        # If any second-NPU rows are present, show NPU1 tab
+        if self.npu2_table.rowCount() > 0:
+            self._activate_tab(self.npu1_tab)
         
         # Process total table
         self.ui_components.initialize_total_table(self.total_table)
