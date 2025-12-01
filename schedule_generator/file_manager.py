@@ -238,8 +238,8 @@ class FileManager:
                 device_settings = {
                     "devices": {
                         "CPU": {"enabled": True},
-                        "NPU1": {"enabled": True},
-                        "NPU2": {"enabled": True}
+                        "NPU0": {"enabled": True},
+                        "NPU1": {"enabled": True}
                     }
                 }
         except Exception as e:
@@ -248,8 +248,8 @@ class FileManager:
             device_settings = {
                 "devices": {
                     "CPU": {"enabled": True},
-                    "NPU1": {"enabled": True},
-                    "NPU2": {"enabled": True}
+                    "NPU0": {"enabled": True},
+                    "NPU1": {"enabled": True}
                 }
             }
         

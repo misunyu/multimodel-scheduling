@@ -98,10 +98,10 @@ class UIComponents:
         total_table.setHorizontalHeaderLabels([
             "Model",
             "CPU Inf. (ms)",
+            "NPU0 Load (ms)",
+            "NPU0 + CPU Inf. (ms)",
             "NPU1 Load (ms)",
-            "NPU1 + CPU Inf. (ms)",
-            "NPU2 Load (ms)",
-            "NPU2 + CPU Inf. (ms)"
+            "NPU1 + CPU Inf. (ms)"
         ])
         total_table.setRowCount(0)
 
