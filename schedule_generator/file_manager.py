@@ -276,8 +276,15 @@ class FileManager:
         # Extract CPU data
         for row in range(cpu_table.rowCount()):
             model = cpu_table.item(row, 0).text() if cpu_table.item(row, 0) else ""
-            load = float(cpu_table.item(row, 1).text()) if cpu_table.item(row, 1) else 0.0
-            infer = float(cpu_table.item(row, 2).text()) if cpu_table.item(row, 2) else 0.0
+            # CPU table no longer has Load column; handle both layouts for compatibility
+            if cpu_table.columnCount() == 2:
+                load = 0.0
+                infer_item = cpu_table.item(row, 1)
+            else:
+                load_item = cpu_table.item(row, 1)
+                infer_item = cpu_table.item(row, 2)
+                load = float(load_item.text()) if load_item else 0.0
+            infer = float(infer_item.text()) if infer_item else 0.0
             
             sample_data["cpu_data"].append({
                 "model": model,

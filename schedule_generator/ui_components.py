@@ -43,8 +43,19 @@ class UIComponents:
             table: QTableWidget to initialize
         """
         table.clear()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Model", "Load (ms)", "Inference (ms)"])
+        # CPU tab should only have Model + Inference columns
+        is_cpu = False
+        try:
+            is_cpu = (table.objectName() == "cpu_table")
+        except Exception:
+            is_cpu = False
+
+        if is_cpu:
+            table.setColumnCount(2)
+            table.setHorizontalHeaderLabels(["Model", "Inference (ms)"])
+        else:
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["Model", "Load (ms)", "Inference (ms)"])
         table.setRowCount(0)
     
     def insert_result_row(self, table, model_file, load_ms, infer_ms):
@@ -60,8 +71,20 @@ class UIComponents:
         row = table.rowCount()
         table.insertRow(row)
         table.setItem(row, 0, QTableWidgetItem(model_file))
-        table.setItem(row, 1, QTableWidgetItem(f"{load_ms:.1f}"))
-        table.setItem(row, 2, QTableWidgetItem(f"{infer_ms:.1f}"))
+
+        # CPU table only keeps Inference column
+        is_cpu = False
+        try:
+            is_cpu = (table.objectName() == "cpu_table")
+        except Exception:
+            is_cpu = (table.columnCount() == 2)
+
+        if is_cpu:
+            # Ensure inference goes to the only numeric column (index 1)
+            table.setItem(row, 1, QTableWidgetItem(f"{infer_ms:.1f}"))
+        else:
+            table.setItem(row, 1, QTableWidgetItem(f"{load_ms:.1f}"))
+            table.setItem(row, 2, QTableWidgetItem(f"{infer_ms:.1f}"))
     
     def initialize_total_table(self, total_table):
         """
@@ -179,14 +202,20 @@ class UIComponents:
     
     def highlight_deploy_results(self, total_table, times, models):
         """
-        Compute and highlight a globally optimal deployment schedule that minimizes
-        the overall completion time (makespan), considering that:
-        - CPU can execute multiple models/partitions concurrently (parallel), so
-          its total time is the maximum of assigned CPU model times.
-        - Each NPU device is exclusive: it can run only one model/partition at a time,
-          so multiple assignments to the same NPU serialize (sum of their times).
-        The function also saves the chosen assignments to static_best_schedule.json.
-        
+        전체 선택된 모델을 모두 실행할 때, 각 모델에 대해
+        - CPU Inf. (ms)
+        - NPU1 Load (ms) + NPU1 + CPU Inf. (ms)
+        - NPU2 Load (ms) + NPU2 + CPU Inf. (ms)
+        중 최소가 되는 장치를 독립적으로 선택하여, 전체 합
+        (CPU 합 + NPU1 합 + NPU2 합)을 최소화하는 조합을 구하고 색으로 표시한다.
+
+        최종 색상 규칙:
+        - CPU: 파란색 계열
+        - NPU1 + CPU Inf. (ms): 노란색 계열
+        - NPU2 + CPU Inf. (ms): 주황색 계열
+
+        선택 결과는 static_best_schedule.json 으로 저장한다.
+
         Args:
             total_table: QTableWidget for total results
             times: Output list, will be populated with the chosen per-model device time
@@ -255,61 +284,27 @@ class UIComponents:
         if not models_data:
             return
 
-        # Brute-force search over assignments to minimize makespan
+        # 합 최소화: 각 모델별로 독립적으로 최소 비용 장치를 선택하면 전체 합이 최소가 된다.
         # Device indices: 0=CPU, 1=NPU1, 2=NPU2
         n = len(models_data)
-        best_assignment = None
-        best_makespan = float('inf')
 
-        # Early exit: if n is large, we could add heuristics, but typical n is small
-        from itertools import product
-        for choices in product((0, 1, 2), repeat=n):
-            cpu_bucket = 0.0
-            npu1_bucket = 0.0
-            npu2_bucket = 0.0
-            feasible = True
-            for i, d in enumerate(choices):
-                m = models_data[i]
-                if d == 0:
-                    t = m["cpu"]
-                    if t == float('inf'):
-                        feasible = False
-                        break
-                    # CPU runs in parallel: bucket is max
-                    cpu_bucket = max(cpu_bucket, t)
-                elif d == 1:
-                    t = m["npu1_total"]
-                    if t == float('inf'):
-                        feasible = False
-                        break
-                    npu1_bucket += t
-                else:  # d == 2
-                    t = m["npu2_total"]
-                    if t == float('inf'):
-                        feasible = False
-                        break
-                    npu2_bucket += t
-            if not feasible:
-                continue
-            makespan = max(cpu_bucket, npu1_bucket, npu2_bucket)
-            if makespan < best_makespan:
-                best_makespan = makespan
-                best_assignment = choices
-
-        if best_assignment is None:
-            # Fallback: highlight nothing if no feasible assignment
-            return
-
-        # Clear output containers and fill with best assignment
+        # Clear output containers
         times.clear()
         models.clear()
 
-        # Apply highlighting according to the best assignment
-        for i, d in enumerate(best_assignment):
+        # Apply per-model argmin selection and highlight
+        for i in range(n):
             row = i
             # Safety check: skip if beyond table (shouldn't happen)
             if row >= last_row_index:
                 continue
+            m = models_data[i]
+            # Determine best device by minimal total cost
+            costs = [m["cpu"], m["npu1_total"], m["npu2_total"]]
+            # Handle case when all are inf (no available device) -> skip highlighting
+            if all(c == float('inf') for c in costs):
+                continue
+            d = costs.index(min(costs))
             # Determine color and time for outputs
             if d == 0:
                 color = cpu_color
@@ -449,7 +444,9 @@ class UIComponents:
                     
                 path = path_item.text()
                 if partition_name in path:
-                    infer_item = table.item(row, 2)
+                    # CPU table has inference at col 1 (no Load column)
+                    infer_col = 1 if (table is cpu_table and table.columnCount() == 2) else 2
+                    infer_item = table.item(row, infer_col)
                     if infer_item:
                         return float(infer_item.text())
             return 0.0
@@ -468,7 +465,8 @@ class UIComponents:
             for row in range(cpu_table.rowCount()):
                 path_item = cpu_table.item(row, 0)
                 if path_item and model in path_item.text():
-                    infer_item = cpu_table.item(row, 2)
+                    infer_col = 1 if cpu_table.columnCount() == 2 else 2
+                    infer_item = cpu_table.item(row, infer_col)
                     if infer_item:
                         cpu_time += float(infer_item.text())
             cpu_times.append(cpu_time)

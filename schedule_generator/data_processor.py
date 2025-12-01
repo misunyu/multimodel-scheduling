@@ -60,7 +60,9 @@ class DataProcessor:
         cpu_infer_per_partition = {}
         for row in range(cpu_table.rowCount()):
             path_item = cpu_table.item(row, 0)
-            infer_item = cpu_table.item(row, 2)
+            # CPU table keeps inference at column 1 after removing Load column
+            infer_col = 1 if hasattr(cpu_table, 'columnCount') and cpu_table.columnCount() == 2 else 2
+            infer_item = cpu_table.item(row, infer_col)
             if not path_item or not infer_item:
                 continue
             rel_path = path_item.text()
