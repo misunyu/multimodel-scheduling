@@ -633,7 +633,7 @@ class BestDeployFinderApp(QMainWindow):
             * <file_stem> for top-level *.onnx files
             * <folder_name> for <folder>/model.onnx
         Output:
-        - Save into the test_schedules folder.
+        - Save into the gen_schedules folder.
         - Filename includes the number of selected models and each model's input rate.
         Returns the output YAML path.
         """
@@ -820,9 +820,9 @@ class BestDeployFinderApp(QMainWindow):
                 }
                 schedules[combo_name][f"{model}_{device}"] = entry
 
-        # Prepare output path under test_schedules with informative filename
+        # Prepare output path under gen_schedules with informative filename
         root_dir = os.path.dirname(__file__)
-        out_dir = os.path.join(root_dir, 'test_schedules')
+        out_dir = os.path.join(root_dir, 'gen_schedules')
         try:
             os.makedirs(out_dir, exist_ok=True)
         except Exception:
