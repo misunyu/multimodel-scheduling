@@ -265,9 +265,9 @@ class ONNXProfilerApp(QMainWindow):
         """
         Handle selection changes in the tree view.
         - Only top-level folders (model names) can be toggled.
-        - Limit the number of selected top-level folders to a maximum of 4.
+        - No limit on how many top-level folders can be selected.
         Subfolders and their Size tabs are automatically deselected.
-        
+
         Args:
             selected: QItemSelection of newly selected items
             deselected: QItemSelection of newly deselected items
@@ -319,88 +319,7 @@ class ONNXProfilerApp(QMainWindow):
                 if _is_top_level(idx):
                     current_keys.add(_key_for_index(idx))
 
-            if len(current_keys) <= 4:
-                self._last_selected_top_keys = set(current_keys)
-                return
-
-            # Determine which keys were newly added in this change
-            added_keys = set()
-            for idx in selected.indexes():
-                if idx.column() != 0:
-                    continue
-                if _is_top_level(idx):
-                    k = _key_for_index(idx)
-                    if k and k not in self._last_selected_top_keys:
-                        added_keys.add(k)
-
-            # Enforce limit by deselecting newly added keys first
-            self._suppress_tree_selection_handler = True
-            warning_needed = False
-            try:
-                for k in list(added_keys):
-                    if len(current_keys) <= 4:
-                        break
-                    # Deselect all columns for rows that belong to this key
-                    for idx in list(self.model_tree_view.selectedIndexes()):
-                        if not _is_top_level(idx):
-                            continue
-                        if _key_for_index(idx) == k:
-                            row_index = self.fs_model.index(self.fs_model.filePath(idx), 0)
-                            cols = self.fs_model.columnCount()
-                            for c in range(cols):
-                                sib = row_index.sibling(row_index.row(), c)
-                                try:
-                                    self.model_tree_view.selectionModel().select(
-                                        sib,
-                                        self.model_tree_view.selectionModel().Deselect
-                                    )
-                                except Exception:
-                                    pass
-                    if k in current_keys:
-                        current_keys.remove(k)
-                    warning_needed = True
-
-                # If still over the limit (e.g., bulk selection), keep the previous allowed keys,
-                # and fill up to 4 with remaining current keys deterministically.
-                if len(current_keys) > 4:
-                    keep = list(self._last_selected_top_keys)
-                    for k in sorted(current_keys):
-                        if len(keep) >= 4:
-                            break
-                        if k not in keep:
-                            keep.append(k)
-                    # Deselect everything not in keep (entire row across columns)
-                    for idx in list(self.model_tree_view.selectedIndexes()):
-                        if not _is_top_level(idx):
-                            continue
-                        k = _key_for_index(idx)
-                        if k not in keep:
-                            row_index = self.fs_model.index(self.fs_model.filePath(idx), 0)
-                            cols = self.fs_model.columnCount()
-                            for c in range(cols):
-                                sib = row_index.sibling(row_index.row(), c)
-                                try:
-                                    self.model_tree_view.selectionModel().select(
-                                        sib,
-                                        self.model_tree_view.selectionModel().Deselect
-                                    )
-                                except Exception:
-                                    pass
-                    current_keys = set(keep)
-                    warning_needed = True
-            finally:
-                self._suppress_tree_selection_handler = False
-
-            if warning_needed:
-                try:
-                    QMessageBox.warning(
-                        self,
-                        '선택 제한',
-                        '최대 4개의 모델만 선택할 수 있습니다.\n추가로 선택한 항목은 해제됩니다.'
-                    )
-                except Exception:
-                    pass
-
+            # No selection cap: simply record the latest set for potential future use
             self._last_selected_top_keys = set(current_keys)
         except Exception:
             # If anything goes wrong, do not block user selection in a broken state
@@ -443,9 +362,18 @@ class ONNXProfilerApp(QMainWindow):
             # Initialize UI for profiling
             self._initialize_profiling_ui()
             
-            # Collect ALL ONNX files under the tree root (ignore selection)
-            # per requirement: run every ONNX in model_tree_view (models_onnx)
-            selected_paths = [root_folder]
+            # Collect ONNX files only from user-selected items in model_tree_view
+            selected_paths = self.file_manager.get_selected_paths(
+                self.model_tree_view, self.fs_model, root_folder
+            )
+
+            if not selected_paths:
+                # Nothing selected → warn and restore UI state
+                self.log_message("[Warning] No models selected. Please select model folders in the tree view.")
+                self._profiling_in_progress = False
+                self.profile_button.setEnabled(True)
+                return
+
             onnx_files, o_files = self.file_manager.collect_model_files(selected_paths)
 
             # Special rule: for tiny-llama-chat-onnx folder, only run its model.onnx

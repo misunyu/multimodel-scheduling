@@ -49,22 +49,7 @@ class CheckableFileSystemModel(QFileSystemModel):
     def setData(self, index, value, role=Qt.EditRole):
         if role == Qt.CheckStateRole and index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
             path = self.filePath(index)
-            # Enforce maximum of 4 checked models at top level
-            if value == Qt.Checked:
-                # Count currently checked top-level dirs
-                checked_count = sum(1 for state in self._check_states.values() if state == Qt.Checked)
-                if checked_count >= 4:
-                    # Show warning dialog and revert the last attempted check
-                    parent = self.parent() if isinstance(self.parent(), QWidget) else None
-                    QMessageBox.warning(
-                        parent,
-                        '선택 제한',
-                        '최대 4개의 모델만 선택할 수 있습니다.\n추가로 선택한 항목은 해제됩니다.'
-                    )
-                    # Ensure UI reflects the unchecked state
-                    self._check_states[path] = Qt.Unchecked
-                    self.dataChanged.emit(index, index, [Qt.CheckStateRole])
-                    return False
+            # No limit on number of checked top-level models; simply set the state
             self._check_states[path] = Qt.Checked if value == Qt.Checked else Qt.Unchecked
             self.dataChanged.emit(index, index, [Qt.CheckStateRole])
             return True
@@ -246,63 +231,8 @@ class BestDeployFinderApp(QMainWindow):
         if self._suppress_selection_handler:
             return
         try:
-            # Determine keys before applying enforcement
+            # Simply track currently selected top-level keys; no selection cap enforced
             current_keys = self._collect_selected_top_keys()
-            if len(current_keys) <= 4:
-                self._last_selected_top_keys = set(current_keys)
-                return
-
-            # Compute which keys were newly added
-            added_keys = set()
-            try:
-                for idx in selected.indexes():
-                    if idx.column() != 0:
-                        continue
-                    p = self.fs_model.filePath(idx)
-                    k = self._path_to_top_key(p)
-                    if k and k not in self._last_selected_top_keys:
-                        added_keys.add(k)
-            except Exception:
-                added_keys = set()
-
-            # Temporarily suppress recursive handling
-            self._suppress_selection_handler = True
-            try:
-                warning_needed = False
-                # First, try to drop newly added keys until we are within limit
-                for k in list(added_keys):
-                    if len(current_keys) <= 4:
-                        break
-                    self._deselect_key(k)
-                    if k in current_keys:
-                        current_keys.remove(k)
-                    warning_needed = True
-
-                # If still over limit (e.g., programmatic selection without 'selected' info), trim extras
-                if len(current_keys) > 4:
-                    # Preserve previously allowed keys as much as possible
-                    keep = list(self._last_selected_top_keys)
-                    # Fill up to 4 with any remaining current keys
-                    for k in sorted(current_keys):
-                        if len(keep) >= 4:
-                            break
-                        if k not in keep:
-                            keep.append(k)
-                    # Deselect all not in keep
-                    for k in list(current_keys):
-                        if k not in keep:
-                            self._deselect_key(k)
-                            warning_needed = True
-                    current_keys = set(keep)
-
-                if warning_needed:
-                    try:
-                        QMessageBox.warning(self, '선택 제한', '최대 4개의 모델만 선택할 수 있습니다.\n추가로 선택한 항목은 해제됩니다.')
-                    except Exception:
-                        pass
-            finally:
-                self._suppress_selection_handler = False
-
             self._last_selected_top_keys = set(current_keys)
         except Exception:
             # On any error, do not block user selection

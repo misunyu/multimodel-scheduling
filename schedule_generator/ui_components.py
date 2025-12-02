@@ -303,61 +303,24 @@ class UIComponents:
         cpu_parallel = max(1, int(cpu_parallel))
         gpu_devices = max(1, int(gpu_devices))
 
-        # Helper: LPT list scheduling makespan for m parallel identical machines
-        def lpt_makespan(task_times, m):
-            # Filter out non-positive or inf
-            task_times = [t for t in task_times if isinstance(t, (int, float)) and t > 0 and t < float('inf')]
-            if not task_times:
-                return 0.0
-            m = max(1, int(m))
-            # initialize m machine loads to 0
-            loads = [0.0] * m
-            # assign largest tasks first
-            for t in sorted(task_times, reverse=True):
-                # place t on machine with current minimum load
-                idx = min(range(m), key=lambda i: loads[i])
-                loads[idx] += t
-            return max(loads)
-
-        # Brute-force search over assignments to minimize makespan
-        # Device indices: 0=CPU, 1=GPU
+        # Simplest rule: per model, choose the faster device by comparing CPU vs GPU(+CPU) column.
+        # If equal (within epsilon) or CPU is not faster, choose GPU. If one side is unavailable (inf), choose the other.
+        equal_eps = 1e-6
         n = len(models_data)
-        best_assignment = None
-        best_makespan = float('inf')
-
-        # Early exit: if n is large, we could add heuristics, but typical n is small
-        from itertools import product
-        for choices in product((0, 1), repeat=n):
-            cpu_tasks = []
-            gpu_tasks = []
-            feasible = True
-            for i, d in enumerate(choices):
-                m = models_data[i]
-                if d == 0:
-                    t = m["cpu"]
-                    if t == float('inf'):
-                        feasible = False
-                        break
-                    cpu_tasks.append(t)
-                elif d == 1:
-                    t = m["gpu_total"]
-                    if t == float('inf'):
-                        feasible = False
-                        break
-                    gpu_tasks.append(t)
-            if not feasible:
-                continue
-            # Compute bounded-parallel makespans
-            cpu_ms = lpt_makespan(cpu_tasks, cpu_parallel)
-            gpu_ms = lpt_makespan(gpu_tasks, gpu_devices)
-            makespan = max(cpu_ms, gpu_ms)
-            if makespan < best_makespan:
-                best_makespan = makespan
-                best_assignment = choices
-
-        if best_assignment is None:
-            # Fallback: highlight nothing if no feasible assignment
-            return
+        best_assignment = [None] * n  # 0=CPU, 1=GPU
+        for i, m in enumerate(models_data):
+            cpu_t = m["cpu"]
+            gpu_t = m["gpu_total"]
+            if cpu_t == float('inf') and gpu_t == float('inf'):
+                # No feasible device for this model: skip highlighting for this row
+                best_assignment[i] = None
+            elif gpu_t == float('inf'):
+                best_assignment[i] = 0
+            elif cpu_t == float('inf'):
+                best_assignment[i] = 1
+            else:
+                # Prefer CPU only if strictly faster; ties default to GPU
+                best_assignment[i] = 0 if (cpu_t + equal_eps < gpu_t) else 1
 
         # Clear output containers and fill with best assignment
         times.clear()
@@ -379,6 +342,9 @@ class UIComponents:
                 chosen_label = "GPU"
                 # For times list, keep inference part (for external expectations)
                 chosen_time = models_data[i]["gpu_inf"] if models_data[i]["gpu_inf"] < float('inf') else 0.0
+            else:
+                # No feasible device; leave row uncolored and skip outputs
+                continue
 
             # Highlight the entire row
             for col in range(total_table.columnCount()):
@@ -389,6 +355,16 @@ class UIComponents:
             # Append results
             times.append(chosen_time)
             models.append((models_data[i]["name"], chosen_label))
+
+            # Optional trace logging if callback provided
+            try:
+                cpu_t = models_data[i]["cpu"]
+                gpu_t = models_data[i]["gpu_total"]
+                if hasattr(self, 'log') and callable(getattr(self, 'log')):
+                    self.log(f"[Schedule] {models_data[i]['name']}: CPU={cpu_t if cpu_t < float('inf') else 'NA'} ms, "
+                             f"GPU={gpu_t if gpu_t < float('inf') else 'NA'} ms -> {chosen_label}")
+            except Exception:
+                pass
 
         # After highlighting, save best schedule to static_best_schedule.json
         try:
