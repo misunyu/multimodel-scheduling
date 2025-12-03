@@ -1,13 +1,14 @@
 import os
 import sys
 from PyQt5 import uic
-from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, QThread
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, QThread, QItemSelectionModel
 from PyQt5.QtWidgets import (
     QMainWindow, QApplication, QDialog,
     QTreeView, QPlainTextEdit, QTableWidget, QAction,
     QFileSystemModel, QTabWidget, QWidget,
     QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
-    QHeaderView, QLabel, QAbstractItemView, QMessageBox
+    QHeaderView, QLabel, QAbstractItemView, QMessageBox,
+    QTableWidgetItem
 )
 
 from schedule_generator import (
@@ -834,8 +835,21 @@ class ONNXProfilerApp(QMainWindow):
     
     def save_sample_data(self):
         """Save current profiling data as a sample."""
+        # Capture current selection context to persist along with profiling data
+        root_folder = self.folder_input.text().strip() if self.folder_input else ""
+        try:
+            selected_paths = self.file_manager.get_selected_paths(
+                self.model_tree_view, self.fs_model, root_folder
+            ) if self.model_tree_view and hasattr(self, 'fs_model') else []
+        except Exception:
+            selected_paths = []
+
         self.file_manager.save_sample_data(
-            self.cpu_table, self.npu1_table, self.npu2_table, self.total_table
+            self.cpu_table, self.npu1_table, self.npu2_table, self.total_table,
+            extra_meta={
+                "root_folder": root_folder,
+                "selected_paths": selected_paths,
+            }
         )
     
     def load_sample_data(self):
@@ -850,52 +864,147 @@ class ONNXProfilerApp(QMainWindow):
         if not sample_data:
             return
         
-        # Fill tables with sample data
+        # Fill CPU/NPU tables with sample data (preserve tokens/s if present)
         for item in sample_data.get("cpu_data", []):
             self.ui_components.insert_result_row(
-                self.cpu_table, item["model"], item["load"], item["infer"]
+                self.cpu_table, item.get("model", ""), item.get("load", 0.0), item.get("infer", 0.0),
+                item.get("tokens")
             )
         
-        for item in sample_data.get("npu1_data", []):
+        # Support legacy key alias: some older files may use "gpu_data"
+        npu1_list = sample_data.get("npu1_data") or sample_data.get("gpu_data", [])
+        for item in npu1_list:
             self.ui_components.insert_result_row(
-                self.npu1_table, item["model"], item["load"], item["infer"]
+                self.npu1_table, item.get("model", ""), item.get("load", 0.0), item.get("infer", 0.0),
+                item.get("tokens")
             )
         
         for item in sample_data.get("npu2_data", []):
             self.ui_components.insert_result_row(
-                self.npu2_table, item["model"], item["load"], item["infer"]
+                self.npu2_table, item.get("model", ""), item.get("load", 0.0), item.get("infer", 0.0),
+                item.get("tokens")
             )
         
         # Process total table
         self.ui_components.initialize_total_table(self.total_table)
         
-        # Extract model data from sample
-        valid_model_onnx = {}
-        for item in sample_data.get("total_data", []):
-            model = item["model"]
-            cpu_infer = item["cpu_infer"]
-            valid_model_onnx[model] = [0.0, cpu_infer]  # Dummy load time, real infer time
-        
-        # Process results
-        all_models = set(item["model"] for item in sample_data.get("total_data", []))
-        
-        # Extract NPU data (Load columns removed in total_data schema)
-        npu1_infer = {item["model"]: item.get("npu1_infer", 0.0) for item in sample_data.get("total_data", [])}
-        npu2_infer = {item["model"]: item.get("npu2_infer", 0.0) for item in sample_data.get("total_data", [])}
-        # For backward compatibility, ignore potential npu1_load/npu2_load fields if present.
-        npu1_load = {}
-        npu2_load = {}
-        
-        # Populate total table
-        self.ui_components.populate_total_table(
-            self.total_table, all_models, valid_model_onnx,
-            npu1_load, npu1_infer, npu2_load, npu2_infer, {}
-        )
-        
-        # Calculate and display totals
-        self._calculate_and_display_totals()
+        total_items = sample_data.get("total_data") or []
+        if total_items:
+            # Directly restore rows from saved total_data
+            for it in total_items:
+                row = self.total_table.rowCount()
+                self.total_table.insertRow(row)
+                self.total_table.setItem(row, 0, QTableWidgetItem(str(it.get("model", ""))))
+                # cpu/gpu infer
+                cpu_infer = float(it.get("cpu_infer", 0.0) or 0.0)
+                gpu_infer = float((it.get("gpu_infer", None) if it.get("gpu_infer", None) is not None else it.get("npu1_infer", 0.0)) or 0.0)
+                self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
+                self.total_table.setItem(row, 2, QTableWidgetItem(f"{gpu_infer:.1f}"))
+                # tokens if provided
+                cpu_tok = it.get("cpu_tokens")
+                gpu_tok = it.get("gpu_tokens")
+                self.total_table.setItem(row, 3, QTableWidgetItem("-" if cpu_tok in (None, "", "-") else f"{float(cpu_tok):.2f}"))
+                self.total_table.setItem(row, 4, QTableWidgetItem("-" if gpu_tok in (None, "", "-") else f"{float(gpu_tok):.2f}"))
+
+            # Add total row at the end
+            self._calculate_and_display_totals()
+        else:
+            # Backward compatibility: reconstruct via populate_total_table
+            # Extract model data from CPU table to build cpu_infer_per_partition
+            valid_model_onnx = {}
+            cpu_infer_per_partition = {}
+            models = set()
+            for row in range(self.cpu_table.rowCount()):
+                name_item = self.cpu_table.item(row, 0)
+                model = name_item.text() if name_item else ""
+                if not model:
+                    continue
+                infer = 0.0
+                try:
+                    infer = float(self.cpu_table.item(row, 2).text())
+                except Exception:
+                    infer = 0.0
+                cpu_infer_per_partition.setdefault(model, []).append(infer)
+                valid_model_onnx[model] = [0.0, infer]
+                models.add(model)
+
+            # Build npu1_infer from NPU1 table
+            npu1_infer = {}
+            for row in range(self.npu1_table.rowCount()):
+                name_item = self.npu1_table.item(row, 0)
+                model = name_item.text() if name_item else ""
+                if not model:
+                    continue
+                try:
+                    val = float(self.npu1_table.item(row, 2).text())
+                except Exception:
+                    val = 0.0
+                npu1_infer[model] = npu1_infer.get(model, 0.0) + val
+                models.add(model)
+
+            self.ui_components.populate_total_table(
+                self.total_table, models, valid_model_onnx,
+                {}, npu1_infer, {}, {}, cpu_infer_per_partition
+            )
+            self._calculate_and_display_totals()
         
         self.log_message("[Info] Sample data loaded successfully.")
+
+        # Restore previously selected models/folder if present
+        try:
+            root_folder = sample_data.get("root_folder")
+            selected_paths = sample_data.get("selected_paths") or []
+            if root_folder and isinstance(root_folder, str) and os.path.isdir(root_folder):
+                self.folder_input.setText(root_folder)
+                # Set the tree root
+                try:
+                    self.set_tree_root(root_folder)
+                except Exception:
+                    pass
+
+            # Re-select items with visibility ensured (expand + scroll)
+            if selected_paths and self.model_tree_view and hasattr(self, 'fs_model'):
+                def _apply_selection():
+                    try:
+                        sel_model = self.model_tree_view.selectionModel()
+                        if sel_model:
+                            sel_model.clearSelection()
+                        first_valid_idx = None
+                        for p in selected_paths:
+                            try:
+                                # Normalize the path to increase match rate
+                                np = os.path.normpath(p)
+                                rp = os.path.realpath(np)
+                                # Try realpath first, then original
+                                idx = self.fs_model.index(rp)
+                                if (not idx) or (not idx.isValid()):
+                                    idx = self.fs_model.index(np)
+                                if idx and idx.isValid():
+                                    # Expand parents so item is visible
+                                    parent = idx.parent()
+                                    while parent and parent.isValid():
+                                        self.model_tree_view.expand(parent)
+                                        parent = parent.parent()
+                                    # Select the row
+                                    if sel_model:
+                                        sel_model.select(idx, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+                                    # Remember first valid to set focus later
+                                    if first_valid_idx is None:
+                                        first_valid_idx = idx
+                                    # Ensure it is scrolled into view
+                                    self.model_tree_view.scrollTo(idx)
+                            except Exception:
+                                continue
+                        if first_valid_idx is not None:
+                            self.model_tree_view.setCurrentIndex(first_valid_idx)
+                    except Exception:
+                        pass
+
+                # Defer selection until after model/tree updates are processed
+                QTimer.singleShot(0, _apply_selection)
+        except Exception:
+            # Non-fatal; ignore restore errors
+            pass
     
     def show_settings_dialog(self):
         """Show settings dialog."""
