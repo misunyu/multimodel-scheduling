@@ -8,12 +8,126 @@ from PyQt5.QtWidgets import (
     QFileSystemModel, QTabWidget, QWidget,
     QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
     QHeaderView, QLabel, QAbstractItemView, QMessageBox,
-    QTableWidgetItem
+    QTableWidgetItem, QFileDialog
 )
 
 from schedule_generator import (
     ModelProfiler, DataProcessor, UIComponents, FileManager
 )
+
+class _EmittingStream(QObject):
+    """File-like stream that emits written text via Qt signal (thread-safe)."""
+    text_emitted = pyqtSignal(str)
+
+    def __init__(self, prefix: str = "", parent: QObject = None):
+        super().__init__(parent)
+        self._buffer = []
+        self._prefix = prefix
+
+    def write(self, text: str):
+        if not isinstance(text, str):
+            text = str(text)
+        # Accumulate and emit full lines to keep log tidy
+        self._buffer.append(text)
+        joined = ''.join(self._buffer)
+        lines = joined.split('\n')
+        # Keep the last partial line in buffer
+        self._buffer = [lines.pop()] if lines else []
+        for line in lines:
+            if self._prefix:
+                self.text_emitted.emit(f"{self._prefix}{line}")
+            else:
+                self.text_emitted.emit(line)
+
+    def flush(self):
+        # Emit any remaining partial content as a line
+        if self._buffer:
+            remaining = ''.join(self._buffer)
+            self._buffer = []
+            if remaining:
+                if self._prefix:
+                    self.text_emitted.emit(f"{self._prefix}{remaining}")
+                else:
+                    self.text_emitted.emit(remaining)
+
+class _StderrReaderThread(QThread):
+    """Background thread that reads from a file descriptor and emits lines."""
+    line = pyqtSignal(str)
+
+    def __init__(self, read_fd: int, parent: QObject = None):
+        super().__init__(parent)
+        self._rfd = read_fd
+
+    def run(self):
+        import os as _os
+        buf = b""
+        try:
+            while True:
+                try:
+                    chunk = _os.read(self._rfd, 1024)
+                except Exception:
+                    break
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    try:
+                        self.line.emit(line.decode("utf-8", errors="replace"))
+                    except Exception:
+                        pass
+        finally:
+            try:
+                _os.close(self._rfd)
+            except Exception:
+                pass
+
+class _FDStderrRedirector(QObject):
+    """Redirects POSIX stderr (fd=2) to a pipe and emits lines via signal."""
+    text_emitted = pyqtSignal(str)
+
+    def __init__(self, parent: QObject = None):
+        super().__init__(parent)
+        self._orig_fd = None
+        self._thread = None
+
+    def start(self):
+        import os as _os
+        try:
+            self._orig_fd = _os.dup(2)
+            rfd, wfd = _os.pipe()
+            # Redirect process stderr to pipe's write end
+            _os.dup2(wfd, 2)
+            try:
+                _os.close(wfd)
+            except Exception:
+                pass
+            # Start reader thread to consume from read end
+            self._thread = _StderrReaderThread(rfd)
+            self._thread.line.connect(lambda s: self.text_emitted.emit(f"[stderr] {s}"))
+            self._thread.start()
+        except Exception:
+            # Fallback: do nothing
+            self._orig_fd = None
+            self._thread = None
+
+    def stop(self):
+        import os as _os
+        # Restore original stderr if possible
+        try:
+            if self._orig_fd is not None:
+                _os.dup2(self._orig_fd, 2)
+                _os.close(self._orig_fd)
+        except Exception:
+            pass
+        self._orig_fd = None
+        # Let thread exit after pipe EOF
+        if self._thread is not None:
+            try:
+                self._thread.wait(1000)
+            except Exception:
+                pass
+            self._thread = None
 
 class CPUProfileWorker(QObject):
     """Background worker to profile models on CPU without blocking UI."""
@@ -103,7 +217,7 @@ class ONNXProfilerApp(QMainWindow):
         self.data_processor = DataProcessor(log_callback=self.log_message)
         self.ui_components = UIComponents(log_callback=self.log_message)
         self.file_manager = FileManager(log_callback=self.log_message)
-        
+
         # Find UI elements
         self.setup_ui_elements()
         
@@ -112,6 +226,26 @@ class ONNXProfilerApp(QMainWindow):
         
         # Set up file system model
         self.setup_file_system_model()
+
+        # Redirect stdout to the log window and capture low-level stderr (onnxruntime warnings)
+        try:
+            # Python-level stdout
+            self._orig_stdout = sys.stdout
+            self._stdout_stream = _EmittingStream(prefix="")
+            self._stdout_stream.text_emitted.connect(self.log_message)
+            sys.stdout = self._stdout_stream
+        except Exception:
+            pass
+
+        try:
+            # POSIX-level stderr redirection (captures C/C++ library warnings)
+            self._fd_stderr_redirector = _FDStderrRedirector()
+            self._fd_stderr_redirector.text_emitted.connect(self.log_message)
+            self._fd_stderr_redirector.start()
+            # Ensure restoration on exit
+            QApplication.instance().aboutToQuit.connect(self._fd_stderr_redirector.stop)
+        except Exception:
+            pass
 
         # Selection limiting state (max 4 top-level selections)
         self._suppress_tree_selection_handler = False
@@ -642,11 +776,41 @@ class ONNXProfilerApp(QMainWindow):
         self.profiled_times = []
         self.profiled_models = []
         
+        # Build Tokens/s maps from per-device tabs (mirror values exactly as shown)
+        def _build_tokens_map(table):
+            tok_map = {}
+            agg = {}
+            for row in range(table.rowCount()):
+                name_item = table.item(row, 0)
+                tok_item = table.item(row, 3)
+                if not name_item or not tok_item:
+                    continue
+                name = name_item.text() or ""
+                txt = tok_item.text() or ""
+                try:
+                    val = float(txt)
+                except Exception:
+                    continue
+                if val <= 0:
+                    continue
+                agg.setdefault(name, []).append(val)
+            for k, vs in agg.items():
+                try:
+                    tok_map[k] = sum(vs) / len(vs)
+                except Exception:
+                    tok_map[k] = vs[-1]
+            return tok_map
+
+        cpu_tokens_map = _build_tokens_map(self.cpu_table)
+        gpu_tokens_map = _build_tokens_map(self.npu1_table)
+
         # Populate total table
         self.ui_components.populate_total_table(
             self.total_table, all_models, valid_model_onnx, 
             npu1_load, npu1_infer, npu2_load, npu2_infer, 
-            cpu_infer_per_partition
+            cpu_infer_per_partition,
+            cpu_tokens_map=cpu_tokens_map,
+            gpu_tokens_map=gpu_tokens_map
         )
         
         # Calculate and display totals
@@ -654,22 +818,83 @@ class ONNXProfilerApp(QMainWindow):
             self._calculate_and_display_totals()
     
     def _calculate_and_display_totals(self):
-        """Calculate and display total values in the total table."""
-        # Calculate totals
-        cpu_infer_total = 0.0
-        gpu_infer_total = 0.0
-        
-        for row in range(self.total_table.rowCount()):
+        """Calculate and display Total row as averages over non '-' entries.
+        - CPU FPS: average of numeric FPS in column 1
+        - GPU FPS: average of numeric FPS in column 2
+        - CPU Tokens/s: average of numeric values in column 3
+        - GPU Tokens/s: average of numeric values in column 4
+        """
+        cpu_fps_vals = []
+        gpu_fps_vals = []
+        cpu_tok_vals = []
+        gpu_tok_vals = []
+
+        def _read_fps(item):
+            if not item:
+                return 0.0
             try:
-                cpu_infer_total += float(self.total_table.item(row, 1).text())
-                gpu_infer_total += float(self.total_table.item(row, 2).text())
-            except:
+                data = item.data(Qt.UserRole)
+                if isinstance(data, (int, float)):
+                    return float(data)
+            except Exception:
                 pass
+            try:
+                txt = item.text()
+                return float(txt) if txt and txt != "-" else 0.0
+            except Exception:
+                return 0.0
+
+        # Exclude an existing Total row if present by checking the last row's first cell
+        last_index = self.total_table.rowCount() - 1
+        total_label_row = None
+        if last_index >= 0:
+            first = self.total_table.item(last_index, 0)
+            if first and (first.text() or "").strip().lower() == "total":
+                total_label_row = last_index
+
+        for row in range(self.total_table.rowCount()):
+            if total_label_row is not None and row == total_label_row:
+                continue
+            # FPS columns
+            cpu_item = self.total_table.item(row, 1)
+            gpu_item = self.total_table.item(row, 2)
+            cpu_fps = _read_fps(cpu_item)
+            gpu_fps = _read_fps(gpu_item)
+            if cpu_fps > 0:
+                cpu_fps_vals.append(cpu_fps)
+            if gpu_fps > 0:
+                gpu_fps_vals.append(gpu_fps)
+            # Tokens/s columns
+            def _read_tok(item):
+                if not item:
+                    return 0.0
+                try:
+                    txt = item.text()
+                    return float(txt) if txt and txt != "-" else 0.0
+                except Exception:
+                    return 0.0
+            cpu_tok = _read_tok(self.total_table.item(row, 3))
+            gpu_tok = _read_tok(self.total_table.item(row, 4))
+            if cpu_tok > 0:
+                cpu_tok_vals.append(cpu_tok)
+            if gpu_tok > 0:
+                gpu_tok_vals.append(gpu_tok)
         
+        # Compute averages (non '-' entries only)
+        def _avg(arr):
+            return (sum(arr) / len(arr)) if arr else 0.0
+        cpu_fps_avg = _avg(cpu_fps_vals)
+        gpu_fps_avg = _avg(gpu_fps_vals)
+        cpu_tok_avg = _avg(cpu_tok_vals)
+        gpu_tok_avg = _avg(gpu_tok_vals)
+
         # Add total row
         self.ui_components.add_total_row(
-            self.total_table, cpu_infer_total, 
-            gpu_infer_total
+            self.total_table,
+            cpu_fps_avg,
+            gpu_fps_avg,
+            cpu_tok_avg,
+            gpu_tok_avg
         )
 
     # Removed _profile_pre_post_avg_times and related functionality
@@ -786,9 +1011,12 @@ class ONNXProfilerApp(QMainWindow):
                     **({"infps": infps} if infps is not None else {})
                 }
         
-        # Write to model_schedules.yaml
+        # Write to static_results/model_schedules.yaml
         try:
-            with open("../tests/model_schedules.yaml", "w") as f:
+            static_dir = os.path.join(os.getcwd(), "static_results")
+            os.makedirs(static_dir, exist_ok=True)
+            out_yaml = os.path.join(static_dir, "model_schedules.yaml")
+            with open(out_yaml, "w") as f:
                 # Add header comments
                 f.write("# model_schedules.yaml\n")
                 f.write("# Auto-generated configuration for model execution on CPU or GPU\n\n")
@@ -812,10 +1040,10 @@ class ONNXProfilerApp(QMainWindow):
                 
                 # Custom YAML dumping to add blank lines between combinations
                 f.write(yaml.dump(schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
-                
-            self.log_message(f"[Success] Generated {len(combinations)} combinations in model_schedules.yaml")
+
+            self.log_message(f"[Success] Generated {len(combinations)} combinations in static_results/model_schedules.yaml")
         except Exception as e:
-            self.log_message(f"[Error] Failed to write model_schedules.yaml: {e}")
+            self.log_message(f"[Error] Failed to write static_results/model_schedules.yaml: {e}")
             
         # Log assignments
         self.log_message("\n[Model Assignments]")
@@ -835,6 +1063,21 @@ class ONNXProfilerApp(QMainWindow):
     
     def save_sample_data(self):
         """Save current profiling data as a sample."""
+        # Ask user for destination file
+        default_name = os.path.join(os.getcwd(), "sample_profiling_data.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Sample Data",
+            default_name,
+            "JSON Files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
+
+        # Ensure .json extension
+        if not path.lower().endswith('.json'):
+            path = f"{path}.json"
+
         # Capture current selection context to persist along with profiling data
         root_folder = self.folder_input.text().strip() if self.folder_input else ""
         try:
@@ -849,40 +1092,64 @@ class ONNXProfilerApp(QMainWindow):
             extra_meta={
                 "root_folder": root_folder,
                 "selected_paths": selected_paths,
-            }
+            },
+            filename=path
         )
     
     def load_sample_data(self):
         """Load sample profiling data."""
+        # Ask user for source file
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Sample Data",
+            os.getcwd(),
+            "JSON Files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
         # Clear existing data
         self.ui_components.init_table(self.cpu_table)
         self.ui_components.init_table(self.npu1_table)
         self.ui_components.init_table(self.npu2_table)
         
         # Load sample data
-        sample_data = self.file_manager.load_sample_data()
+        sample_data = self.file_manager.load_sample_data(filename=path)
         if not sample_data:
             return
         
-        # Fill CPU/NPU tables with sample data (preserve tokens/s if present)
+        # Fill CPU/NPU tables with sample data
+        # Always recompute tokens/s from inference ms to keep consistency with Total tab
         for item in sample_data.get("cpu_data", []):
+            model = item.get("model", "")
+            load = item.get("load", 0.0)
+            infer = item.get("infer", 0.0)
+            # Normalize model name like in live profiling to ensure LLM detection is consistent
+            disp_model = self._normalize_display_model(model)
+            tokens = self._compute_tokens_per_s(disp_model, infer)
             self.ui_components.insert_result_row(
-                self.cpu_table, item.get("model", ""), item.get("load", 0.0), item.get("infer", 0.0),
-                item.get("tokens")
+                self.cpu_table, disp_model, load, infer, tokens
             )
         
         # Support legacy key alias: some older files may use "gpu_data"
         npu1_list = sample_data.get("npu1_data") or sample_data.get("gpu_data", [])
         for item in npu1_list:
+            model = item.get("model", "")
+            load = item.get("load", 0.0)
+            infer = item.get("infer", 0.0)
+            disp_model = self._normalize_display_model(model)
+            tokens = self._compute_tokens_per_s(disp_model, infer)
             self.ui_components.insert_result_row(
-                self.npu1_table, item.get("model", ""), item.get("load", 0.0), item.get("infer", 0.0),
-                item.get("tokens")
+                self.npu1_table, disp_model, load, infer, tokens
             )
         
         for item in sample_data.get("npu2_data", []):
+            model = item.get("model", "")
+            load = item.get("load", 0.0)
+            infer = item.get("infer", 0.0)
+            disp_model = self._normalize_display_model(model)
+            tokens = self._compute_tokens_per_s(disp_model, infer)
             self.ui_components.insert_result_row(
-                self.npu2_table, item.get("model", ""), item.get("load", 0.0), item.get("infer", 0.0),
-                item.get("tokens")
+                self.npu2_table, disp_model, load, infer, tokens
             )
         
         # Process total table
@@ -890,21 +1157,63 @@ class ONNXProfilerApp(QMainWindow):
         
         total_items = sample_data.get("total_data") or []
         if total_items:
-            # Directly restore rows from saved total_data
+            # Directly restore rows from saved total_data (display FPS in columns 1-2)
+            def _is_llm(name: str) -> bool:
+                n = (name or "").lower()
+                return ("gpt2" in n) or ("tiny-llama" in n)
+
             for it in total_items:
                 row = self.total_table.rowCount()
                 self.total_table.insertRow(row)
-                self.total_table.setItem(row, 0, QTableWidgetItem(str(it.get("model", ""))))
-                # cpu/gpu infer
-                cpu_infer = float(it.get("cpu_infer", 0.0) or 0.0)
-                gpu_infer = float((it.get("gpu_infer", None) if it.get("gpu_infer", None) is not None else it.get("npu1_infer", 0.0)) or 0.0)
-                self.total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
-                self.total_table.setItem(row, 2, QTableWidgetItem(f"{gpu_infer:.1f}"))
-                # tokens if provided
-                cpu_tok = it.get("cpu_tokens")
-                gpu_tok = it.get("gpu_tokens")
-                self.total_table.setItem(row, 3, QTableWidgetItem("-" if cpu_tok in (None, "", "-") else f"{float(cpu_tok):.2f}"))
-                self.total_table.setItem(row, 4, QTableWidgetItem("-" if gpu_tok in (None, "", "-") else f"{float(gpu_tok):.2f}"))
+                # Normalize model name for display + LLM detection
+                model_name = self._normalize_display_model(str(it.get("model", "")))
+                self.total_table.setItem(row, 0, QTableWidgetItem(model_name))
+
+                # Prefer stored FPS if present; otherwise derive from ms fields
+                cpu_fps = it.get("cpu_fps")
+                gpu_fps = it.get("gpu_fps")
+                try:
+                    cpu_fps = float(cpu_fps) if cpu_fps is not None else None
+                except Exception:
+                    cpu_fps = None
+                try:
+                    gpu_fps = float(gpu_fps) if gpu_fps is not None else None
+                except Exception:
+                    gpu_fps = None
+
+                if cpu_fps is None or cpu_fps <= 0:
+                    cpu_infer_ms = float(it.get("cpu_infer", 0.0) or 0.0)
+                    cpu_fps = (1000.0 / cpu_infer_ms) if cpu_infer_ms > 0 else 0.0
+                if gpu_fps is None or gpu_fps <= 0:
+                    gpu_infer_ms = float((it.get("gpu_infer", None) if it.get("gpu_infer", None) is not None else it.get("npu1_infer", 0.0)) or 0.0)
+                    gpu_fps = (1000.0 / gpu_infer_ms) if gpu_infer_ms > 0 else 0.0
+
+                # CPU FPS cell
+                cpu_item = QTableWidgetItem("-")
+                if not _is_llm(model_name):
+                    cpu_item.setText(f"{cpu_fps:.1f}" if cpu_fps > 0 else "-")
+                cpu_item.setData(Qt.UserRole, cpu_fps if isinstance(cpu_fps, (int, float)) else 0.0)
+                self.total_table.setItem(row, 1, cpu_item)
+
+                # GPU FPS cell
+                gpu_item = QTableWidgetItem("-")
+                if not _is_llm(model_name):
+                    gpu_item.setText(f"{gpu_fps:.1f}" if gpu_fps > 0 else "-")
+                gpu_item.setData(Qt.UserRole, gpu_fps if isinstance(gpu_fps, (int, float)) else 0.0)
+                self.total_table.setItem(row, 2, gpu_item)
+
+                # Recompute tokens/s from inference ms to match result tabs
+                def _tok_from_ms(name: str, infer_ms_val: float):
+                    return self._compute_tokens_per_s(name, infer_ms_val)
+
+                cpu_infer_ms = float(it.get("cpu_infer", 0.0) or 0.0)
+                gpu_infer_ms = float((it.get("gpu_infer", None) if it.get("gpu_infer", None) is not None else it.get("npu1_infer", 0.0)) or 0.0)
+
+                cpu_tok_val = _tok_from_ms(model_name, cpu_infer_ms)
+                gpu_tok_val = _tok_from_ms(model_name, gpu_infer_ms)
+
+                self.total_table.setItem(row, 3, QTableWidgetItem("-" if cpu_tok_val is None else f"{cpu_tok_val:.2f}"))
+                self.total_table.setItem(row, 4, QTableWidgetItem("-" if gpu_tok_val is None else f"{gpu_tok_val:.2f}"))
 
             # Add total row at the end
             self._calculate_and_display_totals()

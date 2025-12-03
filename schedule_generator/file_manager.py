@@ -2,6 +2,7 @@ import os
 import json
 import yaml
 from typing import Dict, List, Tuple, Any, Optional, Set
+from PyQt5.QtCore import Qt
 
 class FileManager:
     """
@@ -255,7 +256,9 @@ class FileManager:
         
         return device_settings
     
-    def save_sample_data(self, cpu_table, npu1_table, npu2_table, total_table, extra_meta: Optional[Dict[str, Any]] = None):
+    def save_sample_data(self, cpu_table, npu1_table, npu2_table, total_table,
+                         extra_meta: Optional[Dict[str, Any]] = None,
+                         filename: Optional[str] = None):
         """
         Save profiling data to a sample file.
         
@@ -357,8 +360,28 @@ class FileManager:
             model = name_item.text() if name_item else ""
             if not model:
                 continue
-            cpu_infer = _safe_float_text(total_table.item(row, 1))
-            gpu_infer = _safe_float_text(total_table.item(row, 2))
+            # Read FPS from table (columns 1 and 2 now show FPS). Prefer hidden Qt.UserRole numeric.
+            def _read_fps(col: int) -> float:
+                it = total_table.item(row, col)
+                if not it:
+                    return 0.0
+                try:
+                    data = it.data(Qt.UserRole)
+                    if isinstance(data, (int, float)):
+                        return float(data)
+                except Exception:
+                    pass
+                try:
+                    txt = it.text()
+                    return float(txt) if txt and txt != "-" else 0.0
+                except Exception:
+                    return 0.0
+
+            cpu_fps_val = _read_fps(1)
+            gpu_fps_val = _read_fps(2)
+            # Convert FPS to ms for storage (backward compatible)
+            cpu_infer = (1000.0 / cpu_fps_val) if cpu_fps_val > 0 else 0.0
+            gpu_infer = (1000.0 / gpu_fps_val) if gpu_fps_val > 0 else 0.0
             cpu_tokens = None
             gpu_tokens = None
             cpu_tok_item = total_table.item(row, 3)
@@ -379,7 +402,10 @@ class FileManager:
                 "cpu_infer": cpu_infer,
                 # Prefer GPU naming but keep NPU1 alias for backward compatibility on load
                 "gpu_infer": gpu_infer,
-                "npu1_infer": gpu_infer
+                "npu1_infer": gpu_infer,
+                # Also store FPS values explicitly for forward compatibility/debugging
+                "cpu_fps": round(cpu_fps_val, 2),
+                "gpu_fps": round(gpu_fps_val, 2)
             }
             if cpu_tokens is not None:
                 entry["cpu_tokens"] = cpu_tokens
@@ -388,7 +414,8 @@ class FileManager:
             sample_data["total_data"].append(entry)
         
         # Save to file
-        filename = "sample_profiling_data.json"
+        # If a filename is provided by caller, use it; otherwise, use default name.
+        filename = filename or "sample_profiling_data.json"
         try:
             with open(filename, 'w') as f:
                 json.dump(sample_data, f, indent=2)

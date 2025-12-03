@@ -78,8 +78,8 @@ class UIComponents:
         total_table.setColumnCount(5)
         total_table.setHorizontalHeaderLabels([
             "Model",
-            "CPU Inf. (ms)",
-            "GPU + CPU Offloading (ms)",
+            "CPU FPS",
+            "GPU FPS",
             "CPU Tokens/s",
             "GPU Tokens/s"
         ])
@@ -92,7 +92,9 @@ class UIComponents:
     
     def populate_total_table(self, total_table, all_models, valid_model_onnx, 
                             npu1_load, npu1_infer, npu2_load, npu2_infer, 
-                            cpu_infer_per_partition):
+                            cpu_infer_per_partition,
+                            cpu_tokens_map: Optional[dict] = None,
+                            gpu_tokens_map: Optional[dict] = None):
         """
         Populate the total results table with data.
         
@@ -109,10 +111,9 @@ class UIComponents:
             n = (name or "").lower()
             return ("gpt2" in n) or ("tiny-llama" in n)
 
-        # Common test sentence for LLM throughput (tokens/s)
-        # Widely used pangram
-        test_sentence = "The quick brown fox jumps over the lazy dog."
-        test_tokens = max(1, len(test_sentence.strip().split()))
+        # Tokens/s are now mirrored from the per-device tabs rather than recomputed
+        cpu_tokens_map = cpu_tokens_map or {}
+        gpu_tokens_map = gpu_tokens_map or {}
 
         for model in sorted(all_models):
             row = total_table.rowCount()
@@ -135,40 +136,59 @@ class UIComponents:
                 cpu_infer = sum(cpu_infer_per_partition[model])
             elif disp in cpu_infer_per_partition:
                 cpu_infer = sum(cpu_infer_per_partition[disp])
-            total_table.setItem(row, 1, QTableWidgetItem(f"{cpu_infer:.1f}"))
+            # Display CPU as FPS for CNN; for LLM show '-' and store 0.0 in UserRole
+            cpu_item = QTableWidgetItem("-")
+            cpu_fps = 0.0
+            if isinstance(cpu_infer, (int, float)) and cpu_infer > 0:
+                cpu_fps = 1000.0 / cpu_infer
+            if not is_llm(disp):
+                cpu_item.setText(f"{cpu_fps:.1f}" if cpu_fps > 0 else "-")
+            # Store numeric FPS (0.0 if unavailable) for internal use
+            cpu_item.setData(Qt.UserRole, cpu_fps if not is_llm(disp) else 0.0)
+            total_table.setItem(row, 1, cpu_item)
             
             # GPU inference time (previously NPU1; Load columns removed)
             npu1_infer_time = npu1_infer.get(model, 0.0)
             # 모델명이 표기용으로 정규화(disp)된 경우 보조 조회
             if (not isinstance(npu1_infer_time, (int, float)) or npu1_infer_time <= 0) and disp != model:
                 npu1_infer_time = npu1_infer.get(disp, npu1_infer_time)
-            total_table.setItem(row, 2, QTableWidgetItem(f"{npu1_infer_time:.1f}"))
+            # Display GPU as FPS for CNN; for LLM show '-' and store 0.0 in UserRole
+            gpu_item = QTableWidgetItem("-")
+            gpu_fps = 0.0
+            if isinstance(npu1_infer_time, (int, float)) and npu1_infer_time > 0:
+                gpu_fps = 1000.0 / npu1_infer_time
+            if not is_llm(disp):
+                gpu_item.setText(f"{gpu_fps:.1f}" if gpu_fps > 0 else "-")
+            gpu_item.setData(Qt.UserRole, gpu_fps if not is_llm(disp) else 0.0)
+            total_table.setItem(row, 2, gpu_item)
 
-            # Tokens/s (LLM only): compute separately for CPU and GPU
+            # Tokens/s (LLM only): mirror from CPU/GPU tabs
             cpu_tps_item = QTableWidgetItem("-")
             gpu_tps_item = QTableWidgetItem("-")
-            # LLM 감지는 표시용 이름(disp)을 기준으로 수행해야 tiny-llama 정규화 케이스를 놓치지 않음
             if is_llm(disp):
-                # CPU tokens/s
-                if isinstance(cpu_infer, (int, float)) and cpu_infer > 0:
-                    cpu_tps = test_tokens / (cpu_infer / 1000.0)
-                    cpu_tps_item = QTableWidgetItem(f"{cpu_tps:.2f}")
-                # GPU tokens/s
-                if isinstance(npu1_infer_time, (int, float)) and npu1_infer_time > 0:
-                    gpu_tps = test_tokens / (npu1_infer_time / 1000.0)
-                    gpu_tps_item = QTableWidgetItem(f"{gpu_tps:.2f}")
+                cpu_tok = cpu_tokens_map.get(model, cpu_tokens_map.get(disp))
+                gpu_tok = gpu_tokens_map.get(model, gpu_tokens_map.get(disp))
+                if isinstance(cpu_tok, (int, float)) and cpu_tok > 0:
+                    cpu_tps_item = QTableWidgetItem(f"{cpu_tok:.2f}")
+                if isinstance(gpu_tok, (int, float)) and gpu_tok > 0:
+                    gpu_tps_item = QTableWidgetItem(f"{gpu_tok:.2f}")
             total_table.setItem(row, 3, cpu_tps_item)
             total_table.setItem(row, 4, gpu_tps_item)
     
-    def add_total_row(self, total_table, cpu_infer_total, 
-                     gpu_infer_total):
+    def add_total_row(self, total_table,
+                     cpu_fps_avg,
+                     gpu_fps_avg,
+                     cpu_tokens_avg,
+                     gpu_tokens_avg):
         """
         Add a total row to the total results table.
         
         Args:
             total_table: QTableWidget for total results
-            cpu_infer_total: Total CPU inference time
-            gpu_infer_total: Total GPU inference time
+            cpu_fps_avg: averaged CPU FPS over non '-' entries
+            gpu_fps_avg: averaged GPU FPS over non '-' entries
+            cpu_tokens_avg: averaged CPU Tokens/s over non '-' entries
+            gpu_tokens_avg: averaged GPU Tokens/s over non '-' entries
         """
         row = total_table.rowCount()
         total_table.insertRow(row)
@@ -182,18 +202,37 @@ class UIComponents:
         total_item.setFont(bold_font)
         total_table.setItem(row, 0, total_item)
         
-        # CPU total
-        cpu_item = QTableWidgetItem(f"{cpu_infer_total:.1f}")
+        # CPU FPS average
+        if isinstance(cpu_fps_avg, (int, float)) and cpu_fps_avg > 0:
+            cpu_item = QTableWidgetItem(f"{cpu_fps_avg:.1f}")
+        else:
+            cpu_item = QTableWidgetItem("-")
         cpu_item.setFont(bold_font)
         total_table.setItem(row, 1, cpu_item)
         
-        # GPU inference total
-        gpu_infer_item = QTableWidgetItem(f"{gpu_infer_total:.1f}")
+        # GPU FPS average
+        if isinstance(gpu_fps_avg, (int, float)) and gpu_fps_avg > 0:
+            gpu_infer_item = QTableWidgetItem(f"{gpu_fps_avg:.1f}")
+        else:
+            gpu_infer_item = QTableWidgetItem("-")
         gpu_infer_item.setFont(bold_font)
         total_table.setItem(row, 2, gpu_infer_item)
-        # Tokens/s columns for Total: not applicable
-        total_table.setItem(row, 3, QTableWidgetItem("-"))
-        total_table.setItem(row, 4, QTableWidgetItem("-"))
+        
+        # CPU Tokens/s average
+        if isinstance(cpu_tokens_avg, (int, float)) and cpu_tokens_avg > 0:
+            cpu_tok_item = QTableWidgetItem(f"{cpu_tokens_avg:.2f}")
+        else:
+            cpu_tok_item = QTableWidgetItem("-")
+        cpu_tok_item.setFont(bold_font)
+        total_table.setItem(row, 3, cpu_tok_item)
+
+        # GPU Tokens/s average
+        if isinstance(gpu_tokens_avg, (int, float)) and gpu_tokens_avg > 0:
+            gpu_tok_item = QTableWidgetItem(f"{gpu_tokens_avg:.2f}")
+        else:
+            gpu_tok_item = QTableWidgetItem("-")
+        gpu_tok_item.setFont(bold_font)
+        total_table.setItem(row, 4, gpu_tok_item)
     
     def highlight_deploy_results(self, total_table, times, models, device_settings=None):
         """
@@ -229,22 +268,58 @@ class UIComponents:
         gpu_color = QColor(255, 255, 204)   # Light yellow for GPU
 
         # Collect per-model timing options from the table
-        # Columns: 0=Model, 1=CPU Inf, 2=GPU(+CPU Offloading)
-        models_data = []  # list of dicts: {name, cpu, gpu_total, gpu_inf}
+        # Columns: 0=Model, 1=CPU FPS, 2=GPU FPS, 3=CPU Tokens/s, 4=GPU Tokens/s
+        models_data = []  # list of dicts: {name, cpu, gpu_total, gpu_inf, is_llm, cpu_tok, gpu_tok}
         last_row_index = total_table.rowCount() - 1  # last row is the Total row
         for row in range(max(0, last_row_index)):
             name_item = total_table.item(row, 0)
             if not name_item:
                 continue
             model_name = name_item.text()
-            try:
-                cpu_time = float(total_table.item(row, 1).text()) if total_table.item(row, 1) else 0.0
-            except Exception:
-                cpu_time = 0.0
-            try:
-                gpu_infer = float(total_table.item(row, 2).text()) if total_table.item(row, 2) else 0.0
-            except Exception:
-                gpu_infer = 0.0
+            lower_name = (model_name or "").lower()
+            is_llm = ("gpt2" in lower_name) or ("tiny-llama" in lower_name)
+
+            # Read FPS/Tokens from table and convert to comparable metrics for scheduling.
+            # Prefer hidden numeric value in UserRole if available.
+            def read_fps(col: int) -> float:
+                it = total_table.item(row, col)
+                if not it:
+                    return 0.0
+                try:
+                    data = it.data(Qt.UserRole)
+                    if isinstance(data, (int, float)):
+                        return float(data)
+                except Exception:
+                    pass
+                try:
+                    txt = it.text()
+                    return float(txt) if txt and txt != "-" else 0.0
+                except Exception:
+                    return 0.0
+
+            def read_tokens(col: int) -> float:
+                it = total_table.item(row, col)
+                if not it:
+                    return 0.0
+                try:
+                    txt = it.text()
+                    return float(txt) if txt and txt != "-" else 0.0
+                except Exception:
+                    return 0.0
+
+            cpu_fps = read_fps(1)
+            gpu_fps = read_fps(2)
+            cpu_tok = read_tokens(3)
+            gpu_tok = read_tokens(4)
+
+            if is_llm:
+                # For LLMs, compare Tokens/s (higher is better). Use 1/tokens as pseudo-time for scheduling.
+                cpu_time = (1.0 / cpu_tok) if cpu_tok > 0 else 0.0
+                gpu_infer = (1.0 / gpu_tok) if gpu_tok > 0 else 0.0
+            else:
+                # For CNN/others, compare FPS (higher is better). Use ms per frame as time.
+                cpu_time = (1000.0 / cpu_fps) if cpu_fps > 0 else 0.0
+                gpu_infer = (1000.0 / gpu_fps) if gpu_fps > 0 else 0.0
 
             # Treat non-positive or 0 times as unavailable
             def norm(x):
@@ -257,6 +332,11 @@ class UIComponents:
                 "gpu_total": norm(gpu_infer),
                 # Keep pure inference times for JSON reporting
                 "gpu_inf": norm(gpu_infer),
+                "is_llm": is_llm,
+                "cpu_tok": cpu_tok,
+                "gpu_tok": gpu_tok,
+                "cpu_fps": cpu_fps,
+                "gpu_fps": gpu_fps,
             })
 
         if not models_data:
@@ -358,15 +438,20 @@ class UIComponents:
 
             # Optional trace logging if callback provided
             try:
-                cpu_t = models_data[i]["cpu"]
-                gpu_t = models_data[i]["gpu_total"]
+                m = models_data[i]
                 if hasattr(self, 'log') and callable(getattr(self, 'log')):
-                    self.log(f"[Schedule] {models_data[i]['name']}: CPU={cpu_t if cpu_t < float('inf') else 'NA'} ms, "
-                             f"GPU={gpu_t if gpu_t < float('inf') else 'NA'} ms -> {chosen_label}")
+                    if m.get("is_llm"):
+                        self.log(f"[Schedule] {m['name']}: CPU Tokens/s={m.get('cpu_tok') or 'NA'}, "
+                                 f"GPU Tokens/s={m.get('gpu_tok') or 'NA'} -> {chosen_label}")
+                    else:
+                        cpu_t = m["cpu"]
+                        gpu_t = m["gpu_total"]
+                        self.log(f"[Schedule] {m['name']}: CPU={cpu_t if cpu_t < float('inf') else 'NA'} ms, "
+                                 f"GPU={gpu_t if gpu_t < float('inf') else 'NA'} ms -> {chosen_label}")
             except Exception:
                 pass
 
-        # After highlighting, save best schedule to static_best_schedule.json
+        # After highlighting, save best schedule to static_results/static_best_schedule.json
         try:
             # Map UI device labels to execution names for JSON output
             def to_execution_label(label: str) -> str:
@@ -383,26 +468,43 @@ class UIComponents:
             for idx, (model_name, device_label) in enumerate(models, start=1):
                 view_key = f"view{idx}"
 
-                # Determine avg_inference_time_ms (use inference time only for reporting)
+                # Determine FPS/Tokens from table; for LLMs, use Tokens/s as throughput
                 avg_time_ms = 0.0
+                throughput_fps = 0.0
                 exec_label = to_execution_label(device_label)
                 # Locate row to read time columns again
                 for row in range(last_row_index):
                     item = total_table.item(row, 0)
                     if item and item.text() == model_name:
-                        cpu_item = total_table.item(row, 1)
-                        gpu_inf_item = total_table.item(row, 2)
-                        if exec_label == "CPU":
-                            ref = cpu_item
-                        else:  # GPU
-                            ref = gpu_inf_item
+                        lower_name = (model_name or "").lower()
+                        is_llm = ("gpt2" in lower_name) or ("tiny-llama" in lower_name)
                         try:
-                            avg_time_ms = float(ref.text()) if ref and ref.text() else 0.0
+                            if is_llm:
+                                # Use Tokens/s column as throughput for LLM
+                                tok_col = 3 if exec_label == "CPU" else 4
+                                tok_item = total_table.item(row, tok_col)
+                                tok_val = 0.0
+                                if tok_item and tok_item.text() and tok_item.text() != "-":
+                                    tok_val = float(tok_item.text())
+                                throughput_fps = round(tok_val, 2)
+                                avg_time_ms = 0.0
+                            else:
+                                # Use FPS column for CNN/others
+                                ref = total_table.item(row, 1 if exec_label == "CPU" else 2)
+                                fps_val = 0.0
+                                if ref is not None:
+                                    data = ref.data(Qt.UserRole)
+                                    if isinstance(data, (int, float)):
+                                        fps_val = float(data)
+                                    elif ref.text() and ref.text() != "-":
+                                        fps_val = float(ref.text())
+                                throughput_fps = round(fps_val, 2)
+                                avg_time_ms = (1000.0 / fps_val) if fps_val > 0 else 0.0
                         except Exception:
+                            throughput_fps = 0.0
                             avg_time_ms = 0.0
                         break
 
-                throughput_fps = round(1000.0 / avg_time_ms, 2) if avg_time_ms > 0 else 0.0
                 total_fps_sum += throughput_fps
 
                 models_dict[view_key] = {
@@ -429,11 +531,15 @@ class UIComponents:
                 "data": [result_entry]
             }
 
-            with open("static_best_schedule.json", "w", encoding="utf-8") as f:
+            # Ensure static_results directory exists and write file there
+            static_dir = os.path.join(os.getcwd(), "static_results")
+            os.makedirs(static_dir, exist_ok=True)
+            out_path = os.path.join(static_dir, "static_best_schedule.json")
+            with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(final_obj, f, indent=4, ensure_ascii=False)
         except Exception as e:
             try:
-                self.log(f"[Error] Failed to write static_best_schedule.json: {e}")
+                self.log(f"[Error] Failed to write static_results/static_best_schedule.json: {e}")
             except Exception:
                 pass
     
