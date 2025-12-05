@@ -79,9 +79,9 @@ class UIComponents:
         total_table.setHorizontalHeaderLabels([
             "Model",
             "CPU FPS",
-            "GPU FPS",
+            "GPU + CPU FPS",
             "CPU Tokens/s",
-            "GPU Tokens/s"
+            "GPU + CPU Tokens/s"
         ])
         total_table.setRowCount(0)
 
