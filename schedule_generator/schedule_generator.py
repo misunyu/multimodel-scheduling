@@ -163,6 +163,44 @@ class ModelProfiler:
         # Fallback to float32
         return rand_float(np.float32)
     
+    def _extract_llm_input_token_count(self, input_tensors: Dict[str, Any]) -> Optional[Dict[str, int]]:
+        """
+        Heuristically extract input token count information from prepared input tensors.
+        Looks for inputs like 'input_ids' or names containing 'token'.
+        Returns a dict with keys: batch, seq, total, name.
+        """
+        try:
+            # Priority to typical token id tensors
+            preferred_keys = []
+            for k in input_tensors.keys():
+                kl = (k or "").lower()
+                if "input_ids" in kl:
+                    preferred_keys.append(k)
+            if not preferred_keys:
+                for k in input_tensors.keys():
+                    kl = (k or "").lower()
+                    if "token" in kl or "tokens" in kl:
+                        preferred_keys.append(k)
+
+            key = preferred_keys[0] if preferred_keys else None
+            if key is None:
+                return None
+
+            arr = input_tensors[key]
+            shape = list(getattr(arr, 'shape', []) or [])
+            if not shape:
+                return None
+
+            # Heuristics: sequence length is last dim for token ids
+            seq = int(shape[-1]) if isinstance(shape[-1], (int, np.integer)) else None
+            batch = int(shape[0]) if len(shape) >= 2 and isinstance(shape[0], (int, np.integer)) else 1
+            if seq is None:
+                return None
+            total = batch * seq
+            return {"batch": batch, "seq": seq, "total": total, "name": key}
+        except Exception:
+            return None
+    
     def profile_model_cpu(self, model_path: str) -> Tuple[float, float, Dict[str, Any]]:
         """
         Profile an ONNX model on CPU.
@@ -190,6 +228,12 @@ class ModelProfiler:
             input_tensors = {}
             for input_tensor in session.get_inputs():
                 input_tensors[input_tensor.name] = self.get_dummy_input(input_tensor)
+
+            # If this looks like an LLM, log the input token count
+            if self._is_llm(model_path):
+                tok_info = self._extract_llm_input_token_count(input_tensors)
+                if tok_info is not None:
+                    self.log(f"[Tokens][CPU] {os.path.basename(model_path)}: input '{tok_info['name']}' -> batch={tok_info['batch']}, seq={tok_info['seq']}, total={tok_info['total']}")
 
             # Warm-up run (always exclude from average); log only for LLM
             t0w = time.time()
@@ -250,6 +294,12 @@ class ModelProfiler:
         input_tensors = {}
         for input_tensor in session.get_inputs():
             input_tensors[input_tensor.name] = self.get_dummy_input(input_tensor)
+
+        # If this looks like an LLM, log the input token count
+        if self._is_llm(model_path):
+            tok_info = self._extract_llm_input_token_count(input_tensors)
+            if tok_info is not None:
+                self.log(f"[Tokens][GPU] {os.path.basename(model_path)}: input '{tok_info['name']}' -> batch={tok_info['batch']}, seq={tok_info['seq']}, total={tok_info['total']}")
 
         # Warm-up (exclude from average); log only for LLM
         t0w = time.time()

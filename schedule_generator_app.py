@@ -10,10 +10,26 @@ from PyQt5.QtWidgets import (
     QHeaderView, QLabel, QAbstractItemView, QMessageBox,
     QTableWidgetItem, QFileDialog
 )
+from PyQt5.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor
 
 from schedule_generator import (
     ModelProfiler, DataProcessor, UIComponents, FileManager
 )
+
+class _TokenLogHighlighter(QSyntaxHighlighter):
+    """Colors lines containing token count markers in the log output."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._fmt = QTextCharFormat()
+        self._fmt.setForeground(QColor("purple"))
+
+    def highlightBlock(self, text: str) -> None:
+        try:
+            if "[Tokens]" in text:
+                self.setFormat(0, len(text), self._fmt)
+        except Exception:
+            # Do not raise on highlight errors
+            pass
 
 class _EmittingStream(QObject):
     """File-like stream that emits written text via Qt signal (thread-safe)."""
@@ -220,6 +236,13 @@ class ONNXProfilerApp(QMainWindow):
 
         # Find UI elements
         self.setup_ui_elements()
+
+        # Install syntax highlighter to color token-count lines in purple
+        try:
+            if getattr(self, 'log_output', None):
+                self._log_highlighter = _TokenLogHighlighter(self.log_output.document())
+        except Exception:
+            self._log_highlighter = None
         
         # Connect signals
         self.connect_signals()
@@ -259,7 +282,7 @@ class ONNXProfilerApp(QMainWindow):
         
         # Assignment results storage
         self.assignment_results = []
-        
+
         # Flag to prevent multiple simultaneous profiling runs
         self._profiling_in_progress = False
         # Threads
@@ -268,6 +291,10 @@ class ONNXProfilerApp(QMainWindow):
         # Cache tab pages
         self.cpu_tab_widget = self.findChild(QWidget, "cpu_tab")
         self.gpu_tab_widget = self.findChild(QWidget, "gpu_tab")
+
+        # LLM input token counts captured from profiler logs per device
+        # Keys: 'CPU' and 'GPU' → Dict[display_model_name, input_token_count]
+        self._llm_input_tokens = {"CPU": {}, "GPU": {}}
     
     def setup_ui_elements(self):
         """Find and set up UI elements."""
@@ -393,7 +420,48 @@ class ONNXProfilerApp(QMainWindow):
     def log_message(self, message):
         """Log a message to the output text area."""
         if self.log_output:
-            self.log_output.appendPlainText(message)
+            # Always append as plain text; coloring is handled by syntax highlighter
+            msg = str(message)
+            self.log_output.appendPlainText(msg)
+            # Try to parse token count lines to store input token counts for saving
+            try:
+                if "[Tokens]" in msg:
+                    # Expected format:
+                    # [Tokens][CPU] <name>: input '...' -> batch=X, seq=Y, total=Z
+                    dev = None
+                    if "[CPU]" in msg:
+                        dev = "CPU"
+                    elif "[GPU]" in msg:
+                        dev = "GPU"
+                    if dev is not None:
+                        # Extract model name between device tag and colon
+                        # e.g., "[Tokens][CPU] gpt2.onnx: input ... total=16"
+                        after = msg.split("]")[-1].strip()  # take substring after last closing bracket
+                        # But safer: find first colon
+                        colon_idx = after.find(":")
+                        model_name = after[:colon_idx].strip() if colon_idx != -1 else after
+                        # Normalize model display name to match table
+                        disp = self._normalize_display_model(model_name)
+                        # Extract total tokens
+                        total = None
+                        if "total=" in msg:
+                            try:
+                                part = msg.split("total=")[-1]
+                                # read consecutive digits
+                                num_chars = []
+                                for ch in part:
+                                    if ch.isdigit():
+                                        num_chars.append(ch)
+                                    else:
+                                        break
+                                if num_chars:
+                                    total = int("".join(num_chars))
+                            except Exception:
+                                total = None
+                        if total is not None and disp:
+                            self._llm_input_tokens.setdefault(dev, {})[disp] = total
+            except Exception:
+                pass
             QApplication.processEvents()
     
     def handle_tree_selection_changed(self, selected, deselected):
@@ -1093,6 +1161,7 @@ class ONNXProfilerApp(QMainWindow):
                 "root_folder": root_folder,
                 "selected_paths": selected_paths,
             },
+            llm_input_tokens=self._llm_input_tokens,
             filename=path
         )
     

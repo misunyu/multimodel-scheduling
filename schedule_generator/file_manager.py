@@ -258,6 +258,7 @@ class FileManager:
     
     def save_sample_data(self, cpu_table, npu1_table, npu2_table, total_table,
                          extra_meta: Optional[Dict[str, Any]] = None,
+                         llm_input_tokens: Optional[Dict[str, Dict[str, int]]] = None,
                          filename: Optional[str] = None):
         """
         Save profiling data to a sample file.
@@ -306,10 +307,19 @@ class FileManager:
                     tokens = float(tok_item.text())
                 except Exception:
                     tokens = None
-            
+            # LLM input token count captured from logs, indexed by display model name
+            input_tokens = None
+            try:
+                if llm_input_tokens and isinstance(llm_input_tokens, dict):
+                    input_tokens = llm_input_tokens.get("CPU", {}).get(model)
+            except Exception:
+                input_tokens = None
+
             entry = {"model": model, "load": load, "infer": infer}
             if tokens is not None:
                 entry["tokens"] = tokens
+            if input_tokens is not None:
+                entry["input_tokens"] = int(input_tokens)
             sample_data["cpu_data"].append(entry)
         
         # Extract NPU1 data (a.k.a GPU in UI)
@@ -324,10 +334,18 @@ class FileManager:
                     tokens = float(tok_item.text())
                 except Exception:
                     tokens = None
+            input_tokens = None
+            try:
+                if llm_input_tokens and isinstance(llm_input_tokens, dict):
+                    input_tokens = llm_input_tokens.get("GPU", {}).get(model)
+            except Exception:
+                input_tokens = None
 
             entry = {"model": model, "load": load, "infer": infer}
             if tokens is not None:
                 entry["tokens"] = tokens
+            if input_tokens is not None:
+                entry["input_tokens"] = int(input_tokens)
             sample_data["npu1_data"].append(entry)
 
         # Extract NPU2 data (if table is used)
@@ -349,6 +367,27 @@ class FileManager:
             sample_data["npu2_data"].append(entry)
         
         # Extract total data directly from the total table (skipping summary row)
+        # Build quick lookup maps from per-device tables to enable fallback when FPS is not available
+        cpu_infer_map: Dict[str, float] = {}
+        for row in range(cpu_table.rowCount()):
+            m = cpu_table.item(row, 0).text() if cpu_table.item(row, 0) else ""
+            try:
+                inf = float(cpu_table.item(row, 2).text()) if cpu_table.item(row, 2) and cpu_table.item(row, 2).text() not in (None, "", "-") else 0.0
+            except Exception:
+                inf = 0.0
+            if m:
+                cpu_infer_map[m] = inf
+
+        gpu_infer_map: Dict[str, float] = {}
+        for row in range(npu1_table.rowCount()):
+            m = npu1_table.item(row, 0).text() if npu1_table.item(row, 0) else ""
+            try:
+                inf = float(npu1_table.item(row, 2).text()) if npu1_table.item(row, 2) and npu1_table.item(row, 2).text() not in (None, "", "-") else 0.0
+            except Exception:
+                inf = 0.0
+            if m:
+                gpu_infer_map[m] = inf
+
         for row in range(total_table.rowCount()):
             # Skip the last total summary row if present
             if row == total_table.rowCount() - 1:
@@ -382,6 +421,17 @@ class FileManager:
             # Convert FPS to ms for storage (backward compatible)
             cpu_infer = (1000.0 / cpu_fps_val) if cpu_fps_val > 0 else 0.0
             gpu_infer = (1000.0 / gpu_fps_val) if gpu_fps_val > 0 else 0.0
+            # Fallback: if FPS not available (0), read per-device infer ms directly from the respective tables
+            if cpu_infer == 0.0:
+                try:
+                    cpu_infer = float(cpu_infer_map.get(model, 0.0))
+                except Exception:
+                    cpu_infer = 0.0
+            if gpu_infer == 0.0:
+                try:
+                    gpu_infer = float(gpu_infer_map.get(model, 0.0))
+                except Exception:
+                    gpu_infer = 0.0
             cpu_tokens = None
             gpu_tokens = None
             cpu_tok_item = total_table.item(row, 3)
@@ -411,6 +461,17 @@ class FileManager:
                 entry["cpu_tokens"] = cpu_tokens
             if gpu_tokens is not None:
                 entry["gpu_tokens"] = gpu_tokens
+            # Include input token counts if present
+            try:
+                if llm_input_tokens and isinstance(llm_input_tokens, dict):
+                    cpu_inp = llm_input_tokens.get("CPU", {}).get(model)
+                    gpu_inp = llm_input_tokens.get("GPU", {}).get(model)
+                    if cpu_inp is not None:
+                        entry["cpu_input_tokens"] = int(cpu_inp)
+                    if gpu_inp is not None:
+                        entry["gpu_input_tokens"] = int(gpu_inp)
+            except Exception:
+                pass
             sample_data["total_data"].append(entry)
         
         # Save to file
