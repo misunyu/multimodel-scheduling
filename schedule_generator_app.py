@@ -1053,10 +1053,14 @@ class ONNXProfilerApp(QMainWindow):
             self.log_message("[Warning] No models selected for assignment.")
             return
             
-        # Limit to maximum 4 models as specified
-        if len(models) > 4:
-            self.log_message(f"[Warning] More than 4 models selected. Using only the first 4.")
-            models = models[:4]
+        # Use all selected models without limiting to 4
+        # Note: total combinations grow as 2^N (CPU/GPU choices). For large N, generation may take time.
+        try:
+            total_combos = 2 ** len(models)
+            if total_combos > 4096:
+                self.log_message(f"[Warning] Large combination set detected: {total_combos} combos for {len(models)} models. This may take time.")
+        except Exception:
+            pass
             
         # Load device information from target device file
         try:
@@ -1213,7 +1217,11 @@ class ONNXProfilerApp(QMainWindow):
         for i, combination in enumerate(combinations):
             combination_name = f"combination_{i+1}"
             schedules[combination_name] = {}
-            
+
+            # Assign views only to specific vision models, sequentially from view1 to view4
+            # Counter resets per combination and skips non-vision models
+            assigned_views = 0
+
             for j, (model, device) in enumerate(combination.items()):
                 # Create a unique ID for this model-device pair
                 model_id = f"{model}_{device}"
@@ -1240,21 +1248,42 @@ class ONNXProfilerApp(QMainWindow):
                         # infps must be an integer value in the YAML (min 1)
                         perf_fields["infps"] = max(1, int(round(float(fps))))
 
+                # Assign display views only for specific vision models; others hidden
+                vision_with_view = {"mnasnet", "resnet50", "resnext50", "yolov4"}
+                if model in vision_with_view and assigned_views < 4:
+                    display_value = f"view{assigned_views + 1}"
+                    assigned_views += 1
+                else:
+                    display_value = "none"
+
                 schedules[combination_name][model_id] = {
                     "model": model,
                     "execution": device,
-                    "display": f"view{j+1}",  # Assign views in order
+                    "display": display_value,
                     **perf_fields
                 }
         
-        # Write to static_results/model_schedules.yaml
+        # Write to static_results/model_schedules_<initials>.yaml
         try:
             static_dir = os.path.join(os.getcwd(), "static_results")
             os.makedirs(static_dir, exist_ok=True)
-            out_yaml = os.path.join(static_dir, "model_schedules.yaml")
+            # Build filename suffix from the first letters of the selected model names
+            try:
+                # Keep duplicates if multiple models share the same first letter (e.g., resnet50 + resnext50 -> r_r)
+                initials = [m.strip()[0].lower() for m in models if isinstance(m, str) and m.strip()]
+                initials.sort()
+            except Exception:
+                initials = []
+            if initials:
+                initials_suffix = "_" + "_".join(initials)
+            else:
+                initials_suffix = ""
+
+            base_filename = f"model_schedules{initials_suffix}.yaml"
+            out_yaml = os.path.join(static_dir, base_filename)
             with open(out_yaml, "w") as f:
                 # Add header comments
-                f.write("# model_schedules.yaml\n")
+                f.write(f"# {base_filename}\n")
                 f.write("# Auto-generated configuration for model execution on CPU or GPU\n\n")
                 
                 # Add target device file information
@@ -1277,7 +1306,7 @@ class ONNXProfilerApp(QMainWindow):
                 # Custom YAML dumping to add blank lines between combinations
                 f.write(yaml.dump(schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
 
-            self.log_message(f"[Success] Generated {len(combinations)} combinations in static_results/model_schedules.yaml")
+            self.log_message(f"[Success] Generated {len(combinations)} combinations in static_results/{base_filename}")
 
             # Also generate scaled variants with throughput reduced by 1/3 and by 2/3
             def _scaled_schedules(src: dict, factor: float) -> dict:
@@ -1305,8 +1334,8 @@ class ONNXProfilerApp(QMainWindow):
                 return dst
 
             variants = [
-                ("model_schedules_x2_3.yaml", 2.0/3.0, "# This is a 2/3 throughput variant (values reduced by 1/3)\n"),
-                ("model_schedules_x1_3.yaml", 1.0/3.0, "# This is a 1/3 throughput variant (values reduced by 2/3)\n"),
+                (f"model_schedules{initials_suffix}_x2_3.yaml", 2.0/3.0, "# This is a 2/3 throughput variant (values reduced by 1/3)\n"),
+                (f"model_schedules{initials_suffix}_x1_3.yaml", 1.0/3.0, "# This is a 1/3 throughput variant (values reduced by 2/3)\n"),
             ]
 
             for filename, factor, note in variants:

@@ -10,7 +10,8 @@ from datetime import datetime
 from PyQt5.QtWidgets import QMainWindow, QLabel, QWidget, QVBoxLayout, QFileDialog
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
-from multiprocessing import Process, Queue, Event
+from queue import Queue
+from threading import Event, Thread
 import threading
 
 # Import local modules
@@ -265,7 +266,12 @@ class UnifiedViewer(QMainWindow):
         """Initialize model settings from YAML configuration."""
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
-        self.hidden_views = set()  # Views that run models but suppress on-screen drawing
+        # Headless models: run without occupying any of view1..view4
+        self.headless_ids = []           # list of headless identifiers
+        # Note: we keep hidden_views for backward compatibility, but we no longer
+        # auto-map display:none models into views. The set remains empty unless
+        # explicitly manipulated elsewhere.
+        self.hidden_views = set()
         # Default combination, can be overridden by requested_combination
         self.current_combination = self.requested_combination or "combination1"
         
@@ -287,19 +293,25 @@ class UnifiedViewer(QMainWindow):
                 self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
                 
             # Use the selected combination configuration
-            hidden_models = []  # models with display suppressed; still run but don't draw
+            # models with display suppressed; run headlessly and DO NOT bind to views
             if self.current_combination in config:
                 for model_config_name, model_config in (config[self.current_combination] or {}).items():
                     if isinstance(model_config, dict) and "display" in model_config:
                         view_name = model_config.get("display")
                         vnorm = str(view_name).strip().lower() if view_name is not None else ""
-                        # If display is set to a 'none/off' value, schedule as hidden (no on-screen drawing)
+                        # If display is set to a 'none/off' value, schedule as headless (no on-screen drawing)
                         if (not vnorm) or (vnorm in {"none", "off", "hidden", "no", "false", "0"}):
-                            hidden_models.append({
+                            # Build a stable headless id using the config key
+                            safe_name = str(model_config_name).replace(" ", "_")
+                            hid = f"headless_{safe_name}"
+                            self.headless_ids.append(hid)
+                            # Store headless config inside model_settings under its id so
+                            # feeders/process starters can use common paths without special cases
+                            self.model_settings[hid] = {
                                 "model": model_config.get("model", ""),
                                 "execution": model_config.get("execution", "cpu"),
                                 "infps": model_config.get("infps", None)
-                            })
+                            }
                             continue
                         # Only allow known view labels
                         if vnorm in {"view1", "view2", "view3", "view4"}:
@@ -309,36 +321,21 @@ class UnifiedViewer(QMainWindow):
                                 print(f"[UnifiedViewer] Unknown display label '{view_name}' for {model_config_name}; scheduling hidden")
                             except Exception:
                                 pass
-                            # Treat unknown labels as hidden to be safe
-                            hidden_models.append({
+                            # Treat unknown labels as headless to be safe
+                            safe_name = str(model_config_name).replace(" ", "_")
+                            hid = f"headless_{safe_name}"
+                            self.headless_ids.append(hid)
+                            self.model_settings[hid] = {
                                 "model": model_config.get("model", ""),
                                 "execution": model_config.get("execution", "cpu"),
                                 "infps": model_config.get("infps", None)
-                            })
+                            }
                             continue
                         view_to_model_map[view_key] = {
                             "model": model_config.get("model", ""),
                             "execution": model_config.get("execution", "cpu"),
                             "infps": model_config.get("infps", None)
                         }
-            
-            # Fill remaining views with hidden models (run but hide)
-            for view in ["view1", "view2", "view3", "view4"]:
-                if not hidden_models:
-                    break
-                if view not in view_to_model_map:
-                    cfg = hidden_models.pop(0)
-                    view_to_model_map[view] = cfg
-                    try:
-                        self.hidden_views.add(view)
-                        print(f"[UnifiedViewer] Assigned hidden model to {view} (no on-screen output)")
-                    except Exception:
-                        pass
-            if hidden_models:
-                try:
-                    print(f"[UnifiedViewer] Warning: {len(hidden_models)} hidden models could not be scheduled due to lack of free views")
-                except Exception:
-                    pass
             
             # Assign model configurations to views
             for view in ["view1", "view2", "view3", "view4"]:
@@ -466,42 +463,186 @@ class UnifiedViewer(QMainWindow):
         self.yolo_views = set()
         # Track ResNet views that need image feeder at 10 Hz
         self.resnet_views = set()
+        # Headless resources (queues/events/processes)
+        self.headless_frame_queues = {}
+        self.headless_output_queues = {}
+        self.headless_shutdown_events = {}
+        self.headless_processes = []
     
     def initialize_processes(self):
-        """Initialize and start model processes."""
-        # Start video reader process
-        # Start video reader process only if any model requires YOLO video (yolov4)
+        """Initialize and start model workers (single-process, multi-thread)."""
+        # Start video reader thread only if any model requires YOLO video (yolov4)
         need_video = any("yolov4" in (cfg or {}).get("model", "") for cfg in self.model_settings.values())
         self.video_reader_proc = None
         if need_video:
-            self.video_reader_proc = Process(
+            self.video_reader_proc = Thread(
                 target=video_reader_process,
-                args=("stockholm_1280x720.mp4", self.video_frame_queue, self.video_shutdown_event)
+                args=("stockholm_1280x720.mp4", self.video_frame_queue, self.video_shutdown_event),
+                daemon=True,
             )
             self.video_reader_proc.start()
-            try:
-                _ = self.video_reader_proc.pid
-            except Exception:
-                pass
         else:
             pass
         
-        # Start view processes
+        # Start view worker threads
         self.start_view_process("view1")
         self.start_view_process("view2")
         self.start_view_process("view3")
         self.start_view_process("view4")
+
+        # Start headless worker threads (do not occupy UI views)
+        for hid in list(getattr(self, 'headless_ids', []) or []):
+            # Prepare queues/events for this headless id
+            if hid not in self.headless_frame_queues:
+                self.headless_frame_queues[hid] = Queue(maxsize=10)
+            if hid not in self.headless_output_queues:
+                # YOLO uses output_queue; ResNet uses result_queue name-wise, but both are simple queues
+                self.headless_output_queues[hid] = Queue(maxsize=5)
+            if hid not in self.headless_shutdown_events:
+                self.headless_shutdown_events[hid] = Event()
+
+            cfg = self.model_settings.get(hid, {})
+            model = cfg.get("model", "")
+            execution = cfg.get("execution", "cpu")
+
+            frame_queue = self.headless_frame_queues[hid]
+            output_queue = self.headless_output_queues[hid]
+            shutdown_event = self.headless_shutdown_events[hid]
+
+            # Register into yolo/resnet sets so feeders can send inputs
+            if "yolov4" in model:
+                self.yolo_views.add(hid)
+                if execution == "gpu":
+                    process = Thread(
+                        target=run_yolo_gpu_process,
+                        args=(frame_queue, output_queue, shutdown_event, hid, model),
+                        daemon=True,
+                    )
+                elif execution in ("npu0", "npu1"):
+                    print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {hid} ({model}).")
+                    process = Thread(
+                        target=run_yolo_gpu_process,
+                        args=(frame_queue, output_queue, shutdown_event, hid, model),
+                        daemon=True,
+                    )
+                else:
+                    process = Thread(
+                        target=run_yolo_cpu_process,
+                        args=(frame_queue, output_queue, shutdown_event, hid),
+                        daemon=True,
+                    )
+            else:
+                self.resnet_views.add(hid)
+                if execution == "gpu":
+                    process = Thread(
+                        target=run_resnet_gpu_process,
+                        args=(frame_queue, output_queue, shutdown_event, hid),
+                        daemon=True,
+                    )
+                elif execution in ("npu0", "npu1"):
+                    print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {hid}.")
+                    process = Thread(
+                        target=run_resnet_gpu_process,
+                        args=(frame_queue, output_queue, shutdown_event, hid),
+                        daemon=True,
+                    )
+                else:
+                    process = Thread(
+                        target=run_resnet_cpu_process,
+                        args=(frame_queue, output_queue, shutdown_event, hid),
+                        daemon=True,
+                    )
+            process.start()
+            self.headless_processes.append(process)
+        
+        # Start drainers for headless outputs to avoid queue backpressure
+        def _make_drain(q, ev, name, cfg):
+            def _drain():
+                import queue as _q
+                while not ev.is_set() and not self.shutdown_flag.is_set():
+                    try:
+                        item = q.get(timeout=1)
+                    except _q.Empty:
+                        continue
+                    except Exception:
+                        break
+
+                    # Print concise command-line logs for headless model results
+                    try:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        model_name = str((cfg or {}).get("model", "") or name)
+                        exec_dev = str((cfg or {}).get("execution", "cpu") or "cpu").upper()
+                        combo = getattr(self, 'current_combination', '')
+                        run_id = getattr(self, 'run_id', '')
+
+                        # Try to interpret common payload shapes from model_processors:
+                        # - ResNet: (img, class_name, infer_time_ms)
+                        # - YOLO: (result_img, infer_time_ms, wait_ms)
+                        # Fallback: generic repr length-limited
+                        msg = None
+                        if isinstance(item, tuple):
+                            if len(item) == 3 and isinstance(item[1], str):
+                                # ResNet
+                                class_name = item[1]
+                                try:
+                                    infer_ms = float(item[2])
+                                except Exception:
+                                    infer_ms = None
+                                if infer_ms is not None:
+                                    msg = f"class={class_name} infer={infer_ms:.1f}ms"
+                                else:
+                                    msg = f"class={class_name}"
+                            elif len(item) == 3:
+                                # YOLO (image, infer_ms, wait_ms)
+                                try:
+                                    infer_ms = float(item[1])
+                                except Exception:
+                                    infer_ms = None
+                                try:
+                                    wait_ms = float(item[2])
+                                except Exception:
+                                    wait_ms = None
+                                if infer_ms is not None and wait_ms is not None:
+                                    msg = f"infer={infer_ms:.1f}ms wait={wait_ms:.1f}ms"
+                                elif infer_ms is not None:
+                                    msg = f"infer={infer_ms:.1f}ms"
+                            elif len(item) == 2 and isinstance(item[1], (int, float)):
+                                # Some pipelines may return (payload, infer_ms)
+                                try:
+                                    infer_ms = float(item[1])
+                                    msg = f"infer={infer_ms:.1f}ms"
+                                except Exception:
+                                    msg = None
+                        if msg is None:
+                            # Fallback: avoid dumping large arrays/images
+                            msg = "result received"
+
+                        print(f"[Headless][{ts}][{combo}][{run_id}] {name} {model_name} {exec_dev}: {msg}")
+                    except Exception:
+                        # Never let logging break the drainer
+                        pass
+
+            t = Thread(target=_drain, daemon=True, name=f"Drainer-{name}")
+            t.start()
+            return t
+        self._headless_drainers = []
+        for hid in list(getattr(self, 'headless_ids', []) or []):
+            q = self.headless_output_queues.get(hid)
+            ev = self.headless_shutdown_events.get(hid)
+            cfg = self.model_settings.get(hid, {})
+            if q is not None and ev is not None:
+                self._headless_drainers.append(_make_drain(q, ev, hid, cfg))
     
     def start_view_process(self, view_name):
         """
-        Start a process for a specific view.
+        Start a worker thread for a specific view.
         
         Args:
             view_name: Name of the view (view1, view2, etc.)
         """
-        # If no model is assigned for this view, do not start any process
+        # If no model is assigned for this view, do not start any worker
         if hasattr(self, 'views_without_model') and view_name in self.views_without_model:
-            print(f"[UnifiedViewer] Skipping process start for {view_name}: no model assigned")
+            print(f"[UnifiedViewer] Skipping worker start for {view_name}: no model assigned")
             return
         
         model = self.model_settings.get(view_name, {}).get("model", "")
@@ -515,52 +656,54 @@ class UnifiedViewer(QMainWindow):
             # YOLOv4 model
             self.yolo_views.add(view_name)
             if execution == "gpu":
-                print(f"[UnifiedViewer] Starting {view_name} with {model} GPU")
-                process = Process(
+                print(f"[UnifiedViewer] Starting {view_name} with {model} GPU (thread)")
+                process = Thread(
                     target=run_yolo_gpu_process,
                     args=(frame_queue, output_queue, shutdown_event, view_name, model),
+                    daemon=True,
                 )
             elif execution in ("npu0", "npu1"):
                 # NPU execution is deprecated; fall back to GPU to align with new policy
                 print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {view_name} ({model}).")
-                process = Process(
+                process = Thread(
                     target=run_yolo_gpu_process,
                     args=(frame_queue, output_queue, shutdown_event, view_name, model),
+                    daemon=True,
                 )
             else:
-                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
-                process = Process(
+                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU (thread)")
+                process = Thread(
                     target=run_yolo_cpu_process,
                     args=(frame_queue, output_queue, shutdown_event, view_name),
+                    daemon=True,
                 )
         else:
             # ResNet model
             self.resnet_views.add(view_name)
             if execution == "gpu":
-                print(f"[UnifiedViewer] Starting {view_name} with {model} GPU")
-                process = Process(
+                print(f"[UnifiedViewer] Starting {view_name} with {model} GPU (thread)")
+                process = Thread(
                     target=run_resnet_gpu_process,
                     args=(frame_queue, output_queue, shutdown_event, view_name),
+                    daemon=True,
                 )
             elif execution in ("npu0", "npu1"):
                 print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {view_name} ({model}).")
-                process = Process(
+                process = Thread(
                     target=run_resnet_gpu_process,
                     args=(frame_queue, output_queue, shutdown_event, view_name),
+                    daemon=True,
                 )
             else:
-                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
-                process = Process(
+                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU (thread)")
+                process = Thread(
                     target=run_resnet_cpu_process,
                     args=(frame_queue, output_queue, shutdown_event, view_name),
+                    daemon=True,
                 )
         
         setattr(self, f"{view_name}_process", process)
         process.start()
-        try:
-            _ = process.pid
-        except Exception:
-            pass
     
     def initialize_threads(self):
         """Initialize and start view handler threads."""
@@ -571,6 +714,9 @@ class UnifiedViewer(QMainWindow):
             "view3": self.view3_frame_queue,
             "view4": self.view4_frame_queue
         }
+        # Extend with headless frame queues so feeders can push inputs
+        for hid, fq in (getattr(self, 'headless_frame_queues', {}) or {}).items():
+            view_frame_queues[hid] = fq
         
         # Start video feeder thread only if there are YOLOv4 views
         self.video_feeder = None
@@ -992,38 +1138,43 @@ class UnifiedViewer(QMainWindow):
         except Exception as e:
             print(f"[Stop Execution] Warning setting shutdown_flag: {e}")
         
-        # Set shutdown events to signal processes to stop
+        # Set shutdown events to signal workers to stop
         for name in ['view1_shutdown_event', 'view2_shutdown_event',
                      'view3_shutdown_event', 'view4_shutdown_event',
                      'video_shutdown_event']:
             event = getattr(self, name, None)
             if event:
                 event.set()
+        # Headless shutdown events
+        try:
+            for ev in (getattr(self, 'headless_shutdown_events', {}) or {}).values():
+                try:
+                    ev.set()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
-        # Gracefully stop all processes first, then force terminate if needed
+        # Gracefully stop all worker threads
         process_names = ['view1_process', 'view2_process', 'view3_process', 'view4_process', 'video_reader_proc']
         processes = [getattr(self, name, None) for name in process_names if hasattr(self, name) and getattr(self, name, None)]
+        # Include headless processes
+        try:
+            processes.extend(list(getattr(self, 'headless_processes', []) or []))
+        except Exception:
+            pass
         try:
             pass
         except Exception:
             pass
         
-        # Give processes time to exit their loops and run cleanup (e.g., NPU driver close in finally)
+        # Give threads time to exit their loops and run cleanup
         for p in processes:
             if p and p.is_alive():
                 try:
                     p.join(timeout=3.0)
                 except Exception as e:
-                    print(f"[Stop Execution] Process join error: {e}")
-        
-        # Force terminate any stubborn processes that didn't exit
-        for p in processes:
-            if p and p.is_alive():
-                try:
-                    p.terminate()
-                    p.join(timeout=0.5)
-                except Exception as e:
-                    print(f"[Stop Execution] Process termination error: {e}")
+                    print(f"[Stop Execution] Worker join warning: {e}")
         try:
             pass
         except Exception:
@@ -1090,6 +1241,14 @@ class UnifiedViewer(QMainWindow):
         for name in queue_names:
             q = getattr(self, name, None)
             drain_queue(q)
+        # Drain headless queues
+        try:
+            for q in (getattr(self, 'headless_frame_queues', {}) or {}).values():
+                drain_queue(q)
+            for q in (getattr(self, 'headless_output_queues', {}) or {}).values():
+                drain_queue(q)
+        except Exception:
+            pass
         
     def update_cpu_npu_usage(self):
         """Update CPU and NPU usage information."""
@@ -1169,19 +1328,24 @@ class UnifiedViewer(QMainWindow):
                 f"<b><span style='color: blue;'>View4 ({view4_model} {view4_mode})</span></b> Avg FPS: <span style='color: blue;'>{view4_avg_fps:.1f}</span> (<span style='color: blue;'>{view4_avg_infer_time:.1f} ms</span>)"
             )
 
-        # Build a section listing models that are running headlessly (no display)
-        hidden_views = list(getattr(self, 'hidden_views', set()) or [])
-        hidden_scheduled = [v for v in scheduled_views if v in hidden_views]
-        hidden_lines = []
-        for v in hidden_scheduled:
-            if v == 'view1':
-                hidden_lines.append(f"<span style='color: gray;'>{view1_model} {view1_mode}</span> Avg FPS: {view1_avg_fps:.1f} (<span style='color: gray;'>{view1_avg_infer_time:.1f} ms</span>)")
-            elif v == 'view2':
-                hidden_lines.append(f"<span style='color: gray;'>{view2_model} {view2_mode}</span> Avg FPS: {view2_avg_fps:.1f} (<span style='color: gray;'>{view2_avg_infer_time:.1f} ms</span>)")
-            elif v == 'view3':
-                hidden_lines.append(f"<span style='color: gray;'>{view3_model} {view3_mode}</span> Avg FPS: {view3_avg_fps:.1f} (<span style='color: gray;'>{view3_avg_infer_time:.1f} ms</span>)")
-            elif v == 'view4':
-                hidden_lines.append(f"<span style='color: gray;'>{view4_model} {view4_mode}</span> Avg FPS: {view4_avg_fps:.1f} (<span style='color: gray;'>{view4_avg_infer_time:.1f} ms</span>)")
+        # Build a section listing models that are running headlessly (display: none)
+        headless_lines = []
+        try:
+            for hid in list(getattr(self, 'headless_ids', []) or []):
+                cfg = (self.model_settings or {}).get(hid, {})
+                model_name = str(cfg.get('model', '') or '')
+                exec_dev_raw = str(cfg.get('execution', 'cpu') or 'cpu').upper()
+                # Normalize device naming to CPU/GPU/NPU (hide numeric suffixes)
+                if exec_dev_raw.startswith('NPU'):
+                    exec_dev = 'NPU'
+                elif exec_dev_raw.startswith('GPU'):
+                    exec_dev = 'GPU'
+                else:
+                    exec_dev = 'CPU'
+                if model_name:
+                    headless_lines.append(f"- {model_name} <span style='color: gray;'>({exec_dev})</span>")
+        except Exception:
+            pass
         
         # Compose performance text: visible per-view lines and then hidden models section (names must be shown even if no view)
         sections = [
@@ -1190,8 +1354,8 @@ class UnifiedViewer(QMainWindow):
         ]
         if per_view_lines:
             sections.append("<br>".join(per_view_lines))
-        if hidden_lines:
-            sections.append("<b>Models running without display</b><br>" + "<br>".join(hidden_lines))
+        if headless_lines:
+            sections.append("<b>Models running without display</b><br>" + "<br>".join(headless_lines))
         performance_text = ("<br>".join(sections))
         
         # Create CPU info text
