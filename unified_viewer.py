@@ -1104,6 +1104,12 @@ class UnifiedViewer(QMainWindow):
     def _begin_measurement_window(self):
         """Reset all per-view and feeder counters after warmup to start measurement."""
         try:
+            import time as _t
+            # Mark measurement window start (used for elapsed-based drop rate)
+            self.measurement_start_ts = _t.time()
+        except Exception:
+            pass
+        try:
             for name in ['view1_handler', 'view2_handler', 'view3_handler', 'view4_handler']:
                 handler = getattr(self, name, None)
                 if handler and hasattr(handler, 'reset_stats'):
@@ -1116,6 +1122,12 @@ class UnifiedViewer(QMainWindow):
                 feeder.reset_counters()
         except Exception as e:
             print(f"[UnifiedViewer] Warmup reset warning (feeder): {e}")
+        try:
+            rfeeder = getattr(self, 'resnet_feeder', None)
+            if rfeeder and hasattr(rfeeder, 'reset_counters'):
+                rfeeder.reset_counters()
+        except Exception as e:
+            print(f"[UnifiedViewer] Warmup reset warning (resnet feeder): {e}")
         
     def stop_execution(self):
         """Stop model execution without closing the application."""
@@ -1399,11 +1411,25 @@ class UnifiedViewer(QMainWindow):
                 except Exception:
                     pass
             max_q_wait = max(q_waits) if q_waits else 0.0
-            # drop_rate_fps from feeder drops per window
-            window_sec = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
-            drop_counts = getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}) or {}
-            total_drops = sum(int(drop_counts.get(v, 0) or 0) for v in scheduled_views)
-            drop_rate_fps = total_drops / window_sec if window_sec > 0 else 0.0
+            # Drop rate (frames/sec) across CNN and YOLO (exclude language models)
+            # Sum drops from both feeders over all active ids (visible + headless)
+            import time as _t
+            active_ids = set(list(getattr(self, 'yolo_views', set()) or set())) | set(list(getattr(self, 'resnet_views', set()) or set()))
+            # YOLO/video feeder drops
+            vf = getattr(self, 'video_feeder', None)
+            vf_map = getattr(vf, 'drop_counts', {}) if vf else {}
+            vf_drops = sum(int(vf_map.get(v, 0) or 0) for v in active_ids)
+            # ResNet/cnn feeder drops
+            rf = getattr(self, 'resnet_feeder', None)
+            rf_map = getattr(rf, 'drop_counts', {}) if rf else {}
+            rf_drops = sum(int(rf_map.get(v, 0) or 0) for v in active_ids)
+            total_drops = vf_drops + rf_drops
+            # Normalize by elapsed measurement time since warm-up
+            try:
+                elapsed = float(max(0.001, (_t.time() - float(getattr(self, 'measurement_start_ts', 0.0)))) )
+            except Exception:
+                elapsed = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
+            drop_rate_fps = total_drops / elapsed if elapsed > 0 else 0.0
             score = total_fps - 0.2 * drop_rate_fps
             # Show each metric on its own line
             metrics_line = (

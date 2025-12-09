@@ -309,6 +309,11 @@ class ResnetImageFeeder:
         self.shutdown_flag = shutdown_flag
         self.model_settings = model_settings or {}
         self.default_interval_sec = max(0.0, float(default_interval_sec) if default_interval_sec else 0.5)
+        # Track dropped frames per view due to full queue (for CNN/ResNet)
+        try:
+            self.drop_counts = {v: 0 for v in (view_frame_queues or {}).keys()}
+        except Exception:
+            self.drop_counts = {}
         # Compute per-view interval from infps
         self.view_intervals = {}
         for v in self.resnet_views:
@@ -338,6 +343,14 @@ class ResnetImageFeeder:
         thread = threading.Thread(target=self.feed_queues, daemon=True)
         thread.start()
         return thread
+
+    def reset_counters(self):
+        """Reset drop counters (used at measurement window start)."""
+        try:
+            for v in list(self.drop_counts.keys()):
+                self.drop_counts[v] = 0
+        except Exception:
+            pass
 
     def _next_image(self, view_name):
         if not self._images:
@@ -380,7 +393,10 @@ class ResnetImageFeeder:
                         q.put_nowait((img, now))
                         last_ts[view_name] = now
                     except queue.Full:
-                        pass
+                        try:
+                            self.drop_counts[view_name] = int(self.drop_counts.get(view_name, 0)) + 1
+                        except Exception:
+                            pass
                     except (EOFError, BrokenPipeError, OSError):
                         pass
             except Exception as e:
