@@ -673,7 +673,14 @@ class ONNXProfilerApp(QMainWindow):
     def _on_gpu_result(self, rel_path, load_ms, infer_ms):
         # Update GPU table (aliased as npu1_table) in GUI thread
         disp_path = self._normalize_display_model(rel_path)
-        tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
+        # Compute tokens/s based on the actual input token count captured in purple [Tokens] logs
+        tokens_per_s = None
+        try:
+            tok_cnt = self._lookup_llm_input_tokens("GPU", disp_path)
+            if isinstance(infer_ms, (int, float)) and infer_ms > 0 and isinstance(tok_cnt, int) and tok_cnt > 0:
+                tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+        except Exception:
+            tokens_per_s = None
         self.ui_components.insert_result_row(self.npu1_table, disp_path, load_ms, infer_ms, tokens_per_s)
         self.log_message(f"[GPU] {disp_path}")
         if tokens_per_s is not None:
@@ -717,6 +724,30 @@ class ONNXProfilerApp(QMainWindow):
         except Exception:
             return rel_path
     
+    def _lookup_llm_input_tokens(self, device: str, rel_or_disp_path: str) -> int:
+        """
+        Lookup the input token count for an LLM from the parsed purple-log values.
+        - device: 'CPU' or 'GPU'
+        - rel_or_disp_path: model path as shown in tables/logs
+        Returns the integer token count if found, else None.
+        """
+        try:
+            dev = "CPU" if str(device).upper().startswith("CPU") else "GPU"
+            disp = self._normalize_display_model(rel_or_disp_path or "")
+            m = self._llm_input_tokens.get(dev, {})
+            # Direct display-name match
+            if disp in m:
+                return m[disp]
+            # Try by base name against stored keys
+            base = os.path.splitext(os.path.basename(disp))[0]
+            for k, v in m.items():
+                kb = os.path.splitext(os.path.basename(k))[0]
+                if kb == base:
+                    return v
+        except Exception:
+            pass
+        return None
+    
     def _initialize_profiling_ui(self):
         """Initialize UI for profiling."""
         if self.log_output:
@@ -745,10 +776,22 @@ class ONNXProfilerApp(QMainWindow):
                 
                 load_ms, infer_ms, _ = self.profiler.profile_model_cpu(path)
                 rel_path = os.path.relpath(path, root_folder)
-                self.ui_components.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms)
+                # Compute tokens/s using the captured input token count from purple logs
+                disp_path = self._normalize_display_model(rel_path)
+                tokens_per_s = None
+                try:
+                    tok_cnt = self._lookup_llm_input_tokens("CPU", disp_path)
+                    if isinstance(infer_ms, (int, float)) and infer_ms > 0 and isinstance(tok_cnt, int) and tok_cnt > 0:
+                        tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+                except Exception:
+                    tokens_per_s = None
+                self.ui_components.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms, tokens_per_s)
                 
                 self.log_message(f"[CPU] {rel_path}")
-                self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+                if tokens_per_s is not None:
+                    self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms, Throughput: {tokens_per_s:.2f} tokens/s\n")
+                else:
+                    self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
                 
                 parts = rel_path.split(os.sep)
                 if len(parts) == 3 and parts[1] == "model" and parts[2].endswith(".onnx"):
@@ -769,9 +812,21 @@ class ONNXProfilerApp(QMainWindow):
             try:
                 rel_path = os.path.relpath(path, root_folder)
                 load_ms, infer_ms, _ = self.profiler.profile_model_gpu(path)
-                self.ui_components.insert_result_row(self.npu1_table, rel_path, load_ms, infer_ms)
+                # Compute tokens/s using the captured input token count from purple logs
+                disp_path = self._normalize_display_model(rel_path)
+                tokens_per_s = None
+                try:
+                    tok_cnt = self._lookup_llm_input_tokens("GPU", disp_path)
+                    if isinstance(infer_ms, (int, float)) and infer_ms > 0 and isinstance(tok_cnt, int) and tok_cnt > 0:
+                        tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+                except Exception:
+                    tokens_per_s = None
+                self.ui_components.insert_result_row(self.npu1_table, rel_path, load_ms, infer_ms, tokens_per_s)
                 self.log_message(f"[GPU] {rel_path}")
-                self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
+                if tokens_per_s is not None:
+                    self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms, Throughput: {tokens_per_s:.2f} tokens/s\n")
+                else:
+                    self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms\n")
             except Exception as e:
                 self.log_message(f"[Error] GPU profiling failed for {path}: {e}\n")
     
@@ -1054,6 +1109,105 @@ class ONNXProfilerApp(QMainWindow):
             self.log_message(f"[Info] Generated {len(combinations)} possible combinations")
         
         # Create the model_schedules.yaml content
+        # 1) Build profiling maps from current tables so we can fill infps/intps and per-device times.
+        def _base_name(text: str) -> str:
+            try:
+                base = os.path.basename(text or "")
+                return os.path.splitext(base)[0]
+            except Exception:
+                return (text or "")
+
+        # From Total table: per-device FPS for CV models and Tokens/s for LLMs
+        model_to_cpu_fps = {}
+        model_to_gpu_fps = {}
+        model_to_cpu_tok = {}
+        model_to_gpu_tok = {}
+
+        for row in range(self.total_table.rowCount()):
+            name_item = self.total_table.item(row, 0)
+            if not name_item:
+                continue
+            disp = name_item.text() or ""
+            key = _base_name(disp)
+
+            # FPS are stored in UserRole as floats for non-LLM rows
+            cpu_item = self.total_table.item(row, 1)
+            gpu_item = self.total_table.item(row, 2)
+            try:
+                cpu_fps = cpu_item.data(Qt.UserRole) if cpu_item else None
+                gpu_fps = gpu_item.data(Qt.UserRole) if gpu_item else None
+                if isinstance(cpu_fps, (int, float)) and cpu_fps > 0:
+                    model_to_cpu_fps[key] = float(cpu_fps)
+                if isinstance(gpu_fps, (int, float)) and gpu_fps > 0:
+                    model_to_gpu_fps[key] = float(gpu_fps)
+            except Exception:
+                pass
+
+            # Tokens/s shown as text for LLM rows
+            def _read_tok(item):
+                try:
+                    txt = item.text() if item else None
+                    v = float(txt) if txt and txt != "-" else None
+                    return v if (v is None or v > 0) else None
+                except Exception:
+                    return None
+            cpu_tok = _read_tok(self.total_table.item(row, 3))
+            gpu_tok = _read_tok(self.total_table.item(row, 4))
+            if isinstance(cpu_tok, (int, float)):
+                model_to_cpu_tok[key] = float(cpu_tok)
+            if isinstance(gpu_tok, (int, float)):
+                model_to_gpu_tok[key] = float(gpu_tok)
+
+        # If no profiling results are available in the UI, fall back to
+        # static_results/sample_profiling_data.json
+        def _fallback_from_sample_json():
+            try:
+                import json as _json
+                static_dir = os.path.join(os.getcwd(), "static_results")
+                sample_path = os.path.join(static_dir, "sample_profiling_data.json")
+                if not os.path.isfile(sample_path):
+                    return
+                with open(sample_path, "r") as sf:
+                    sample = _json.load(sf)
+                total_data = sample.get("total_data", []) or []
+                for item in total_data:
+                    try:
+                        mpath = item.get("model", "") or ""
+                        base = _base_name(mpath)
+                        # CV FPS
+                        cfps = item.get("cpu_fps", None)
+                        gfps = item.get("gpu_fps", None)
+                        if isinstance(cfps, (int, float)) and cfps > 0:
+                            model_to_cpu_fps.setdefault(base, float(cfps))
+                        if isinstance(gfps, (int, float)) and gfps > 0:
+                            model_to_gpu_fps.setdefault(base, float(gfps))
+                        # LLM tokens/s: compute from input_tokens and infer(ms)
+                        cinfer = item.get("cpu_infer", None)
+                        ginfer = item.get("gpu_infer", None)
+                        c_in_tok = item.get("cpu_input_tokens", None)
+                        g_in_tok = item.get("gpu_input_tokens", None)
+                        # CPU tokens/s
+                        if isinstance(cinfer, (int, float)) and cinfer > 0 and isinstance(c_in_tok, (int, float)) and c_in_tok > 0:
+                            tps = float(c_in_tok) / (float(cinfer) / 1000.0)
+                            if tps > 0:
+                                model_to_cpu_tok.setdefault(base, tps)
+                        # GPU tokens/s
+                        if isinstance(ginfer, (int, float)) and ginfer > 0 and isinstance(g_in_tok, (int, float)) and g_in_tok > 0:
+                            tps = float(g_in_tok) / (float(ginfer) / 1000.0)
+                            if tps > 0:
+                                model_to_gpu_tok.setdefault(base, tps)
+                    except Exception:
+                        continue
+                if (not model_to_cpu_fps and not model_to_gpu_fps and not model_to_cpu_tok and not model_to_gpu_tok):
+                    self.log_message("[Warning] sample_profiling_data.json loaded but contained no usable totals")
+                else:
+                    self.log_message("[Info] No UI profiling found. Using cached results from static_results/sample_profiling_data.json")
+            except Exception as _e:
+                self.log_message(f"[Warning] Failed to load fallback profiling from sample_profiling_data.json: {_e}")
+
+        if not (model_to_cpu_fps or model_to_gpu_fps or model_to_cpu_tok or model_to_gpu_tok):
+            _fallback_from_sample_json()
+
         schedules = {}
         
         for i, combination in enumerate(combinations):
@@ -1063,20 +1217,34 @@ class ONNXProfilerApp(QMainWindow):
             for j, (model, device) in enumerate(combination.items()):
                 # Create a unique ID for this model-device pair
                 model_id = f"{model}_{device}"
-                
-                # Add the model configuration
-                # Determine default inference FPS based on model type
-                infps = None
-                lname = model.lower()
-                if "resnet50" in lname:
-                    infps = 2
-                elif "yolov3" in lname:
-                    infps = 30
+
+                # Decide if this is an LLM by presence of tokens/s in any device map
+                is_llm = model in model_to_cpu_tok or model in model_to_gpu_tok
+
+                # Pick the throughput for the assigned device
+                perf_fields = {}
+                if is_llm:
+                    if device == "cpu":
+                        tok = model_to_cpu_tok.get(model)
+                    else:
+                        tok = model_to_gpu_tok.get(model)
+                    if isinstance(tok, (int, float)) and tok > 0:
+                        # intps must be an integer value in the YAML (min 1)
+                        perf_fields["intps"] = max(1, int(round(float(tok))))
+                else:
+                    if device == "cpu":
+                        fps = model_to_cpu_fps.get(model)
+                    else:
+                        fps = model_to_gpu_fps.get(model)
+                    if isinstance(fps, (int, float)) and fps > 0:
+                        # infps must be an integer value in the YAML (min 1)
+                        perf_fields["infps"] = max(1, int(round(float(fps))))
+
                 schedules[combination_name][model_id] = {
                     "model": model,
                     "execution": device,
                     "display": f"view{j+1}",  # Assign views in order
-                    **({"infps": infps} if infps is not None else {})
+                    **perf_fields
                 }
         
         # Write to static_results/model_schedules.yaml
@@ -1110,6 +1278,61 @@ class ONNXProfilerApp(QMainWindow):
                 f.write(yaml.dump(schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
 
             self.log_message(f"[Success] Generated {len(combinations)} combinations in static_results/model_schedules.yaml")
+
+            # Also generate scaled variants with throughput reduced by 1/3 and by 2/3
+            def _scaled_schedules(src: dict, factor: float) -> dict:
+                import copy
+                dst = copy.deepcopy(src)
+                for comb_name, entries in dst.items():
+                    if not isinstance(entries, dict):
+                        continue
+                    for mid, cfg in entries.items():
+                        if not isinstance(cfg, dict):
+                            continue
+                        # Scale either intps or infps if present
+                        if "intps" in cfg and isinstance(cfg["intps"], (int, float)):
+                            val = int(round(float(cfg["intps"]) * factor))
+                            cfg["intps"] = max(1, val)
+                        if "infps" in cfg and isinstance(cfg["infps"], (int, float)):
+                            val = int(round(float(cfg["infps"]) * factor))
+                            cfg["infps"] = max(1, val)
+                        # Ensure no legacy 'time' field sneaks in
+                        if "time" in cfg:
+                            try:
+                                del cfg["time"]
+                            except Exception:
+                                pass
+                return dst
+
+            variants = [
+                ("model_schedules_x2_3.yaml", 2.0/3.0, "# This is a 2/3 throughput variant (values reduced by 1/3)\n"),
+                ("model_schedules_x1_3.yaml", 1.0/3.0, "# This is a 1/3 throughput variant (values reduced by 2/3)\n"),
+            ]
+
+            for filename, factor, note in variants:
+                try:
+                    scaled = _scaled_schedules(schedules, factor)
+                    out_path = os.path.join(static_dir, filename)
+                    with open(out_path, "w") as vf:
+                        # Header
+                        vf.write(f"# {filename}\n")
+                        vf.write("# Auto-generated configuration for model execution on CPU or GPU\n")
+                        vf.write(note + "\n")
+                        vf.write(f"# Target device file: {self.device_settings_file}\n")
+                        vf.write("# Available devices:\n")
+                        vf.write(f"# - CPU: {cpu_count}\n")
+                        if gpu_count > 0:
+                            vf.write(f"# - GPU: {gpu_count} (IDs: {', '.join(map(str, gpu_ids))})\n")
+                        vf.write("\n")
+                        vf.write("# Available models:\n")
+                        for model in models:
+                            vf.write(f"# - {model}\n")
+                        vf.write("\n")
+                        vf.write("# Model-execution configurations with unique IDs\n")
+                        vf.write(yaml.dump(scaled, default_flow_style=False).replace("combination_", "\ncombination_"))
+                    self.log_message(f"[Success] Also generated scaled schedule: static_results/{filename} (factor={factor:.3f})")
+                except Exception as ve:
+                    self.log_message(f"[Error] Failed to write scaled schedule {filename}: {ve}")
         except Exception as e:
             self.log_message(f"[Error] Failed to write static_results/model_schedules.yaml: {e}")
             
