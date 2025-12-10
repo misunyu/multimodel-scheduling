@@ -44,7 +44,11 @@ if [[ ! -d "$TEST_DIR" ]]; then
   exit 1
 fi
 
-mapfile -t FILES < <(find "$TEST_DIR" -maxdepth 1 -type f -name "*.yaml" | sort)
+# macOS ships an older bash without 'mapfile'. Use a portable fallback to build FILES array.
+FILES=()
+while IFS= read -r _f; do
+  [[ -n "$_f" ]] && FILES+=("$_f")
+done < <(find "$TEST_DIR" -maxdepth 1 -type f -name "*.yaml" | sort)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "No YAML files found under $TEST_DIR" >&2
@@ -52,7 +56,8 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
 fi
 
 # Determine Python executable from virtual environment
-PY=/opt/.pyenv/shims/python3
+#PY=/opt/.pyenv/shims/python3
+PY="$ROOT_DIR/.venv/bin/python3"
 #if [[ -d "$ROOT_DIR/.venv" ]]; then
 #  # Use virtual environment Python if available
 #  if [[ -f "$ROOT_DIR/.venv/bin/python3" ]]; then
@@ -88,14 +93,14 @@ invoke_one() {
     if (( TIMEOUT_SECS > 0 )); then
       timeout "$TIMEOUT_SECS" bash -c '"$0" -schedule "$1" --duration 10 --auto_start_all' "$ROOT_DIR/schedule_executor_main.sh" "$schedule_file"
     else
-      "$ROOT_DIR/schedule_executor_main.sh" -schedule "$schedule_file" --duration 10 --auto_start_all
+      sudo "$ROOT_DIR/schedule_executor_main.sh" -schedule "$schedule_file" --duration 10 --auto_start_all
     fi
   else
     # Direct python invocation without sudo
     if (( TIMEOUT_SECS > 0 )); then
       timeout "$TIMEOUT_SECS" "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 10 --auto_start_all
     else
-      "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 10 --auto_start_all
+      sudo "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 10 --auto_start_all
     fi
   fi
 
