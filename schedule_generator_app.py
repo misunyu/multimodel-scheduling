@@ -677,10 +677,15 @@ class ONNXProfilerApp(QMainWindow):
         tokens_per_s = None
         try:
             tok_cnt = self._lookup_llm_input_tokens("GPU", disp_path)
-            if isinstance(infer_ms, (int, float)) and infer_ms > 0 and isinstance(tok_cnt, int) and tok_cnt > 0:
-                tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+            if isinstance(infer_ms, (int, float)) and infer_ms > 0:
+                if isinstance(tok_cnt, int) and tok_cnt > 0:
+                    tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+                else:
+                    # Fallback: estimate using test sentence tokens for LLMs
+                    tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
         except Exception:
-            tokens_per_s = None
+            # Final fallback
+            tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
         self.ui_components.insert_result_row(self.npu1_table, disp_path, load_ms, infer_ms, tokens_per_s)
         self.log_message(f"[GPU] {disp_path}")
         if tokens_per_s is not None:
@@ -776,15 +781,19 @@ class ONNXProfilerApp(QMainWindow):
                 
                 load_ms, infer_ms, _ = self.profiler.profile_model_cpu(path)
                 rel_path = os.path.relpath(path, root_folder)
-                # Compute tokens/s using the captured input token count from purple logs
+                # Compute tokens/s using the captured input token count from purple logs,
+                # with a fallback heuristic for LLMs when tokens are unavailable.
                 disp_path = self._normalize_display_model(rel_path)
                 tokens_per_s = None
                 try:
                     tok_cnt = self._lookup_llm_input_tokens("CPU", disp_path)
-                    if isinstance(infer_ms, (int, float)) and infer_ms > 0 and isinstance(tok_cnt, int) and tok_cnt > 0:
-                        tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+                    if isinstance(infer_ms, (int, float)) and infer_ms > 0:
+                        if isinstance(tok_cnt, int) and tok_cnt > 0:
+                            tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+                        else:
+                            tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
                 except Exception:
-                    tokens_per_s = None
+                    tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
                 self.ui_components.insert_result_row(self.cpu_table, rel_path, load_ms, infer_ms, tokens_per_s)
                 
                 self.log_message(f"[CPU] {rel_path}")
@@ -800,10 +809,9 @@ class ONNXProfilerApp(QMainWindow):
                         valid_model_onnx[model_key] = [0.0, 0.0]
                     valid_model_onnx[model_key][0] += load_ms
                     valid_model_onnx[model_key][1] += infer_ms
-            
             except Exception as e:
                 self.log_message(f"[Error] Skipping {path}: {str(e)}\n")
-        
+
         return valid_model_onnx
 
     def _profile_onnx_models_gpu(self, onnx_files, root_folder):
@@ -812,17 +820,21 @@ class ONNXProfilerApp(QMainWindow):
             try:
                 rel_path = os.path.relpath(path, root_folder)
                 load_ms, infer_ms, _ = self.profiler.profile_model_gpu(path)
-                # Compute tokens/s using the captured input token count from purple logs
+                # Compute tokens/s using the captured input token count from purple logs,
+                # with a fallback heuristic for LLMs when tokens are unavailable.
                 disp_path = self._normalize_display_model(rel_path)
                 tokens_per_s = None
                 try:
                     tok_cnt = self._lookup_llm_input_tokens("GPU", disp_path)
-                    if isinstance(infer_ms, (int, float)) and infer_ms > 0 and isinstance(tok_cnt, int) and tok_cnt > 0:
-                        tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+                    if isinstance(infer_ms, (int, float)) and infer_ms > 0:
+                        if isinstance(tok_cnt, int) and tok_cnt > 0:
+                            tokens_per_s = tok_cnt / (infer_ms / 1000.0)
+                        else:
+                            tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
                 except Exception:
-                    tokens_per_s = None
-                self.ui_components.insert_result_row(self.npu1_table, rel_path, load_ms, infer_ms, tokens_per_s)
-                self.log_message(f"[GPU] {rel_path}")
+                    tokens_per_s = self._compute_tokens_per_s(disp_path, infer_ms)
+                self.ui_components.insert_result_row(self.npu1_table, disp_path, load_ms, infer_ms, tokens_per_s)
+                self.log_message(f"[GPU] {disp_path}")
                 if tokens_per_s is not None:
                     self.log_message(f"       Load: {load_ms:.1f} ms, Inference: {infer_ms:.1f} ms, Throughput: {tokens_per_s:.2f} tokens/s\n")
                 else:
@@ -1041,13 +1053,27 @@ class ONNXProfilerApp(QMainWindow):
         # Collect model files (same as run_profiling)
         onnx_files, o_files = self.file_manager.collect_model_files(selected_paths)
 
-        # Extract model names from paths (use filename stem; no explicit partitions)
+        # Extract model identifiers from paths
+        # Rule: if the file name is 'model.onnx' (or 'model'), use parent folder name as model id
+        # otherwise use the filename stem.
         models = []
         for path in onnx_files:
-            base = os.path.basename(path)
-            model_name, _ = os.path.splitext(base)
-            if model_name not in models:
-                models.append(model_name)
+            try:
+                base = os.path.basename(path)
+                stem, ext = os.path.splitext(base)
+                if base.lower() == "model.onnx" or stem.lower() == "model":
+                    parent = os.path.basename(os.path.dirname(path))
+                    model_name = parent if parent else stem
+                else:
+                    model_name = stem
+                if model_name not in models:
+                    models.append(model_name)
+            except Exception:
+                # Fallback: keep prior behavior
+                base = os.path.basename(path)
+                model_name, _ = os.path.splitext(base)
+                if model_name not in models:
+                    models.append(model_name)
 
         if models is None or len(models) == 0:
             self.log_message("[Warning] No models selected for assignment.")
@@ -1115,9 +1141,18 @@ class ONNXProfilerApp(QMainWindow):
         # Create the model_schedules.yaml content
         # 1) Build profiling maps from current tables so we can fill infps/intps and per-device times.
         def _base_name(text: str) -> str:
+            """Normalize a display or relative path into a schedule model id.
+            - If it ends with '/model.onnx' (or just 'model'), return the parent folder name.
+            - Else return the filename stem.
+            """
             try:
-                base = os.path.basename(text or "")
-                return os.path.splitext(base)[0]
+                t = text or ""
+                base = os.path.basename(t)
+                stem, ext = os.path.splitext(base)
+                if base.lower() == "model.onnx" or stem.lower() == "model":
+                    parent = os.path.basename(os.path.dirname(t))
+                    return parent if parent else stem
+                return stem
             except Exception:
                 return (text or "")
 

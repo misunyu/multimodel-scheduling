@@ -52,7 +52,8 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
 fi
 
 # Determine Python executable from virtual environment
-PY=/opt/.pyenv/shims/python3
+#PY=/opt/.pyenv/shims/python3
+PY="$ROOT_DIR/.venv/bin/python3"
 #if [[ -d "$ROOT_DIR/.venv" ]]; then
 #  # Use virtual environment Python if available
 #  if [[ -f "$ROOT_DIR/.venv/bin/python3" ]]; then

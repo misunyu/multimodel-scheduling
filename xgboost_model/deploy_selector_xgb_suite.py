@@ -29,22 +29,22 @@ CLI
 ---
 Train (JSON + YAML folders):
   python deploy_selector_xgb_suite.py train \
-    --perf_dir ./xgboost_model/performance_data \
+    --perf_dir ./xgboost_model/performance_results \
     --schedule_dir ./xgboost_model/schedules \
-    --static_json ./xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json \
+    --static_json ./xgboost_model/performance_results/sample_profiling_data/sample_profiling_data.json \
     --model_out ./xgboost_model/artifacts/deploy_xgb \
     [--dump_csv ./xgboost_model/artifacts/train_dataset_two_targets.csv]
 
 Predict from YAML schedule (planned combinations):
   python deploy_selector_xgb_suite.py predict \
     --schedule_yaml ./xgboost_model/schedules/model_schedules.yaml \
-    --static_json ./xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json \
+    --static_json ./xgboost_model/performance_results/sample_profiling_data/sample_profiling_data.json \
     --model_in ./xgboost_model/artifacts/deploy_xgb \
     [--alpha 0.2] [--topk 5]
 """
 
 
-#python3 xgboost_model/deploy_selector_xgb_suite.py predict   --schedule_dir ./xgboost_model/schedules/test   --static_json ./xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json   --model_in ./xgboost_model/artifacts/deploy_xgb   --alpha 0.2 --topk 1   --repeats 10
+#python3 xgboost_model/deploy_selector_xgb_suite.py predict   --schedule_dir ./xgboost_model/schedules/test   --static_json ./xgboost_model/performance_results/sample_profiling_data/sample_profiling_data.json   --model_in ./xgboost_model/artifacts/deploy_xgb   --alpha 0.2 --topk 1   --repeats 10
 
 import argparse
 import json
@@ -720,7 +720,7 @@ def main():
 
                     # Save minimal prediction summary JSON (backward compatibility)
                     try:
-                        out_dir = Path("xgboost_model/performance_data/prediction_test_results")
+                        out_dir = Path("xgboost_model/performance_results/prediction_test")
                         out_dir.mkdir(parents=True, exist_ok=True)
                         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         sched_stem = Path(sched_path).stem
@@ -784,9 +784,9 @@ def main():
                 print(line)
                 summary_lines.append(line)
 
-            # Write summary to xgboost_model/performance_data/prediction_test_results/prediction_time_cpu_YYYYMMDD_HHMMSS.txt
+            # Write summary to xgboost_model/performance_results/prediction_test/prediction_time_cpu_YYYYMMDD_HHMMSS.txt
             try:
-                out_dir = Path("xgboost_model/performance_data/prediction_test_results")
+                out_dir = Path("xgboost_model/performance_results/prediction_test")
                 out_dir.mkdir(parents=True, exist_ok=True)
                 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 out_path = out_dir / f"prediction_time_cpu_{stamp}.txt"
@@ -813,7 +813,7 @@ def rows_from_schedule_yaml(schedule_yaml_path: str):
 
     # Load static profiling table located relative to this module
     module_dir = _Path(__file__).resolve().parent
-    static_json = module_dir / "performance_data" / "sample_profiling_data" / "sample_profiling_data.json"
+    static_json = module_dir / "performance_results" / "sample_profiling_data" / "sample_profiling_data.json"
     S = load_static_profiles(static_json)
 
     rows = []

@@ -279,6 +279,47 @@ class UnifiedViewer(QMainWindow):
         self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
         
         try:
+            # Helper to resolve a model identifier (possibly a folder name) to an actual ONNX file path
+            def _resolve_model_path(model_id: str) -> str:
+                try:
+                    mid = str(model_id or '').strip()
+                    if not mid:
+                        return ''
+                    # If it already points to a file that exists, return as-is
+                    if os.path.isabs(mid) and os.path.isfile(mid):
+                        return mid
+                    # If it looks like a relative path containing a separator, try relative to CWD
+                    if any(sep in mid for sep in ['/', os.sep, '\\']):
+                        cand = os.path.abspath(mid)
+                        if os.path.isfile(cand):
+                            return cand
+                        # If it's a directory, try model.onnx inside
+                        if os.path.isdir(cand):
+                            p = os.path.join(cand, 'model.onnx')
+                            if os.path.isfile(p):
+                                return p
+                            # else first .onnx inside
+                            for n in os.listdir(cand):
+                                if n.lower().endswith('.onnx'):
+                                    return os.path.join(cand, n)
+                    # Otherwise, interpret as a model name possibly equal to a folder under models_onnx
+                    models_root = os.path.join(os.getcwd(), 'models_onnx')
+                    folder = os.path.join(models_root, mid)
+                    if os.path.isdir(folder):
+                        p = os.path.join(folder, 'model.onnx')
+                        if os.path.isfile(p):
+                            return p
+                        for n in os.listdir(folder):
+                            if n.lower().endswith('.onnx'):
+                                return os.path.join(folder, n)
+                    # Fallback: try models_root/<mid>.onnx
+                    direct = os.path.join(models_root, f"{mid}.onnx")
+                    if os.path.isfile(direct):
+                        return direct
+                except Exception:
+                    pass
+                return ''
+
             # Load configuration from the specified schedule file
             with open(self.schedule_file, "r") as f:
                 config = yaml.safe_load(f) or {}
@@ -307,8 +348,10 @@ class UnifiedViewer(QMainWindow):
                             self.headless_ids.append(hid)
                             # Store headless config inside model_settings under its id so
                             # feeders/process starters can use common paths without special cases
+                            mval = model_config.get("model", "")
                             self.model_settings[hid] = {
-                                "model": model_config.get("model", ""),
+                                "model": mval,
+                                "model_path": _resolve_model_path(mval),
                                 "execution": model_config.get("execution", "cpu"),
                                 "infps": model_config.get("infps", None)
                             }
@@ -325,14 +368,18 @@ class UnifiedViewer(QMainWindow):
                             safe_name = str(model_config_name).replace(" ", "_")
                             hid = f"headless_{safe_name}"
                             self.headless_ids.append(hid)
+                            mval = model_config.get("model", "")
                             self.model_settings[hid] = {
-                                "model": model_config.get("model", ""),
+                                "model": mval,
+                                "model_path": _resolve_model_path(mval),
                                 "execution": model_config.get("execution", "cpu"),
                                 "infps": model_config.get("infps", None)
                             }
                             continue
+                        mval = model_config.get("model", "")
                         view_to_model_map[view_key] = {
-                            "model": model_config.get("model", ""),
+                            "model": mval,
+                            "model_path": _resolve_model_path(mval),
                             "execution": model_config.get("execution", "cpu"),
                             "infps": model_config.get("infps", None)
                         }
@@ -347,6 +394,7 @@ class UnifiedViewer(QMainWindow):
                     # Still add default settings for compatibility with existing code
                     self.model_settings[view] = {
                         "model": "",
+                        "model_path": "",
                         "execution": "cpu"
                     }
                     # Informational: this view is simply unused by the selected combination
@@ -371,10 +419,10 @@ class UnifiedViewer(QMainWindow):
             print(f"[UnifiedViewer ERROR] Failed to load {self.schedule_file}: {e}")
             # Set default settings if file loading fails
             self.model_settings = {
-                "view1": {"model": "", "execution": "cpu"},
-                "view2": {"model": "resnet50_small", "execution": "cpu"},
-                "view3": {"model": "", "execution": "cpu"},
-                "view4": {"model": "resnet50_small", "execution": "cpu"}
+                "view1": {"model": "", "model_path": "", "execution": "cpu"},
+                "view2": {"model": "resnet50_small", "model_path": "", "execution": "cpu"},
+                "view3": {"model": "", "model_path": "", "execution": "cpu"},
+                "view4": {"model": "resnet50_small", "model_path": "", "execution": "cpu"}
             }
             # No views are marked as without model in case of error
     
