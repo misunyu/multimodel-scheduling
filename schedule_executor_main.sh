@@ -67,7 +67,7 @@ if [[ ! -x "$PY" ]]; then
 fi
 
 # Build command: always pass --schedule; append --schedule_name only when provided
-CMD=(sudo "$PY" schedule_executor_main.py --schedule "$SCHEDULE_FILE")
+CMD=("$PY" schedule_executor_main.py --schedule "$SCHEDULE_FILE")
 if [[ -n "$SCHEDULE_NAME" ]]; then
   CMD+=(--schedule_name "$SCHEDULE_NAME")
 fi
