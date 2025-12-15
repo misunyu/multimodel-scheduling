@@ -5,6 +5,8 @@ deploy_selector_xgb_suite.py
 
 Two-target XGBoost training/inference for multi-view performance logs.
 
+NOTE: NPU는 학습/추론에서 사용하지 않습니다. 본 모듈은 CPU/GPU만을 대상으로 피처를 생성합니다.
+
 Targets (window-level):
   - y1 = total.total_throughput_fps
   - y2 = derived.drop_rate_fps
@@ -13,7 +15,7 @@ Inputs (per window):
   - Per-view dynamic metrics (from JSON logs, train only):
       throughput_fps, avg_inference_time_ms, inference_count,
       avg_wait_to_preprocess_ms, dropped_frames_due_to_full_queue
-  - Execution device one-hot: exec_cpu, exec_npu0, exec_npu1
+  - Execution device one-hot (CPU/GPU only): exec_cpu, exec_gpu
   - Static features selected by the used device from sample_profiling_data.json:
       static_infer_sel, static_load_sel
   - Per-view planned FPS from YAML schedule (train & predict):
@@ -87,6 +89,7 @@ def _lazy_import_xgb():
 class StaticProfile:
     cpu_infer: float
     gpu_infer: float
+    # NPU 필드는 더 이상 사용하지 않지만, 오래된 JSON과의 호환을 위해 유지합니다.
     npu0_load: float
     npu0_infer: float
     npu1_load: float
@@ -148,12 +151,9 @@ def _device_static_for(model: str, exec_dev: str, S: Dict[str, StaticProfile]) -
         try:
             return (prof.gpu_infer, 0.0)
         except Exception:
-            # Backward compatibility: if gpu_infer missing, fall back to NPU1 infer
+            # Backward compatibility: if gpu_infer missing, fall back to NPU1 infer (legacy files)
             return (getattr(prof, 'npu1_infer', np.nan), 0.0)
-    if d == "NPU0":
-        return (prof.npu0_infer, prof.npu0_load)
-    if d == "NPU1":
-        return (prof.npu1_infer, prof.npu1_load)
+    # NPU는 학습/추론에서 사용하지 않으므로 여기서 값을 제공하지 않음
     return (np.nan, np.nan)
 
 
@@ -174,6 +174,7 @@ def _norm_exec(dev: str) -> str:
         return "CPU"
     if d in ("gpu", "apple-gpu", "coreml-gpu"):
         return "GPU"
+    # NPU 계열은 반환하더라도 상위 로직에서 스킵 처리됩니다.
     if d in ("npu0", "npu-0", "npu_0", "npu 0"):
         return "NPU0"
     if d in ("npu1", "npu-1", "npu_1", "npu 1"):
@@ -323,14 +324,17 @@ def featurize_window(window: Dict[str, Any],
         if not model_name or not exec_dev_raw:
             continue
         exec_dev = _norm_exec(exec_dev_raw)
+        # NPU는 학습에서 사용하지 않음: 해당 뷰 스킵
+        if exec_dev in ("NPU0", "NPU1"):
+            continue
 
         row: Dict[str, float] = {}
         for k in VIEW_DYNAMIC_KEYS:
             row[f"view.{k}"] = float(view.get(k, np.nan))
 
+        # 원-핫: CPU/GPU만 사용
         row["view.exec_cpu"] = 1.0 if exec_dev == "CPU" else 0.0
-        row["view.exec_npu0"] = 1.0 if exec_dev == "NPU0" else 0.0
-        row["view.exec_npu1"] = 1.0 if exec_dev == "NPU1" else 0.0
+        row["view.exec_gpu"] = 1.0 if exec_dev == "GPU" else 0.0
 
         s_infer, s_load = _device_static_for(model_name, exec_dev, S)
         row["view.static_infer_sel"] = s_infer if np.isfinite(s_infer) else 0.0
@@ -522,6 +526,9 @@ def featurize_from_combo(S: Dict[str, StaticProfile], combo_blob: Dict[str, Any]
         dev = _norm_exec(v.get("execution", ""))
         if not m or not dev:
             continue
+        # NPU는 추론에서도 사용하지 않음: 해당 뷰 스킵
+        if dev in ("NPU0", "NPU1"):
+            continue
 
         s_infer, s_load = _device_static_for(m, dev, S)
         s_infer = float(s_infer) if np.isfinite(s_infer) else 0.0
@@ -543,10 +550,9 @@ def featurize_from_combo(S: Dict[str, StaticProfile], combo_blob: Dict[str, Any]
 
         inf_cnt = fps * WINDOW_SEC
 
-        # Execution flags: map GPU onto legacy NPU1 flag for backward-compatible models
+        # Execution flags: CPU/GPU only
         exec_cpu = 1.0 if dev == "CPU" else 0.0
-        exec_npu0 = 1.0 if dev == "NPU0" else 0.0
-        exec_npu1 = 1.0 if dev in ("NPU1", "GPU") else 0.0
+        exec_gpu = 1.0 if dev == "GPU" else 0.0
         r = {
             "view.throughput_fps": fps,
             "view.avg_inference_time_ms": avg_inf_ms,
@@ -554,8 +560,7 @@ def featurize_from_combo(S: Dict[str, StaticProfile], combo_blob: Dict[str, Any]
             "view.avg_wait_to_preprocess_ms": ASSUME_WAIT_MS,
             "view.dropped_frames_due_to_full_queue": 0.0,
             "view.exec_cpu": exec_cpu,
-            "view.exec_npu0": exec_npu0,
-            "view.exec_npu1": exec_npu1,
+            "view.exec_gpu": exec_gpu,
             "view.static_infer_sel": s_infer,
             "view.static_load_sel": s_load,
             "view.infps": fps,

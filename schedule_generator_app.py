@@ -1541,7 +1541,8 @@ class ONNXProfilerApp(QMainWindow):
                     cpu_infer_ms = float(it.get("cpu_infer", 0.0) or 0.0)
                     cpu_fps = (1000.0 / cpu_infer_ms) if cpu_infer_ms > 0 else 0.0
                 if gpu_fps is None or gpu_fps <= 0:
-                    gpu_infer_ms = float((it.get("gpu_infer", None) if it.get("gpu_infer", None) is not None else it.get("npu1_infer", 0.0)) or 0.0)
+                    # Do not load legacy npu1_infer; only respect gpu_infer
+                    gpu_infer_ms = float((it.get("gpu_infer", None)) or 0.0)
                     gpu_fps = (1000.0 / gpu_infer_ms) if gpu_infer_ms > 0 else 0.0
 
                 # CPU FPS cell
@@ -1563,7 +1564,8 @@ class ONNXProfilerApp(QMainWindow):
                     return self._compute_tokens_per_s(name, infer_ms_val)
 
                 cpu_infer_ms = float(it.get("cpu_infer", 0.0) or 0.0)
-                gpu_infer_ms = float((it.get("gpu_infer", None) if it.get("gpu_infer", None) is not None else it.get("npu1_infer", 0.0)) or 0.0)
+                # Do not load legacy npu1_infer; only respect gpu_infer
+                gpu_infer_ms = float((it.get("gpu_infer", None)) or 0.0)
 
                 cpu_tok_val = _tok_from_ms(model_name, cpu_infer_ms)
                 gpu_tok_val = _tok_from_ms(model_name, gpu_infer_ms)

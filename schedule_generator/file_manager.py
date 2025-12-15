@@ -270,13 +270,12 @@ class FileManager:
             Path to the saved file
         """
         # Prepare data structure
-        # Save ALL table data: CPU, NPU1, NPU2, and Total
-        # Use keys that are backward-compatible and also provide forward-friendly aliases when needed
+        # Save CPU, GPU, and Total only. We no longer store NPU1/NPU2 fields.
+        # Note: GPU data is sourced from the existing npu1_table in the UI.
         sample_data = {
             "cpu_data": [],   # list of {model, load, infer, tokens?}
-            "npu1_data": [],  # list of {model, load, infer, tokens?}
-            "npu2_data": [],  # list of {model, load, infer, tokens?}
-            "total_data": []  # list of {model, cpu_infer, gpu_infer|npu1_infer, cpu_tokens, gpu_tokens}
+            "gpu_data": [],  # list of {model, load, infer, tokens?}
+            "total_data": []  # list of {model, cpu_infer, gpu_infer, cpu_tokens, gpu_tokens}
         }
         # Merge optional metadata (e.g., selected paths, root folder) for restoring UI state
         if extra_meta and isinstance(extra_meta, dict):
@@ -322,7 +321,7 @@ class FileManager:
                 entry["input_tokens"] = int(input_tokens)
             sample_data["cpu_data"].append(entry)
         
-        # Extract NPU1 data (a.k.a GPU in UI)
+        # Extract GPU data (from npu1_table in current UI)
         for row in range(npu1_table.rowCount()):
             model = npu1_table.item(row, 0).text() if npu1_table.item(row, 0) else ""
             load = _safe_float_text(npu1_table.item(row, 1))
@@ -346,25 +345,9 @@ class FileManager:
                 entry["tokens"] = tokens
             if input_tokens is not None:
                 entry["input_tokens"] = int(input_tokens)
-            sample_data["npu1_data"].append(entry)
+            sample_data["gpu_data"].append(entry)
 
-        # Extract NPU2 data (if table is used)
-        for row in range(npu2_table.rowCount()):
-            model = npu2_table.item(row, 0).text() if npu2_table.item(row, 0) else ""
-            load = _safe_float_text(npu2_table.item(row, 1))
-            infer = _safe_float_text(npu2_table.item(row, 2))
-            tokens = None
-            tok_item = npu2_table.item(row, 3)
-            if tok_item and tok_item.text() not in (None, "", "-"):
-                try:
-                    tokens = float(tok_item.text())
-                except Exception:
-                    tokens = None
-
-            entry = {"model": model, "load": load, "infer": infer}
-            if tokens is not None:
-                entry["tokens"] = tokens
-            sample_data["npu2_data"].append(entry)
+        # NPU2 is no longer saved. Ignore npu2_table content on save.
         
         # Extract total data directly from the total table (skipping summary row)
         # Build quick lookup maps from per-device tables to enable fallback when FPS is not available
@@ -450,9 +433,8 @@ class FileManager:
             entry = {
                 "model": model,
                 "cpu_infer": cpu_infer,
-                # Prefer GPU naming but keep NPU1 alias for backward compatibility on load
+                # Store only GPU naming (no NPU1 alias)
                 "gpu_infer": gpu_infer,
-                "npu1_infer": gpu_infer,
                 # Also store FPS values explicitly for forward compatibility/debugging
                 "cpu_fps": round(cpu_fps_val, 2),
                 "gpu_fps": round(gpu_fps_val, 2)

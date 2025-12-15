@@ -665,6 +665,35 @@ class UnifiedViewer(QMainWindow):
                             # Fallback: avoid dumping large arrays/images
                             msg = "result received"
 
+                        # Accumulate basic headless stats for throughput saving
+                        try:
+                            stats = getattr(self, 'headless_stats', None)
+                            if stats is None:
+                                self.headless_stats = {}
+                                stats = self.headless_stats
+                            s = stats.setdefault(name, {
+                                'count': 0,
+                                'sum_infer_ms': 0.0,
+                                'sum_wait_ms': 0.0,
+                                'wait_count': 0,
+                                'model': model_name,
+                                'execution': exec_dev,
+                            })
+                            s['count'] += 1
+                            try:
+                                if infer_ms is not None:
+                                    s['sum_infer_ms'] += float(infer_ms)
+                            except Exception:
+                                pass
+                            try:
+                                if wait_ms is not None:
+                                    s['sum_wait_ms'] += float(wait_ms)
+                                    s['wait_count'] += 1
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+
                         print(f"[Headless][{ts}][{combo}][{run_id}] {name} {model_name} {exec_dev}: {msg}")
                     except Exception:
                         # Never let logging break the drainer
@@ -674,6 +703,12 @@ class UnifiedViewer(QMainWindow):
             t.start()
             return t
         self._headless_drainers = []
+        # Ensure stats container exists for headless jobs
+        try:
+            if getattr(self, 'headless_stats', None) is None:
+                self.headless_stats = {}
+        except Exception:
+            self.headless_stats = {}
         for hid in list(getattr(self, 'headless_ids', []) or []):
             q = self.headless_output_queues.get(hid)
             ev = self.headless_shutdown_events.get(hid)
@@ -1526,36 +1561,38 @@ class UnifiedViewer(QMainWindow):
             view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
             view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
             
-            # Check if view handlers exist
-            if not all(hasattr(self, f'view{i}_handler') for i in range(1, 5)):
-                print("[Save Throughput] No view handlers initialized, skipping throughput data save")
-                return
-                
-            # Get performance statistics from view handlers
-            view1_avg_fps = self.view1_handler.avg_fps
-            view1_avg_infer_time = self.view1_handler.avg_infer_time
-            view1_infer_count = self.view1_handler.infer_count
-            
-            view2_avg_fps = self.view2_handler.avg_fps
-            view2_avg_infer_time = self.view2_handler.avg_infer_time
-            view2_infer_count = self.view2_handler.infer_count
-            
-            view3_avg_fps = self.view3_handler.avg_fps
-            view3_avg_infer_time = self.view3_handler.avg_infer_time
-            view3_infer_count = self.view3_handler.infer_count
-            
-            view4_avg_fps = self.view4_handler.avg_fps
-            view4_avg_infer_time = self.view4_handler.avg_infer_time
-            view4_infer_count = self.view4_handler.infer_count
+            # Get performance statistics from view handlers (robust to missing handlers)
+            def _stats_for(view_name: str):
+                handler = getattr(self, f"{view_name}_handler", None)
+                if handler is None:
+                    return 0.0, 0.0, 0
+                try:
+                    avg_fps = float(getattr(handler, 'avg_fps', 0.0) or 0.0)
+                except Exception:
+                    avg_fps = 0.0
+                try:
+                    avg_infer_time = float(getattr(handler, 'avg_infer_time', 0.0) or 0.0)
+                except Exception:
+                    avg_infer_time = 0.0
+                try:
+                    infer_count = int(getattr(handler, 'infer_count', 0) or 0)
+                except Exception:
+                    infer_count = 0
+                return avg_fps, avg_infer_time, infer_count
+
+            view1_avg_fps, view1_avg_infer_time, view1_infer_count = _stats_for('view1')
+            view2_avg_fps, view2_avg_infer_time, view2_infer_count = _stats_for('view2')
+            view3_avg_fps, view3_avg_infer_time, view3_infer_count = _stats_for('view3')
+            view4_avg_fps, view4_avg_infer_time, view4_infer_count = _stats_for('view4')
             
             # Determine which views are actually scheduled in this combination
             scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
 
             # Map helpers for per-view stats, including avg_wait_ms (if available) and dropped frames
-            view1_wait = getattr(self.view1_handler, 'avg_wait_ms', 0.0)
-            view2_wait = getattr(self.view2_handler, 'avg_wait_ms', 0.0)
-            view3_wait = getattr(self.view3_handler, 'avg_wait_ms', 0.0)
-            view4_wait = getattr(self.view4_handler, 'avg_wait_ms', 0.0)
+            view1_wait = getattr(getattr(self, 'view1_handler', None), 'avg_wait_ms', 0.0)
+            view2_wait = getattr(getattr(self, 'view2_handler', None), 'avg_wait_ms', 0.0)
+            view3_wait = getattr(getattr(self, 'view3_handler', None), 'avg_wait_ms', 0.0)
+            view4_wait = getattr(getattr(self, 'view4_handler', None), 'avg_wait_ms', 0.0)
 
             # Drop counts from feeder (0 if not present)
             drop_counts = getattr(self, 'video_feeder', None)
@@ -1568,7 +1605,7 @@ class UnifiedViewer(QMainWindow):
                 "view4": (view4_avg_fps, view4_avg_infer_time, view4_infer_count, view4_model, view4_mode, view4_wait, int(drop_map.get("view4", 0))),
             }
 
-            # Calculate total throughput for scheduled views
+            # Calculate total throughput for scheduled views (with headless later)
             total_fps = sum(per_view_stats[v][0] for v in scheduled_views)
             scheduled_count = len(scheduled_views)
             total_avg_fps = total_fps / scheduled_count if scheduled_count > 0 else 0.0
@@ -1599,6 +1636,53 @@ class UnifiedViewer(QMainWindow):
                     "dropped_frames_due_to_full_queue": int(dropped or 0)
                 }
                 devices_used.add(exec_mode)
+
+            # Include headless jobs (no views) into models and totals
+            try:
+                headless_ids = list(getattr(self, 'headless_ids', []) or [])
+                hstats = getattr(self, 'headless_stats', {}) or {}
+                # elapsed time since measurement start; fallback to window duration
+                try:
+                    import time as _t
+                    elapsed = float(max(0.001, (_t.time() - float(getattr(self, 'measurement_start_ts', 0.0)))))
+                except Exception:
+                    elapsed = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
+                for hid in headless_ids:
+                    cfg = self.model_settings.get(hid, {})
+                    model_name = cfg.get('model', '')
+                    exec_mode = str(cfg.get('execution', 'cpu')).upper()
+                    s = hstats.get(hid, {})
+                    count = int(s.get('count', 0) or 0)
+                    sum_infer_ms = float(s.get('sum_infer_ms', 0.0) or 0.0)
+                    sum_wait_ms = float(s.get('sum_wait_ms', 0.0) or 0.0)
+                    wait_count = int(s.get('wait_count', 0) or 0)
+                    avg_time = (sum_infer_ms / count) if count > 0 else 0.0
+                    avg_wait_ms = (sum_wait_ms / wait_count) if wait_count > 0 else 0.0
+                    avg_fps = (count / elapsed) if elapsed > 0 else 0.0
+                    # Update totals (headless contributes to total throughput)
+                    total_fps += avg_fps
+                    # Models entry uses the headless id as key
+                    throughput_data["models"][hid] = {
+                        "model": model_name,
+                        "execution": exec_mode,
+                        "throughput_fps": round(avg_fps, 2),
+                        "avg_inference_time_ms": round(avg_time, 2),
+                        "inference_count": int(count),
+                        "avg_wait_to_preprocess_ms": round(avg_wait_ms or 0.0, 2),
+                        "dropped_frames_due_to_full_queue": 0
+                    }
+                    devices_used.add(exec_mode)
+                # Recompute average throughput across all scheduled entities (views + headless)
+                total_entities = scheduled_count + len(headless_ids)
+                total_avg_fps = total_fps / total_entities if total_entities > 0 else 0.0
+                # Reflect updated totals
+                throughput_data["total"]["total_throughput_fps"] = round(total_fps, 2)
+                throughput_data["total"]["avg_throughput_fps"] = round(total_avg_fps, 2)
+            except Exception as e:
+                try:
+                    print(f"[Save Throughput] Warning: failed to include headless metrics: {e}")
+                except Exception:
+                    pass
 
             # Compute per-device queue metrics with fallback when timing logs are unavailable
             try:
