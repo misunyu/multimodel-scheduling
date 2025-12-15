@@ -97,7 +97,15 @@ def load_static_profiles(static_json_path: Path) -> Dict[str, StaticProfile]:
     blob = json.loads(static_json_path.read_text(encoding="utf-8"))
     table: Dict[str, StaticProfile] = {}
     for row in blob.get("total_data", []):
-        table[row["model"]] = StaticProfile(
+        raw_name = str(row.get("model", "")).strip()
+        # 표준화: 대소문자 통일 및 .onnx 확장자 유무 모두 지원
+        norm_name = raw_name.lower()
+        if norm_name.endswith(".onnx"):
+            base_name = norm_name[:-5]
+        else:
+            base_name = norm_name
+
+        prof = StaticProfile(
             cpu_infer=float(row.get("cpu_infer", np.nan)),
             gpu_infer=float(row.get("gpu_infer", np.nan)),
             npu0_load=float(row.get("npu0_load", np.nan)),
@@ -105,6 +113,10 @@ def load_static_profiles(static_json_path: Path) -> Dict[str, StaticProfile]:
             npu1_load=float(row.get("npu1_load", np.nan)),
             npu1_infer=float(row.get("npu1_infer", np.nan)),
         )
+
+        # 키를 두 가지 형태로 모두 등록: "model" 및 "model.onnx"
+        table[norm_name] = prof
+        table[base_name] = prof
     return table
 
 
@@ -118,7 +130,14 @@ VIEW_DYNAMIC_KEYS = [
 
 
 def _device_static_for(model: str, exec_dev: str, S: Dict[str, StaticProfile]) -> Tuple[float, float]:
-    prof = S.get(model)
+    # 모델 키 표준화 및 확장자(.onnx) 유무 불일치 보정
+    key_try = str(model).strip().lower()
+    prof = S.get(key_try)
+    if prof is None:
+        if key_try.endswith(".onnx"):
+            prof = S.get(key_try[:-5])
+        else:
+            prof = S.get(key_try + ".onnx") or S.get(key_try)
     if prof is None:
         return (np.nan, np.nan)
     d = str(exec_dev).upper()
@@ -272,9 +291,13 @@ def _build_infps_lookup(schedule_doc: Dict[str, Any], combination_name: str) -> 
             dev = _norm_exec(r.get("execution", ""))
             if not m or not dev:
                 continue
-            if "infps" in r and r["infps"] is not None:
+            # 스케줄 키 오타 보정: "intps"도 허용
+            fps_val = r.get("infps")
+            if fps_val is None:
+                fps_val = r.get("intps")
+            if fps_val is not None:
                 try:
-                    infps_map[(m, dev)] = float(r["infps"])
+                    infps_map[(m, dev)] = float(fps_val)
                 except Exception:
                     pass
     except Exception:
@@ -504,9 +527,13 @@ def featurize_from_combo(S: Dict[str, StaticProfile], combo_blob: Dict[str, Any]
         s_infer = float(s_infer) if np.isfinite(s_infer) else 0.0
         s_load = float(s_load) if np.isfinite(s_load) else 0.0
 
-        if "infps" in v and v["infps"] is not None:
+        # 계획 FPS: infps 우선, 없으면 오타 키(intps) 허용
+        fps_key_val = v.get("infps")
+        if fps_key_val is None:
+            fps_key_val = v.get("intps")
+        if fps_key_val is not None:
             try:
-                fps = float(v["infps"])
+                fps = float(fps_key_val)
             except Exception:
                 fps = 0.0
             avg_inf_ms = 0.0 if fps <= 0 else (1000.0 / fps)
