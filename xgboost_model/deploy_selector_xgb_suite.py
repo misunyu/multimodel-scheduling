@@ -1,52 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-deploy_selector_xgb_suite.py
-
-Two-target XGBoost training/inference for multi-view performance logs.
-
-NOTE: NPU는 학습/추론에서 사용하지 않습니다. 본 모듈은 CPU/GPU만을 대상으로 피처를 생성합니다.
-
-Targets (window-level):
-  - y1 = total.total_throughput_fps
-  - y2 = derived.drop_rate_fps
-
-Inputs (per window):
-  - Per-view dynamic metrics (from JSON logs, train only):
-      throughput_fps, avg_inference_time_ms, inference_count,
-      avg_wait_to_preprocess_ms, dropped_frames_due_to_full_queue
-  - Execution device one-hot (CPU/GPU only): exec_cpu, exec_gpu
-  - Static features selected by the used device from sample_profiling_data.json:
-      static_infer_sel, static_load_sel
-  - Per-view planned FPS from YAML schedule (train & predict):
-      view.infps
-  - Cross terms:
-      throughput_fps * static_infer_sel
-      avg_wait_to_preprocess_ms * static_load_sel
-  - Aggregation across views: sum/mean/max + views.count.views
-
-NO leakage: window-level totals/derived fields are NOT used as features.
-
-CLI
----
-Train (JSON + YAML folders):
-  python deploy_selector_xgb_suite.py train \
-    --perf_dir ./xgboost_model/performance_results \
-    --schedule_dir ./xgboost_model/schedules \
-    --static_json ./xgboost_model/performance_results/sample_profiling_data/sample_profiling_data.json \
-    --model_out ./xgboost_model/artifacts/deploy_xgb \
-    [--dump_csv ./xgboost_model/artifacts/train_dataset_two_targets.csv]
-
-Predict from YAML schedule (planned combinations):
-  python deploy_selector_xgb_suite.py predict \
-    --schedule_yaml ./xgboost_model/schedules/model_schedules.yaml \
-    --static_json ./xgboost_model/performance_results/sample_profiling_data/sample_profiling_data.json \
-    --model_in ./xgboost_model/artifacts/deploy_xgb \
-    [--alpha 0.2] [--topk 5]
+ python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./xgboost_model/performance_results/train     --schedule_dir ./xgboost_model/schedules/train  --model_out ./xgboost_model/artifacts/xgb_model
+ python ./xgboost_model/deploy_selector_xgb_suite.py predict     --schedule_dir ./xgboost_model/schedules/test     --model_in ./xgboost_model/artifacts/xgb_model
 """
-
-
-#python3 xgboost_model/deploy_selector_xgb_suite.py predict   --schedule_dir ./xgboost_model/schedules/test   --static_json ./xgboost_model/performance_results/sample_profiling_data/sample_profiling_data.json   --model_in ./xgboost_model/artifacts/deploy_xgb   --alpha 0.2 --topk 1   --repeats 10
 
 import argparse
 import json
@@ -54,178 +11,75 @@ import math
 import sys
 import time
 from datetime import datetime
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 
-# Optional YAML
 try:
-    import yaml  # type: ignore
+    import yaml
 except Exception:
     yaml = None
 
-# ---------- Constants for combo featurization (predict 전용, 학습 입력엔 영향 없음) ----------
+# ---------- Constants ----------
 WINDOW_SEC = 30.0
 ASSUME_WAIT_MS = 0.0
+MODEL_HASH_BUCKETS = 20  # 모델 이름을 식별하기 위한 해싱 버킷 크기
 
-
-# ---------- Utilities ----------
 
 def _lazy_import_xgb():
     try:
-        import xgboost as xgb  # type: ignore
+        import xgboost as xgb
         return xgb
     except Exception as e:
-        raise RuntimeError(
-            "xgboost is required. Install it with: pip install xgboost\n"
-            f"Original import error: {e}"
-        )
-
-
-@dataclass
-class StaticProfile:
-    cpu_infer: float
-    gpu_infer: float
-    # NPU 필드는 더 이상 사용하지 않지만, 오래된 JSON과의 호환을 위해 유지합니다.
-    npu0_load: float
-    npu0_infer: float
-    npu1_load: float
-    npu1_infer: float
-
-
-def load_static_profiles(static_json_path: Path) -> Dict[str, StaticProfile]:
-    blob = json.loads(static_json_path.read_text(encoding="utf-8"))
-    table: Dict[str, StaticProfile] = {}
-    for row in blob.get("total_data", []):
-        raw_name = str(row.get("model", "")).strip()
-        # 표준화: 대소문자 통일 및 .onnx 확장자 유무 모두 지원
-        norm_name = raw_name.lower()
-        if norm_name.endswith(".onnx"):
-            base_name = norm_name[:-5]
-        else:
-            base_name = norm_name
-
-        prof = StaticProfile(
-            cpu_infer=float(row.get("cpu_infer", np.nan)),
-            gpu_infer=float(row.get("gpu_infer", np.nan)),
-            npu0_load=float(row.get("npu0_load", np.nan)),
-            npu0_infer=float(row.get("npu0_infer", np.nan)),
-            npu1_load=float(row.get("npu1_load", np.nan)),
-            npu1_infer=float(row.get("npu1_infer", np.nan)),
-        )
-
-        # 키를 두 가지 형태로 모두 등록: "model" 및 "model.onnx"
-        table[norm_name] = prof
-        table[base_name] = prof
-    return table
-
-
-VIEW_DYNAMIC_KEYS = [
-    "throughput_fps",
-    "avg_inference_time_ms",
-    "inference_count",
-    "avg_wait_to_preprocess_ms",
-    "dropped_frames_due_to_full_queue",
-]
-
-
-def _device_static_for(model: str, exec_dev: str, S: Dict[str, StaticProfile]) -> Tuple[float, float]:
-    # 모델 키 표준화 및 확장자(.onnx) 유무 불일치 보정
-    key_try = str(model).strip().lower()
-    prof = S.get(key_try)
-    if prof is None:
-        if key_try.endswith(".onnx"):
-            prof = S.get(key_try[:-5])
-        else:
-            prof = S.get(key_try + ".onnx") or S.get(key_try)
-    if prof is None:
-        return (np.nan, np.nan)
-    d = str(exec_dev).upper()
-    if d == "CPU":
-        return (prof.cpu_infer, 0.0)
-    if d == "GPU":
-        # GPU has no separate load time in static profiles; treat load as 0 for prediction features
-        try:
-            return (prof.gpu_infer, 0.0)
-        except Exception:
-            # Backward compatibility: if gpu_infer missing, fall back to NPU1 infer (legacy files)
-            return (getattr(prof, 'npu1_infer', np.nan), 0.0)
-    # NPU는 학습/추론에서 사용하지 않으므로 여기서 값을 제공하지 않음
-    return (np.nan, np.nan)
-
-
-def _nested(d: Dict[str, Any], dotted: str, field: str, default=np.nan) -> float:
-    cur = d
-    for part in dotted.split("."):
-        cur = cur.get(part, {})
-    val = cur.get(field, default) if isinstance(cur, dict) else default
-    try:
-        return float(val)
-    except Exception:
-        return default
+        raise RuntimeError(f"xgboost required. {e}")
 
 
 def _norm_exec(dev: str) -> str:
     d = str(dev).strip().lower()
-    if d in ("cpu",):
-        return "CPU"
-    if d in ("gpu", "apple-gpu", "coreml-gpu"):
-        return "GPU"
-    # NPU 계열은 반환하더라도 상위 로직에서 스킵 처리됩니다.
-    if d in ("npu0", "npu-0", "npu_0", "npu 0"):
-        return "NPU0"
-    if d in ("npu1", "npu-1", "npu_1", "npu 1"):
-        return "NPU1"
+    if d in ("cpu",): return "CPU"
+    if d in ("gpu", "apple-gpu", "coreml-gpu"): return "GPU"
     return dev.upper()
 
-
-# ---------- YAML 로더/인덱서 (train에서 사용) ----------
 
 def _load_yaml_or_json(path: Path) -> Dict[str, Any]:
     txt = path.read_text(encoding="utf-8")
     if yaml is not None:
         try:
-            data = yaml.safe_load(txt)
-            if isinstance(data, dict):
-                return data
+            return yaml.safe_load(txt) or {}
         except Exception:
             pass
     try:
-        obj = json.loads(txt)
-        if isinstance(obj, dict):
-            return obj
+        return json.loads(txt) or {}
     except Exception:
         pass
     return {}
 
 
 def _iter_combos_from_schedule(schedule: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
-    out: List[Tuple[str, Dict[str, Any]]] = []
+    out = []
     if "combinations" in schedule:
         combos = schedule["combinations"]
         if isinstance(combos, list):
             for c in combos:
-                if isinstance(c, dict):
-                    name = c.get("combination") or c.get("name") or "combination_unknown"
-                    out.append((str(name), c))
+                name = c.get("combination") or c.get("name") or "unknown"
+                out.append((str(name), c))
         elif isinstance(combos, dict):
             for name, c in combos.items():
-                if isinstance(c, dict):
-                    c = dict(c); c.setdefault("combination", name)
-                    out.append((str(name), c))
-        if out:
-            return out
+                c = dict(c);
+                c.setdefault("combination", name)
+                out.append((str(name), c))
+        if out: return out
+
     if isinstance(schedule, dict):
         picks = [(k, v) for k, v in schedule.items()
                  if isinstance(v, dict) and str(k).lower().startswith("combination")]
         if picks:
-            for name, blob in picks:
-                out.append((str(name), blob))
+            for name, blob in picks: out.append((str(name), blob))
             return out
-    name = schedule.get("combination") or schedule.get("name") or "combination_unknown"
+
+    name = schedule.get("combination") or schedule.get("name") or "unknown"
     out.append((str(name), schedule))
     return out
 
@@ -243,117 +97,104 @@ def _rows_from_combo_struct(combo_blob: Dict[str, Any]) -> List[Dict[str, Any]]:
                 if "model" in v and "execution" in v:
                     row = {"model": v["model"], "execution": v["execution"]}
                     for k in v:
-                        if k not in ("model", "execution"):
-                            row[k] = v[k]
+                        if k not in ("model", "execution"): row[k] = v[k]
                     rows.append(row)
-            if rows:
-                return rows
-    raise ValueError("combo must have 'views' (list) or 'models' (dict), or an implicit dict of per-view entries.")
+            if rows: return rows
+    return []
 
 
 def _index_schedules(schedule_dir: Path) -> Dict[str, Dict[str, Any]]:
-    index: Dict[str, Dict[str, Any]] = {}
-    if not schedule_dir.exists():
-        return index
-    exts = {".yaml", ".yml", ".json"}
+    index = {}
+    if not schedule_dir.exists(): return index
     for p in schedule_dir.rglob("*"):
-        if p.is_file() and p.suffix.lower() in exts:
+        if p.is_file() and p.suffix.lower() in {".yaml", ".yml", ".json"}:
             try:
                 index[p.name.lower()] = _load_yaml_or_json(p)
-            except Exception:
+            except:
                 pass
     return index
 
 
-def _find_schedule(index: Dict[str, Dict[str, Any]], hint: str) -> Optional[Dict[str, Any]]:
-    if not hint:
-        return None
-    base = Path(hint).name.lower()
-    return index.get(base)
+def _find_schedule(index, hint):
+    if not hint: return None
+    return index.get(Path(hint).name.lower())
 
 
-def _build_infps_lookup(schedule_doc: Dict[str, Any], combination_name: str) -> Dict[Tuple[str, str], float]:
-    infps_map: Dict[Tuple[str, str], float] = {}
+def _build_infps_lookup(schedule_doc, combination_name):
+    infps_map = {}
     try:
         combos = _iter_combos_from_schedule(schedule_doc)
         target_blob = None
         for name, blob in combos:
             if str(name) == str(combination_name):
-                target_blob = blob
+                target_blob = blob;
                 break
-        if target_blob is None and combos:
-            if len(combos) == 1:
-                target_blob = combos[0][1]
-        if target_blob is None:
-            return infps_map
-        rows = _rows_from_combo_struct(target_blob)
-        for r in rows:
-            m = r.get("model")
-            dev = _norm_exec(r.get("execution", ""))
-            if not m or not dev:
-                continue
-            # 스케줄 키 오타 보정: "intps"도 허용
-            fps_val = r.get("infps")
-            if fps_val is None:
-                fps_val = r.get("intps")
-            if fps_val is not None:
-                try:
-                    infps_map[(m, dev)] = float(fps_val)
-                except Exception:
-                    pass
-    except Exception:
+        if target_blob is None and len(combos) == 1: target_blob = combos[0][1]
+        if target_blob:
+            for r in _rows_from_combo_struct(target_blob):
+                m = r.get("model")
+                dev = _norm_exec(r.get("execution", ""))
+                val = r.get("infps") or r.get("intps")
+                if m and dev and val is not None:
+                    infps_map[(m, dev)] = float(val)
+    except:
         pass
     return infps_map
 
 
-# ---------- Feature engineering (train 전용) ----------
+def _get_model_features(model_name: str) -> Dict[str, float]:
+    """
+    [FIX] 모델 이름을 피처로 변환 (Hashing Trick).
+    """
+    feats = {}
+    if not model_name:
+        return feats
 
-def featurize_window(window: Dict[str, Any],
-                     S: Dict[str, StaticProfile],
-                     infps_map: Optional[Dict[Tuple[str, str], float]] = None
-                     ) -> Tuple[Dict[str, float], Tuple[float, float], Dict[str, Any]]:
-    """
-    Train용: JSON의 동적 지표 + YAML infps(view.infps) 병합.
-    """
+    # Simple hashing to buckets
+    h_val = hash(model_name.lower()) % MODEL_HASH_BUCKETS
+    for i in range(MODEL_HASH_BUCKETS):
+        feats[f"model_hash_{i}"] = 1.0 if i == h_val else 0.0
+    return feats
+
+
+# ---------- Feature Engineering (Fixed) ----------
+
+def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
+    Dict[str, float], Tuple[float, float], Dict[str, Any]]:
     models = window.get("models", {})
-    per_view_rows: List[Dict[str, float]] = []
+    per_view_rows = []
 
-    for _, view in models.items():
+    for k, view in models.items():
+        k_l = str(k).lower()
+        if not (k_l.startswith("view") or k_l.startswith("headless")): continue
+
         model_name = view.get("model")
         exec_dev_raw = view.get("execution")
-        if not model_name or not exec_dev_raw:
-            continue
+        if not model_name or not exec_dev_raw: continue
+
         exec_dev = _norm_exec(exec_dev_raw)
-        # NPU는 학습에서 사용하지 않음: 해당 뷰 스킵
-        if exec_dev in ("NPU0", "NPU1"):
-            continue
+        if exec_dev in ("NPU0", "NPU1"): continue  # NPU Skip
 
-        row: Dict[str, float] = {}
-        for k in VIEW_DYNAMIC_KEYS:
-            row[f"view.{k}"] = float(view.get(k, np.nan))
+        row = {}
 
-        # 원-핫: CPU/GPU만 사용
+        # [FIX 1] 실제 측정값(throughput_fps 등)을 입력 피처에서 제거함!
+
+        # [FIX 2] 모델 식별 정보 추가
+        row.update(_get_model_features(model_name))
+
+        # Device Flags
         row["view.exec_cpu"] = 1.0 if exec_dev == "CPU" else 0.0
         row["view.exec_gpu"] = 1.0 if exec_dev == "GPU" else 0.0
 
-        s_infer, s_load = _device_static_for(model_name, exec_dev, S)
-        row["view.static_infer_sel"] = s_infer if np.isfinite(s_infer) else 0.0
-        row["view.static_load_sel"] = s_load if np.isfinite(s_load) else 0.0
-
+        # Planned FPS (Demand)
         infps_val = 0.0
-        if infps_map is not None:
-            try:
-                infps_val = float(infps_map.get((model_name, exec_dev), 0.0))
-            except Exception:
-                infps_val = 0.0
+        if infps_map:
+            infps_val = float(infps_map.get((model_name, exec_dev), 0.0))
         row["view.infps"] = infps_val
-
-        row["x.view_throughput__static_infer_sel"] = row["view.throughput_fps"] * row["view.static_infer_sel"]
-        row["x.view_wait__static_load_sel"] = row["view.avg_wait_to_preprocess_ms"] * row["view.static_load_sel"]
 
         per_view_rows.append(row)
 
-    X: Dict[str, float] = {}
+    X = {}
     df = pd.DataFrame(per_view_rows)
     if not df.empty:
         for agg_name, s in {
@@ -367,210 +208,41 @@ def featurize_window(window: Dict[str, Any],
     else:
         X["views.count.views"] = 0.0
 
-    y1 = _nested(window, "total", "total_throughput_fps")
-    y2 = _nested(window, "derived", "drop_rate_fps")
+    # Targets
+    y1 = float(window.get("total", {}).get("total_throughput_fps", np.nan))
+    y2 = float(window.get("derived", {}).get("drop_rate_fps", np.nan))
 
     meta = {
         "timestamp": window.get("timestamp"),
         "combination": window.get("combination"),
-        "schedule_file": window.get("schedule file") or window.get("schedule_file") or window.get("schedule"),
     }
     return X, (y1, y2), meta
 
 
-def _extract_schedule_hint(window: Dict[str, Any]) -> str:
-    return str(window.get("schedule file") or window.get("schedule_file") or window.get("schedule") or "")
-
-
-def build_dataset_from_file(perf_json_path: Path,
-                            S: Dict[str, StaticProfile],
-                            schedule_index: Optional[Dict[str, Dict[str, Any]]] = None
-                            ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    blob = json.loads(perf_json_path.read_text(encoding="utf-8"))
-    X_rows: List[Dict[str, float]] = []
-    Y_rows: List[Dict[str, float]] = []
-    M_rows: List[Dict[str, Any]] = []
-
-    for w in blob.get("data", []):
-        infps_map = None
-        if schedule_index is not None:
-            sched_hint = _extract_schedule_hint(w)
-            sched_doc = _find_schedule(schedule_index, sched_hint)
-            combo_name = str(w.get("combination") or "")
-            if sched_doc is not None and combo_name:
-                infps_map = _build_infps_lookup(sched_doc, combo_name)
-
-        X, (y1, y2), meta = featurize_window(w, S, infps_map=infps_map)
-        if math.isnan(y1) or math.isnan(y2):
-            continue
-        X_rows.append(X)
-        Y_rows.append({"y1_total_throughput_fps": y1, "y2_drop_rate_fps": y2})
-        M_rows.append(meta)
-
-    X_df = pd.DataFrame(X_rows).fillna(0.0)
-    Y_df = pd.DataFrame(Y_rows)
-    M_df = pd.DataFrame(M_rows)
-    return X_df, Y_df, M_df
-
-
-def build_dataset(perf_dir: Path,
-                  static_json_path: Path,
-                  schedule_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    S = load_static_profiles(static_json_path)
-    sched_index = _index_schedules(schedule_dir)
-
-    X_all: List[pd.DataFrame] = []
-    Y_all: List[pd.DataFrame] = []
-    M_all: List[pd.DataFrame] = []
-
-    json_paths = sorted([p for p in perf_dir.rglob("*.json") if p.is_file()])
-    if not json_paths:
-        raise FileNotFoundError(f"No JSON files found in: {perf_dir}")
-
-    for path in json_paths:
-        try:
-            X, Y, M = build_dataset_from_file(path, S, schedule_index=sched_index)
-            if not X.empty:
-                X_all.append(X)
-                Y_all.append(Y)
-                M["source_file"] = str(path)
-                M_all.append(M)
-        except Exception as e:
-            print(f"[WARN] Skipping {path}: {e}", file=sys.stderr)
-
-    if not X_all:
-        raise RuntimeError("No valid training rows were built. Check your input logs & schedule_dir.")
-
-    X_full = pd.concat(X_all, ignore_index=True).fillna(0.0)
-    Y_full = pd.concat(Y_all, ignore_index=True)
-    M_full = pd.concat(M_all, ignore_index=True)
-    return X_full, Y_full, M_full
-
-
-# ---------- Training / Predicting (two targets) ----------
-
-def train_two_targets(X: pd.DataFrame, Y: pd.DataFrame, model_out_prefix: Path) -> None:
-    xgb = _lazy_import_xgb()
-    feat_names = list(X.columns)
-
-    params = {
-        "objective": "reg:squarederror",
-        "eval_metric": "rmse",
-        "max_depth": 6,
-        "eta": 0.1,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "min_child_weight": 3.0,
-        "seed": 42,
-    }
-
-    dtrain_y1 = xgb.DMatrix(X.values, label=Y["y1_total_throughput_fps"].values, feature_names=feat_names)
-    bst1 = xgb.train(params, dtrain_y1, num_boost_round=400)
-    p1 = str(model_out_prefix) + "_y1.json"
-    Path(p1).parent.mkdir(parents=True, exist_ok=True)
-    bst1.save_model(p1)
-
-    dtrain_y2 = xgb.DMatrix(X.values, label=Y["y2_drop_rate_fps"].values, feature_names=feat_names)
-    bst2 = xgb.train(params, dtrain_y2, num_boost_round=400)
-    p2 = str(model_out_prefix) + "_y2.json"
-    bst2.save_model(p2)
-
-
-def predict_two_targets(model_in_prefix: Path, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Backward-compatible helper that loads models and predicts once.
-    Note: Loading per call is slower; prefer using `load_two_models` +
-    `predict_two_targets_loaded` when calling repeatedly.
-    """
-    xgb = _lazy_import_xgb()
-    feat_names = list(X.columns)
-    dmat = xgb.DMatrix(X.values, feature_names=feat_names)
-
-    m1 = str(model_in_prefix) + "_y1.json"
-    m2 = str(model_in_prefix) + "_y2.json"
-    bst1 = xgb.Booster(model_file=m1)
-    bst2 = xgb.Booster(model_file=m2)
-
-    y1_pred = bst1.predict(dmat)
-    y2_pred = bst2.predict(dmat)
-    return y1_pred, y2_pred
-
-
-def load_two_models(model_in_prefix: Path):
-    """Load y1 and y2 XGBoost boosters once and return them as a tuple."""
-    xgb = _lazy_import_xgb()
-    m1 = str(model_in_prefix) + "_y1.json"
-    m2 = str(model_in_prefix) + "_y2.json"
-    bst1 = xgb.Booster(model_file=m1)
-    bst2 = xgb.Booster(model_file=m2)
-    return bst1, bst2
-
-
-def predict_two_targets_loaded(bst1, bst2, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-    """Predict using preloaded boosters (no reload)."""
-    xgb = _lazy_import_xgb()
-    feat_names = list(X.columns)
-    dmat = xgb.DMatrix(X.values, feature_names=feat_names)
-    y1_pred = bst1.predict(dmat)
-    y2_pred = bst2.predict(dmat)
-    return y1_pred, y2_pred
-
-
-# ---------- predict (YAML만 사용) ----------
-
-def featurize_from_combo(S: Dict[str, StaticProfile], combo_blob: Dict[str, Any]) -> pd.DataFrame:
+def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
     views = _rows_from_combo_struct(combo_blob)
-    rows: List[Dict[str, float]] = []
+    rows = []
+
     for v in views:
         m = v.get("model")
         dev = _norm_exec(v.get("execution", ""))
-        if not m or not dev:
-            continue
-        # NPU는 추론에서도 사용하지 않음: 해당 뷰 스킵
-        if dev in ("NPU0", "NPU1"):
-            continue
+        if not m or not dev: continue
+        if dev in ("NPU0", "NPU1"): continue
 
-        s_infer, s_load = _device_static_for(m, dev, S)
-        s_infer = float(s_infer) if np.isfinite(s_infer) else 0.0
-        s_load = float(s_load) if np.isfinite(s_load) else 0.0
+        fps_val = v.get("infps") or v.get("intps")
+        fps = float(fps_val) if fps_val is not None else 0.0
 
-        # 계획 FPS: infps 우선, 없으면 오타 키(intps) 허용
-        fps_key_val = v.get("infps")
-        if fps_key_val is None:
-            fps_key_val = v.get("intps")
-        if fps_key_val is not None:
-            try:
-                fps = float(fps_key_val)
-            except Exception:
-                fps = 0.0
-            avg_inf_ms = 0.0 if fps <= 0 else (1000.0 / fps)
-        else:
-            fps = 0.0 if s_infer <= 0.0 else (1000.0 / s_infer)
-            avg_inf_ms = s_infer
+        r = {}
+        # [FIX] 추론 시에도 모델 식별 정보 사용
+        r.update(_get_model_features(m))
+        r["view.exec_cpu"] = 1.0 if dev == "CPU" else 0.0
+        r["view.exec_gpu"] = 1.0 if dev == "GPU" else 0.0
+        r["view.infps"] = fps
 
-        inf_cnt = fps * WINDOW_SEC
-
-        # Execution flags: CPU/GPU only
-        exec_cpu = 1.0 if dev == "CPU" else 0.0
-        exec_gpu = 1.0 if dev == "GPU" else 0.0
-        r = {
-            "view.throughput_fps": fps,
-            "view.avg_inference_time_ms": avg_inf_ms,
-            "view.inference_count": inf_cnt,
-            "view.avg_wait_to_preprocess_ms": ASSUME_WAIT_MS,
-            "view.dropped_frames_due_to_full_queue": 0.0,
-            "view.exec_cpu": exec_cpu,
-            "view.exec_gpu": exec_gpu,
-            "view.static_infer_sel": s_infer,
-            "view.static_load_sel": s_load,
-            "view.infps": fps,
-        }
-        r["x.view_throughput__static_infer_sel"] = r["view.throughput_fps"] * r["view.static_infer_sel"]
-        r["x.view_wait__static_load_sel"] = r["view.avg_wait_to_preprocess_ms"] * r["view.static_load_sel"]
         rows.append(r)
 
     df = pd.DataFrame(rows)
-    X: Dict[str, float] = {}
+    X = {}
     if not df.empty:
         for agg_name, s in {
             "sum": df.sum(numeric_only=True),
@@ -586,278 +258,155 @@ def featurize_from_combo(S: Dict[str, StaticProfile], combo_blob: Dict[str, Any]
     return pd.DataFrame([X]).fillna(0.0)
 
 
-# ---------- CLI ----------
+# ---------- Builder & Trainer ----------
 
-def _normalize_model_prefix(path_str: str, default_name: str = "xgb2_model") -> Path:
-    p = Path(path_str)
-    if path_str.endswith("/") or (p.exists() and p.is_dir()):
-        p = p / default_name
-    return p
+def build_dataset(perf_dir: Path, schedule_dir: Path):
+    sched_index = _index_schedules(schedule_dir)
+    X_all, Y_all, M_all = [], [], []
 
+    for path in sorted(perf_dir.rglob("*.json")):
+        try:
+            blob = json.loads(path.read_text(encoding="utf-8"))
+            for w in blob.get("data", []):
+                s_name = w.get("schedule file") or w.get("schedule_file")
+                s_doc = _find_schedule(sched_index, s_name)
+                c_name = w.get("combination")
+
+                infps_map = None
+                if s_doc and c_name:
+                    infps_map = _build_infps_lookup(s_doc, c_name)
+
+                X, (y1, y2), meta = featurize_window(w, infps_map)
+                if math.isnan(y1) or math.isnan(y2): continue
+
+                X_all.append(X)
+                Y_all.append({"y1": y1, "y2": y2})
+                M_all.append(meta)
+        except Exception as e:
+            print(f"[WARN] {path.name}: {e}")
+
+    if not X_all: raise RuntimeError("No valid data rows found.")
+    return pd.DataFrame(X_all).fillna(0.0), pd.DataFrame(Y_all), pd.DataFrame(M_all)
+
+
+def train_two_targets(X, Y, prefix):
+    xgb = _lazy_import_xgb()
+    # 컬럼 순서 고정 (매우 중요)
+    cols = sorted(list(X.columns))
+    X = X[cols]
+
+    params = {"objective": "reg:squarederror", "max_depth": 6, "eta": 0.1, "seed": 42}
+
+    # Train Y1
+    bst1 = xgb.train(params, xgb.DMatrix(X, label=Y["y1"]), num_boost_round=200)
+    bst1.save_model(str(prefix) + "_y1.json")
+
+    # Train Y2
+    bst2 = xgb.train(params, xgb.DMatrix(X, label=Y["y2"]), num_boost_round=200)
+    bst2.save_model(str(prefix) + "_y2.json")
+
+    # Feature 이름 저장 (추론 시 정렬을 위해)
+    Path(str(prefix) + "_features.json").write_text(json.dumps(cols))
+
+
+def load_models(prefix):
+    xgb = _lazy_import_xgb()
+    b1 = xgb.Booster(model_file=str(prefix) + "_y1.json")
+    b2 = xgb.Booster(model_file=str(prefix) + "_y2.json")
+    cols = json.loads(Path(str(prefix) + "_features.json").read_text())
+    return b1, b2, cols
+
+
+# ---------- Main ----------
 
 def main():
-    ap = argparse.ArgumentParser(description="Two-target XGBoost trainer/inferencer for multi-view performance logs.")
+    ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    # TRAIN (JSON + YAML)
-    ap_tr = sub.add_parser("train", help="Train two-target model from JSON logs with YAML infps features.")
-    ap_tr.add_argument("--perf_dir", type=str, required=True, help="Directory containing performance JSON logs.")
-    ap_tr.add_argument("--schedule_dir", type=str, required=True, help="Directory containing YAML/JSON schedules.")
-    ap_tr.add_argument("--static_json", type=str, required=True, help="Path to sample_profiling_data.json.")
-    ap_tr.add_argument("--model_out", type=str, required=True, help="Prefix path for saving models (without _y*.json).")
-    ap_tr.add_argument("--dump_csv", type=str, default="", help="Optional: path to dump engineered dataset CSV.")
+    tr = sub.add_parser("train")
+    tr.add_argument("--perf_dir", required=True)
+    tr.add_argument("--schedule_dir", required=True)
+    tr.add_argument("--model_out", required=True)
+    tr.add_argument("--dump_csv", default="")
 
-    # PREDICT (YAML/JSON 스케줄, 디렉토리 또는 단일 파일)
-    ap_pc = sub.add_parser("predict", help="Predict for planned combinations from schedules (single file or directory).")
-    mx = ap_pc.add_mutually_exclusive_group(required=True)
-    mx.add_argument("--schedule_yaml", type=str, help="Path to a YAML/JSON schedule with one or more combinations.")
-    mx.add_argument("--schedule_dir", type=str, help="Directory containing YAML/JSON schedule files to run sequentially.")
-    ap_pc.add_argument("--static_json", type=str, required=True, help="Path to sample_profiling_data.json.")
-    ap_pc.add_argument("--model_in", type=str, required=True, help="Model prefix (expects _y1.json and _y2.json).")
-    ap_pc.add_argument("--alpha", type=float, default=0.2, help="Score = FPS - alpha * DropRate (default: 0.2)")
-    ap_pc.add_argument("--topk", type=int, default=0, help="If >0, print top-K combinations by score at the end.")
-    ap_pc.add_argument("--repeats", type=int, default=1, help="Number of times to repeat prediction per schedule (default: 1).")
+    pr = sub.add_parser("predict")
+    pr.add_argument("--schedule_dir", required=True)
+    pr.add_argument("--model_in", required=True)
+    pr.add_argument("--alpha", type=float, default=0.2)
+    pr.add_argument("--topk", type=int, default=5)
+    pr.add_argument("--repeats", type=int, default=1)
 
     args = ap.parse_args()
 
     if args.cmd == "train":
-        perf_dir = Path(args.perf_dir)
-        schedule_dir = Path(args.schedule_dir)
-        static_json = Path(args.static_json)
-        model_prefix = _normalize_model_prefix(args.model_out)
-
-        X, Y, M = build_dataset(perf_dir, static_json, schedule_dir)
-
-        if args.dump_csv:
-            df_dump = pd.concat([M.reset_index(drop=True), X.reset_index(drop=True), Y.reset_index(drop=True)], axis=1)
-            Path(args.dump_csv).parent.mkdir(parents=True, exist_ok=True)
-            df_dump.to_csv(args.dump_csv, index=False)
-            print(f"[INFO] wrote dataset -> {args.dump_csv}  rows={len(df_dump)}")
-
-        train_two_targets(X, Y, model_prefix)
-        print(f"[OK] saved -> {model_prefix}_y1.json, {model_prefix}_y2.json")
+        X, Y, M = build_dataset(Path(args.perf_dir), Path(args.schedule_dir))
+        train_two_targets(X, Y, Path(args.model_out))
+        print("Training Done.")
 
     elif args.cmd == "predict":
-        static_json = Path(args.static_json)
-        model_prefix = _normalize_model_prefix(args.model_in)
-
-        # Build list of schedule files
-        sched_paths: List[Path] = []
-        if getattr(args, "schedule_yaml", None):
-            sched_paths = [Path(args.schedule_yaml)]
-        elif getattr(args, "schedule_dir", None):
-            d = Path(args.schedule_dir)
-            if not d.exists() or not d.is_dir():
-                print(f"[ERROR] schedule_dir not found or not a directory: {d}", file=sys.stderr)
-                sys.exit(2)
-            # collect .yaml/.yml/.json
-            for ext in ("*.yaml", "*.yml", "*.json"):
-                sched_paths.extend(sorted(d.glob(ext)))
-            if not sched_paths:
-                print(f"[ERROR] no schedule files (*.yaml|*.yml|*.json) under {d}", file=sys.stderr)
-                sys.exit(2)
-        else:
-            print("[ERROR] either --schedule_yaml or --schedule_dir must be provided", file=sys.stderr)
-            sys.exit(2)
-
-        # Validate repeats
-        repeats = int(getattr(args, "repeats", 1))
-        if repeats < 1:
-            print(f"[WARN] repeats < 1 ({repeats}); forcing to 1")
-            repeats = 1
-
-        # Preload static profiles and models once
-        S = load_static_profiles(static_json)
-        bst1, bst2 = load_two_models(model_prefix)
+        b1, b2, feats = load_models(Path(args.model_in))
         xgb = _lazy_import_xgb()
 
-        # Accumulators for per-schedule averages across repeats
-        per_sched_infer_avgs: Dict[str, List[float]] = {}
-        per_sched_y1_avgs: Dict[str, List[float]] = {}
-        per_sched_y2_avgs: Dict[str, List[float]] = {}
-        # Buffer to collect final summary lines for optional file output
-        summary_lines: List[str] = []
+        # schedule_dir 내의 모든 json/yaml 처리
+        import glob
+        files = sorted(list(Path(args.schedule_dir).glob("*.yaml")) + list(Path(args.schedule_dir).glob("*.json")))
 
-        for sched_path in sched_paths:
-            schedule = _load_yaml_or_json(Path(sched_path))
-            combos = _iter_combos_from_schedule(schedule)
-            base = Path(sched_path).name
+        for p in files:
+            sched = _load_yaml_or_json(p)
+            print(f"--- Processing {p.name} ---")
+            results = []
 
-            for r in range(repeats):
-                # Per-run accumulators
-                results: List[Tuple[str, float, float, float]] = []
-                total_infer_s: float = 0.0
-                total_y1_s: float = 0.0
-                total_y2_s: float = 0.0
+            combos = _iter_combos_from_schedule(sched)
+            if not combos: continue
 
-                # Optional run banner (no tabs to avoid interfering with parsers)
-                if repeats > 1 or len(sched_paths) > 1:
-                    print(f"-- Run {r+1}/{repeats} for {base} --")
+            for name, blob in combos:
+                df = featurize_from_combo(blob)
+                # Feature Align: 학습 때 쓴 피처만 순서대로 추출
+                for c in feats:
+                    if c not in df.columns: df[c] = 0.0
+                df = df[feats]
 
-                for name, combo_blob in combos:
-                    X = featurize_from_combo(S, combo_blob)
-                    feat_names = list(X.columns)
-                    dmat = xgb.DMatrix(X.values, feature_names=feat_names)
+                dmat = xgb.DMatrix(df)
+                y1 = b1.predict(dmat)[0]
+                y2 = b2.predict(dmat)[0]
+                score = y1 - args.alpha * y2
+                results.append((name, y1, y2, score))
 
-                    t0 = time.perf_counter()
-                    y1_pred = bst1.predict(dmat)
-                    t1 = time.perf_counter()
-                    y1_ms = (t1 - t0) * 1000.0
-                    total_y1_s += (t1 - t0)
+            if results:
+                # TOP-K 정렬 출력
+                sorted_results = sorted(results, key=lambda x: x[3], reverse=True)
+                topk = max(1, min(args.topk, len(sorted_results)))
+                top_items = sorted_results[:topk]
 
-                    t2 = time.perf_counter()
-                    y2_pred = bst2.predict(dmat)
-                    t3 = time.perf_counter()
-                    y2_ms = (t3 - t2) * 1000.0
-                    total_y2_s += (t3 - t2)
+                print(f"TOP-{topk}")
+                for rank, r in enumerate(top_items, start=1):
+                    name, y1, y2, score = r
+                    print(f"{rank}\t{name}\tpred_score={score:.4f}\t(FPS={y1:.2f}, Drop={y2:.2f})")
 
-                    infer_ms = y1_ms + y2_ms
-                    total_infer_s += (t1 - t0) + (t3 - t2)
+                best = top_items[0]
+                print(f"BEST\t{best[0]}\tpred_score={best[3]:.4f}\t(FPS={best[1]:.2f}, Drop={best[2]:.2f})")
 
-                    fps = float(y1_pred[0]); dropr = float(y2_pred[0])
-                    score = fps - float(args.alpha) * dropr
-                    results.append((name, fps, dropr, score))
-                    print(f"{name}\t"
-                          f"pred_total_throughput_fps={fps:.4f}\t"
-                          f"pred_drop_rate_fps={dropr:.4f}\t"
-                          f"pred_score(alpha={args.alpha:g})={score:.4f}\t"
-                          f"infer_y1_ms={y1_ms:.2f}\t"
-                          f"infer_y2_ms={y2_ms:.2f}\t"
-                          f"infer_time_ms={infer_ms:.2f}")
-                if results:
-                    total_ms = total_infer_s * 1000.0
-                    avg_ms = total_ms / max(len(results), 1)
-                    total_y1_ms = total_y1_s * 1000.0
-                    total_y2_ms = total_y2_s * 1000.0
-                    avg_y1_ms = total_y1_ms / max(len(results), 1)
-                    avg_y2_ms = total_y2_ms / max(len(results), 1)
-                    print(f"TOTAL\tcombinations={len(results)}\ttotal_infer_time_ms={total_ms:.2f}\tavg_infer_time_ms={avg_ms:.2f}")
-                    print(f"TOTAL_Y1\ttotal_infer_time_ms={total_y1_ms:.2f}\tavg_infer_time_ms={avg_y1_ms:.2f}")
-                    print(f"TOTAL_Y2\ttotal_infer_time_ms={total_y2_ms:.2f}\tavg_infer_time_ms={avg_y2_ms:.2f}")
-
-                    # Save per-run averages for final summary
-                    per_sched_infer_avgs.setdefault(base, []).append(avg_ms)
-                    per_sched_y1_avgs.setdefault(base, []).append(avg_y1_ms)
-                    per_sched_y2_avgs.setdefault(base, []).append(avg_y2_ms)
-
-                if results:
-                    best_name, best_fps, best_drop, best_score = max(results, key=lambda x: x[3])
-                    print(f"BEST\t{best_name}\t"
-                          f"pred_total_throughput_fps={best_fps:.4f}\t"
-                          f"pred_drop_rate_fps={best_drop:.4f}\t"
-                          f"pred_score(alpha={args.alpha:g})={best_score:.4f}")
-                    if int(args.topk) > 0:
-                        topk = sorted(results, key=lambda x: x[3], reverse=True)[: int(args.topk)]
-                        print("TOPK\t" + ", ".join([f"{n}:{s:.4f}" for n, _, __, s in topk]))
-
-                    # Save minimal prediction summary JSON (backward compatibility)
-                    try:
-                        out_dir = Path("xgboost_model/performance_results/prediction_test")
-                        out_dir.mkdir(parents=True, exist_ok=True)
-                        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        sched_stem = Path(sched_path).stem
-                        out_path = out_dir / f"predict_performance_{stamp}_{sched_stem}.json"
-
-                        # Build per-combination data list to include under the minimal summary as well
-                        now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        data_entries: List[Dict[str, Any]] = []
-                        for (n, fps_v, drop_v, score_v) in results:
-                            data_entries.append({
-                                "timestamp": now_ts,
-                                "window_sec": None,
-                                "combination": n,
-                                "total": {"total_throughput_fps": round(float(fps_v), 4)},
-                                "derived": {"drop_rate_fps": round(float(drop_v), 4), "window_sec": 1.0},
-                                "score": round(float(score_v), 4),
-                            })
-
-                        payload = {
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "schedule file": Path(sched_path).name,
-                            "best deployment": best_name,
-                            # We only predict total throughput and drop rate; use total as avg proxy
-                            "total_throughput_fps": round(float(best_fps), 4),
-                            "avg_throughput_fps": round(float(best_fps), 4),
-                            "drop_rate_fps": round(float(best_drop), 4),
-                            "score": round(float(best_score), 4),
-                            "alpha": float(args.alpha),
-                            "data": data_entries,
-                        }
-                        with out_path.open("w", encoding="utf-8") as f:
-                            json.dump(payload, f, ensure_ascii=False, indent=2)
-                        print(f"[INFO] wrote prediction summary -> {out_path}")
-                    except Exception as e:
-                        print(f"[WARN] failed to write prediction summary JSON: {e}", file=sys.stderr)
-
-
-        # Final summary across repeats per schedule (printed once before program exits)
-        if per_sched_infer_avgs:
-            line_all = "SUMMARY_ALL\t" + f"schedules={len(per_sched_infer_avgs)}"
-            print(line_all)
-            summary_lines.append(line_all)
-            # Keep original order of sched_paths
-            for sched_path in sched_paths:
-                base = Path(sched_path).name
-                if base not in per_sched_infer_avgs:
-                    continue
-                inf_list = per_sched_infer_avgs.get(base, [])
-                y1_list = per_sched_y1_avgs.get(base, [])
-                y2_list = per_sched_y2_avgs.get(base, [])
-                # Use numpy for mean; guard against empty
-                def _mean(lst: List[float]) -> float:
-                    return float(np.mean(lst)) if lst else float("nan")
-                line = (
-                    f"SUMMARY\t{base}\t"
-                    f"repeats={len(inf_list)}\t"
-                    f"avg_infer_ms={_mean(inf_list):.2f}\t"
-                    f"avg_y1_ms={_mean(y1_list):.2f}\t"
-                    f"avg_y2_ms={_mean(y2_list):.2f}"
-                )
-                print(line)
-                summary_lines.append(line)
-
-            # Write summary to xgboost_model/performance_results/prediction_test/prediction_time_cpu_YYYYMMDD_HHMMSS.txt
-            try:
+                # 결과 파일 저장 (기존 형식 유지)
                 out_dir = Path("xgboost_model/performance_results/prediction_test")
                 out_dir.mkdir(parents=True, exist_ok=True)
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_path = out_dir / f"prediction_time_cpu_{stamp}.txt"
-                out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
-                print(f"[INFO] wrote final summary -> {out_path}")
-            except Exception as e:
-                print(f"[WARN] failed to write summary file: {e}", file=sys.stderr)
+                out_path = out_dir / f"predict_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{p.stem}.json"
 
-    else:
-        ap.print_help()
-
-
-
-def rows_from_schedule_yaml(schedule_yaml_path: str):
-    """
-    Compatibility shim for GUI predictor.
-    Reads a YAML/JSON schedule file that contains one or more combinations,
-    featurizes each combination using the same logic as CLI predict, and
-    returns a list of rows: {"combination": name, "features": {...}}.
-    """
-    from pathlib import Path as _Path
-    sched_path = _Path(schedule_yaml_path)
-    schedule = _load_yaml_or_json(sched_path)
-
-    # Load static profiling table located relative to this module
-    module_dir = _Path(__file__).resolve().parent
-    static_json = module_dir / "performance_results" / "sample_profiling_data" / "sample_profiling_data.json"
-    S = load_static_profiles(static_json)
-
-    rows = []
-    for name, combo_blob in _iter_combos_from_schedule(schedule):
-        Xdf = featurize_from_combo(S, combo_blob)
-        # Convert single-row DataFrame to plain dict of features
-        feats = {k: float(Xdf.iloc[0][k]) for k in Xdf.columns}
-        rows.append({
-            "combination": str(name),
-            "features": feats,
-        })
-    return rows
+                payload = {
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "schedule file": p.name,
+                    "best deployment": best[0],
+                    "score": round(float(best[3]), 4),
+                    "data": []
+                }
+                for r in results:
+                    payload["data"].append({
+                        "combination": r[0],
+                        "score": round(float(r[3]), 4),
+                        "total": {"total_throughput_fps": round(float(r[1]), 4)},
+                        "derived": {"drop_rate_fps": round(float(r[2]), 4)}
+                    })
+                with out_path.open("w") as f:
+                    json.dump(payload, f, indent=2)
 
 
 if __name__ == "__main__":
