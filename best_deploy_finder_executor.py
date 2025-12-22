@@ -496,6 +496,69 @@ class BestDeployFinderApp(QMainWindow):
 
         # Build schedules dict
         schedules = {}
+        # Load sample profiling totals (used when UI rates/tokens are not available)
+        def _load_sample_totals():
+            import json as _json
+            cpu_fps_map, gpu_fps_map, cpu_tok_map, gpu_tok_map = {}, {}, {}, {}
+            cwd = os.getcwd()
+            primary = os.path.join(cwd, "xgboost_model", "performance_results", "sample_profiling_data", "sample_profiling_data.json")
+            secondary = os.path.join(cwd, "sample_profiling_data", "sample_profiling_data.json")
+            sample_path = primary if os.path.isfile(primary) else (secondary if os.path.isfile(secondary) else None)
+            if not sample_path:
+                self.log("[Warning] No sample profiling JSON found at primary or secondary path")
+                return cpu_fps_map, gpu_fps_map, cpu_tok_map, gpu_tok_map
+            try:
+                with open(sample_path, 'r') as sf:
+                    sample = _json.load(sf)
+            except Exception as e:
+                self.log(f"[Warning] Failed to read sample profiling: {e}")
+                return cpu_fps_map, gpu_fps_map, cpu_tok_map, gpu_tok_map
+            total_data = sample.get("total_data", []) or []
+            for item in total_data:
+                try:
+                    m = item.get("model", "") or ""
+                    # base model id from filename or folder/model.onnx
+                    base = os.path.splitext(os.path.basename(m))[0]
+                    if os.path.basename(m).lower() == 'model.onnx':
+                        base = os.path.basename(os.path.dirname(m))
+                    cfps = item.get('cpu_fps', None)
+                    gfps = item.get('gpu_fps', None)
+                    if isinstance(cfps, (int, float)) and cfps > 0:
+                        cpu_fps_map.setdefault(base, float(cfps))
+                    if isinstance(gfps, (int, float)) and gfps > 0:
+                        gpu_fps_map.setdefault(base, float(gfps))
+                    # Tokens/s from input tokens and infer(ms) if available, else direct cpu_tokens/gpu_tokens
+                    cinfer = item.get('cpu_infer', None)
+                    ginfer = item.get('gpu_infer', None)
+                    c_in_tok = item.get('cpu_input_tokens', None)
+                    g_in_tok = item.get('gpu_input_tokens', None)
+                    c_tok = None
+                    g_tok = None
+                    if isinstance(c_in_tok, (int, float)) and isinstance(cinfer, (int, float)) and cinfer > 0:
+                        try:
+                            c_tok = float(c_in_tok) / (float(cinfer) / 1000.0)
+                        except Exception:
+                            c_tok = None
+                    if isinstance(g_in_tok, (int, float)) and isinstance(ginfer, (int, float)) and ginfer > 0:
+                        try:
+                            g_tok = float(g_in_tok) / (float(ginfer) / 1000.0)
+                        except Exception:
+                            g_tok = None
+                    if not isinstance(c_tok, (int, float)) or c_tok <= 0:
+                        c_tok = item.get('cpu_tokens', None)
+                    if not isinstance(g_tok, (int, float)) or g_tok <= 0:
+                        g_tok = item.get('gpu_tokens', None)
+                    if isinstance(c_tok, (int, float)) and c_tok > 0:
+                        cpu_tok_map.setdefault(base, float(c_tok))
+                    if isinstance(g_tok, (int, float)) and g_tok > 0:
+                        gpu_tok_map.setdefault(base, float(g_tok))
+                except Exception:
+                    continue
+            self.log(f"[Info] Loaded sample profiling from {sample_path}")
+            return cpu_fps_map, gpu_fps_map, cpu_tok_map, gpu_tok_map
+
+        sm_cpu_fps, sm_gpu_fps, sm_cpu_tok, sm_gpu_tok = _load_sample_totals()
+
         for i, combo in enumerate(combinations):
             combo_name = f"combination_{i+1}"
             schedules[combo_name] = {}
@@ -527,7 +590,18 @@ class BestDeployFinderApp(QMainWindow):
                             infps = int(v)
                     except Exception:
                         infps = None
-                # Fallback heuristics if not provided
+                # If no explicit rate, try sample profiling fps (per device)
+                if infps is None:
+                    # sample model key normalization is same as 'model' here
+                    fps = None
+                    if device == 'cpu':
+                        fps = sm_cpu_fps.get(model)
+                    else:
+                        # NPU or others use GPU fps
+                        fps = sm_gpu_fps.get(model)
+                    if isinstance(fps, (int, float)) and fps > 0:
+                        infps = int(max(1, round(float(fps))))
+                # Fallback heuristics if still not provided
                 if infps is None:
                     lname = model.lower()
                     if "resnet50" in lname:
@@ -543,6 +617,14 @@ class BestDeployFinderApp(QMainWindow):
                 }
                 if infps is not None:
                     entry["infps"] = int(infps)
+                # Add intps for LLM if available from sample totals
+                tok = None
+                if device == 'cpu':
+                    tok = sm_cpu_tok.get(model)
+                else:
+                    tok = sm_gpu_tok.get(model)
+                if isinstance(tok, (int, float)) and tok > 0:
+                    entry["intps"] = max(1, int(round(float(tok))))
                 schedules[combo_name][model_id] = entry
         # Write YAML
         try:

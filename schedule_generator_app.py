@@ -1197,14 +1197,23 @@ class ONNXProfilerApp(QMainWindow):
             if isinstance(gpu_tok, (int, float)):
                 model_to_gpu_tok[key] = float(gpu_tok)
 
-        # If no profiling results are available in the UI, fall back to
-        # static_results/sample_profiling_data.json
+        # If no profiling results are available in the UI, fall back to sample profiling JSON
+        # Priority:
+        #  1) ./xgboost_model/performance_results/sample_profiling_data/sample_profiling_data.json
+        #  2) ./sample_profiling_data/sample_profiling_data.json
         def _fallback_from_sample_json():
             try:
                 import json as _json
-                static_dir = os.path.join(os.getcwd(), "static_results")
-                sample_path = os.path.join(static_dir, "sample_profiling_data.json")
-                if not os.path.isfile(sample_path):
+                cwd = os.getcwd()
+                primary = os.path.join(cwd, "xgboost_model", "performance_results", "sample_profiling_data", "sample_profiling_data.json")
+                secondary = os.path.join(cwd, "sample_profiling_data", "sample_profiling_data.json")
+                sample_path = None
+                if os.path.isfile(primary):
+                    sample_path = primary
+                elif os.path.isfile(secondary):
+                    sample_path = secondary
+                else:
+                    self.log_message("[Warning] No sample profiling JSON found at primary or secondary path")
                     return
                 with open(sample_path, "r") as sf:
                     sample = _json.load(sf)
@@ -1240,7 +1249,7 @@ class ONNXProfilerApp(QMainWindow):
                 if (not model_to_cpu_fps and not model_to_gpu_fps and not model_to_cpu_tok and not model_to_gpu_tok):
                     self.log_message("[Warning] sample_profiling_data.json loaded but contained no usable totals")
                 else:
-                    self.log_message("[Info] No UI profiling found. Using cached results from static_results/sample_profiling_data.json")
+                    self.log_message(f"[Info] No UI profiling found. Using cached results from {sample_path}")
             except Exception as _e:
                 self.log_message(f"[Warning] Failed to load fallback profiling from sample_profiling_data.json: {_e}")
 
@@ -1282,6 +1291,31 @@ class ONNXProfilerApp(QMainWindow):
                     if isinstance(fps, (int, float)) and fps > 0:
                         # infps must be an integer value in the YAML (min 1)
                         perf_fields["infps"] = max(1, int(round(float(fps))))
+                    # If we still don't have infps (no profiling available), ensure infps exists
+                    # so that generated YAML always contains the field as requested.
+                    if "infps" not in perf_fields:
+                        # Prefer explicit input rates if user provided via dialog
+                        fallback_infps = None
+                        try:
+                            rates = getattr(self, 'input_fps_by_model', None)
+                            if isinstance(rates, dict):
+                                v = rates.get(model)
+                                if v is not None:
+                                    fallback_infps = int(v)
+                        except Exception:
+                            fallback_infps = None
+
+                        # Heuristic defaults when not provided
+                        if fallback_infps is None:
+                            lname = (model or "").lower()
+                            if "resnet50" in lname:
+                                fallback_infps = 2
+                            elif "yolov3" in lname:
+                                fallback_infps = 30
+                            else:
+                                fallback_infps = 10
+
+                        perf_fields["infps"] = int(max(1, int(fallback_infps)))
 
                 # Assign display views only for specific vision models; others hidden
                 vision_with_view = {"mnasnet", "resnet50", "resnext50", "yolov4"}
@@ -1343,7 +1377,9 @@ class ONNXProfilerApp(QMainWindow):
 
             self.log_message(f"[Success] Generated {len(combinations)} combinations in static_results/{base_filename}")
 
-            # Also generate scaled variants with throughput reduced by 1/3 and by 2/3
+            # Also generate scaled variants where ONLY 'infps' is multiplied (x2, x3)
+            # - Request: files that previously ended with '_x1_3.yaml' should now end with '_x2.yaml' and have infps doubled
+            # - And files that previously ended with '_x2_3.yaml' should now end with '_x3.yaml' and have infps tripled
             def _scaled_schedules(src: dict, factor: float) -> dict:
                 import copy
                 dst = copy.deepcopy(src)
@@ -1353,10 +1389,7 @@ class ONNXProfilerApp(QMainWindow):
                     for mid, cfg in entries.items():
                         if not isinstance(cfg, dict):
                             continue
-                        # Scale either intps or infps if present
-                        if "intps" in cfg and isinstance(cfg["intps"], (int, float)):
-                            val = int(round(float(cfg["intps"]) * factor))
-                            cfg["intps"] = max(1, val)
+                        # Only scale 'infps' as requested; leave 'intps' unchanged
                         if "infps" in cfg and isinstance(cfg["infps"], (int, float)):
                             val = int(round(float(cfg["infps"]) * factor))
                             cfg["infps"] = max(1, val)
@@ -1368,9 +1401,10 @@ class ONNXProfilerApp(QMainWindow):
                                 pass
                 return dst
 
+            # New naming and scaling: _x2.yaml (infps x2), _x3.yaml (infps x3)
             variants = [
-                (f"model_schedules{initials_suffix}_x2_3.yaml", 2.0/3.0, "# This is a 2/3 throughput variant (values reduced by 1/3)\n"),
-                (f"model_schedules{initials_suffix}_x1_3.yaml", 1.0/3.0, "# This is a 1/3 throughput variant (values reduced by 2/3)\n"),
+                (f"model_schedules{initials_suffix}_x2.yaml", 2.0, "# This variant doubles input FPS (infps x2); intps unchanged\n"),
+                (f"model_schedules{initials_suffix}_x3.yaml", 3.0, "# This variant triples input FPS (infps x3); intps unchanged\n"),
             ]
 
             for filename, factor, note in variants:
