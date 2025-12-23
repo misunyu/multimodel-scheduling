@@ -5,6 +5,7 @@
  python ./xgboost_model/deploy_selector_xgb_suite.py predict     --schedule_dir ./xgboost_model/schedules/test     --model_in ./xgboost_model/artifacts/xgb_model
 """
 
+import hashlib
 import argparse
 import json
 import math
@@ -134,7 +135,15 @@ def _build_infps_lookup(schedule_doc, combination_name):
             for r in _rows_from_combo_struct(target_blob):
                 m = r.get("model")
                 dev = _norm_exec(r.get("execution", ""))
-                val = r.get("infps") or r.get("intps")
+                # [수정] infps 또는 intps를 가져옴 (intps는 infps와 동일하게 취급)
+                val = r.get("infps")
+                if val is None:
+                    val = r.get("intps")
+                
+                if val is None:
+                    print(f"Error: Neither 'infps' nor 'intps' found for model '{m}' in combination '{combination_name}'.")
+                    sys.exit(1)
+
                 if m and dev and val is not None:
                     infps_map[(m, dev)] = float(val)
     except:
@@ -144,14 +153,19 @@ def _build_infps_lookup(schedule_doc, combination_name):
 
 def _get_model_features(model_name: str) -> Dict[str, float]:
     """
-    [FIX] 모델 이름을 피처로 변환 (Hashing Trick).
+    [FIX] 모델 이름을 피처로 변환 (Stable Hashing).
+    Python의 내장 hash() 대신 md5 등을 사용하여 실행 시마다 고정된 값을 보장함.
     """
     feats = {}
     if not model_name:
         return feats
 
-    # Simple hashing to buckets
-    h_val = hash(model_name.lower()) % MODEL_HASH_BUCKETS
+    # [수정] MD5를 사용하여 항상 같은 문자열에 대해 같은 정수값을 얻음
+    enc = model_name.lower().encode("utf-8")
+    fingerprint = int(hashlib.md5(enc).hexdigest(), 16)
+
+    h_val = fingerprint % MODEL_HASH_BUCKETS
+
     for i in range(MODEL_HASH_BUCKETS):
         feats[f"model_hash_{i}"] = 1.0 if i == h_val else 0.0
     return feats
@@ -209,8 +223,8 @@ def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
         X["views.count.views"] = 0.0
 
     # Targets
-    y1 = float(window.get("total", {}).get("total_throughput_fps", np.nan))
-    y2 = float(window.get("derived", {}).get("drop_rate_fps", np.nan))
+    y1 = float(window.get("derived", {}).get("throughput_norm", np.nan))
+    y2 = float(window.get("derived", {}).get("drop_rate_norm", np.nan))
 
     meta = {
         "timestamp": window.get("timestamp"),
@@ -229,7 +243,15 @@ def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
         if not m or not dev: continue
         if dev in ("NPU0", "NPU1"): continue
 
-        fps_val = v.get("infps") or v.get("intps")
+        # [수정] infps 또는 intps를 가져옴 (intps는 infps와 동일하게 취급)
+        fps_val = v.get("infps")
+        if fps_val is None:
+            fps_val = v.get("intps")
+        
+        if fps_val is None:
+            print(f"Error: Neither 'infps' nor 'intps' found for model '{m}' in the schedule.")
+            sys.exit(1)
+        
         fps = float(fps_val) if fps_val is not None else 0.0
 
         r = {}
@@ -381,10 +403,10 @@ def main():
                 print(f"TOP-{topk}")
                 for rank, r in enumerate(top_items, start=1):
                     name, y1, y2, score = r
-                    print(f"{rank}\t{name}\tpred_score={score:.4f}\t(FPS={y1:.2f}, Drop={y2:.2f})")
+                    print(f"{rank}\t{name}\tpred_score={score:.4f}\t(T_norm={y1:.4f}, D_norm={y2:.4f})")
 
                 best = top_items[0]
-                print(f"BEST\t{best[0]}\tpred_score={best[3]:.4f}\t(FPS={best[1]:.2f}, Drop={best[2]:.2f})")
+                print(f"BEST\t{best[0]}\tpred_score={best[3]:.4f}\t(T_norm={best[1]:.4f}, D_norm={best[2]:.4f})")
 
                 # 결과 파일 저장 (기존 형식 유지)
                 out_dir = Path("xgboost_model/performance_results/prediction_test")
@@ -398,12 +420,16 @@ def main():
                     "score": round(float(best[3]), 4),
                     "data": []
                 }
-                for r in results:
+                # [수정] 결과를 score 큰 순으로 정렬하여 저장
+                sorted_all_results = sorted(results, key=lambda x: x[3], reverse=True)
+                for r in sorted_all_results:
                     payload["data"].append({
                         "combination": r[0],
                         "score": round(float(r[3]), 4),
-                        "total": {"total_throughput_fps": round(float(r[1]), 4)},
-                        "derived": {"drop_rate_fps": round(float(r[2]), 4)}
+                        "derived": {
+                            "throughput_norm": round(float(r[1]), 4),
+                            "drop_rate_norm": round(float(r[2]), 4)
+                        }
                     })
                 with out_path.open("w") as f:
                     json.dump(payload, f, indent=2)

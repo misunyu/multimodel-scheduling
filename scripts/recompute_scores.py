@@ -47,8 +47,18 @@ def recompute_scores():
             total_throughput = entry.get('total', {}).get('total_throughput_fps', 0.0)
             drop_rate = entry.get('derived', {}).get('drop_rate_fps', 0.0)
             
-            # score = (total_throughput_fps / fmax) - 0.2 * (drop_rate_fps / dmax)
-            score = round((total_throughput / fmax) - 0.2 * (drop_rate / dmax), 2)
+            # Calculate normalized values
+            throughput_norm = round(total_throughput / fmax, 2)
+            drop_rate_norm = round(drop_rate / dmax, 2)
+            
+            # Add to derived field
+            if 'derived' not in entry:
+                entry['derived'] = {}
+            entry['derived']['throughput_norm'] = throughput_norm
+            entry['derived']['drop_rate_norm'] = drop_rate_norm
+            
+            # score = throughput_norm - 0.2 * drop_rate_norm
+            score = round(throughput_norm - 0.2 * drop_rate_norm, 2)
             entry['score'] = score
             
             if score > best_score:
