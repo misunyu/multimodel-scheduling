@@ -397,6 +397,7 @@ class ResnetImageFeeder:
                             self.drop_counts[view_name] = int(self.drop_counts.get(view_name, 0)) + 1
                         except Exception:
                             pass
+                        last_ts[view_name] = now
                     except (EOFError, BrokenPipeError, OSError):
                         pass
             except Exception as e:

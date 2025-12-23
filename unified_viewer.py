@@ -484,27 +484,27 @@ class UnifiedViewer(QMainWindow):
         self.window_duration_sec = None
 
         # Initialize queues and events
-        self.video_frame_queue = Queue(maxsize=3)
+        self.video_frame_queue = Queue(maxsize=2)
         self.video_shutdown_event = Event()
         
         # View1 queues and events
-        self.view1_frame_queue = Queue(maxsize=3)
-        self.view1_output_queue = Queue(maxsize=2)
+        self.view1_frame_queue = Queue(maxsize=2)
+        self.view1_output_queue = Queue(maxsize=1)
         self.view1_shutdown_event = Event()
         
         # View2 queues and events
-        self.view2_frame_queue = Queue(maxsize=3)
-        self.view2_output_queue = Queue(maxsize=2)
+        self.view2_frame_queue = Queue(maxsize=2)
+        self.view2_output_queue = Queue(maxsize=1)
         self.view2_shutdown_event = Event()
         
         # View3 queues and events
-        self.view3_frame_queue = Queue(maxsize=3)
-        self.view3_result_queue = Queue(maxsize=2)
+        self.view3_frame_queue = Queue(maxsize=2)
+        self.view3_result_queue = Queue(maxsize=1)
         self.view3_shutdown_event = Event()
         
         # View4 queues and events
-        self.view4_frame_queue = Queue(maxsize=3)
-        self.view4_result_queue = Queue(maxsize=2)
+        self.view4_frame_queue = Queue(maxsize=2)
+        self.view4_result_queue = Queue(maxsize=1)
         self.view4_shutdown_event = Event()
         
         # Initialize a dictionary to track which views are running YOLO models (need video frames)
@@ -542,10 +542,10 @@ class UnifiedViewer(QMainWindow):
         for hid in list(getattr(self, 'headless_ids', []) or []):
             # Prepare queues/events for this headless id
             if hid not in self.headless_frame_queues:
-                self.headless_frame_queues[hid] = Queue(maxsize=3)
+                self.headless_frame_queues[hid] = Queue(maxsize=2)
             if hid not in self.headless_output_queues:
                 # YOLO uses output_queue; ResNet uses result_queue name-wise, but both are simple queues
-                self.headless_output_queues[hid] = Queue(maxsize=2)
+                self.headless_output_queues[hid] = Queue(maxsize=1)
             if hid not in self.headless_shutdown_events:
                 self.headless_shutdown_events[hid] = Event()
 
@@ -1594,9 +1594,20 @@ class UnifiedViewer(QMainWindow):
             view3_wait = getattr(getattr(self, 'view3_handler', None), 'avg_wait_ms', 0.0)
             view4_wait = getattr(getattr(self, 'view4_handler', None), 'avg_wait_ms', 0.0)
 
-            # Drop counts from feeder (0 if not present)
-            drop_counts = getattr(self, 'video_feeder', None)
-            drop_map = getattr(drop_counts, 'drop_counts', {}) if drop_counts else {}
+            # Drop counts from feeders (0 if not present)
+            drop_map = {}
+            # Check video_feeder (YOLO)
+            v_feeder = getattr(self, 'video_feeder', None)
+            if v_feeder:
+                v_drops = getattr(v_feeder, 'drop_counts', {})
+                for v_name, count in v_drops.items():
+                    drop_map[v_name] = drop_map.get(v_name, 0) + count
+            # Check resnet_feeder (ResNet)
+            r_feeder = getattr(self, 'resnet_feeder', None)
+            if r_feeder:
+                r_drops = getattr(r_feeder, 'drop_counts', {})
+                for v_name, count in r_drops.items():
+                    drop_map[v_name] = drop_map.get(v_name, 0) + count
 
             per_view_stats = {
                 "view1": (view1_avg_fps, view1_avg_infer_time, view1_infer_count, view1_model, view1_mode, view1_wait, int(drop_map.get("view1", 0))),
