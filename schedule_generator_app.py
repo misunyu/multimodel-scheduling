@@ -1431,6 +1431,59 @@ class ONNXProfilerApp(QMainWindow):
                     self.log_message(f"[Success] Also generated scaled schedule: static_results/{filename} (factor={factor:.3f})")
                 except Exception as ve:
                     self.log_message(f"[Error] Failed to write scaled schedule {filename}: {ve}")
+
+            # Generate _test.yaml variant where infps/intps are set to 4x the minimum value across all models
+            try:
+                import copy
+                test_schedules = copy.deepcopy(schedules)
+                
+                # Find the minimum infps/intps value across all models in all combinations
+                min_val = None
+                for comb_name, entries in test_schedules.items():
+                    if not isinstance(entries, dict): continue
+                    for mid, cfg in entries.items():
+                        if not isinstance(cfg, dict): continue
+                        v_infps = cfg.get("infps")
+                        v_intps = cfg.get("intps")
+                        if isinstance(v_infps, (int, float)):
+                            if min_val is None or v_infps < min_val:
+                                min_val = v_infps
+                        if isinstance(v_intps, (int, float)):
+                            if min_val is None or v_intps < min_val:
+                                min_val = v_intps
+                
+                if min_val is not None:
+                    target_val = int(round(min_val * 4.0))
+                    for comb_name, entries in test_schedules.items():
+                        if not isinstance(entries, dict): continue
+                        for mid, cfg in entries.items():
+                            if not isinstance(cfg, dict): continue
+                            if "infps" in cfg:
+                                cfg["infps"] = target_val
+                            if "intps" in cfg:
+                                cfg["intps"] = target_val
+                    
+                    test_filename = f"model_schedules{initials_suffix}_test.yaml"
+                    test_path = os.path.join(static_dir, test_filename)
+                    with open(test_path, "w") as tf:
+                        tf.write(f"# {test_filename}\n")
+                        tf.write("# Auto-generated configuration for model execution on CPU or GPU\n")
+                        tf.write(f"# This variant sets infps/intps to 4x the minimum found value ({min_val} * 4 = {target_val})\n\n")
+                        tf.write(f"# Target device file: {self.device_settings_file}\n")
+                        tf.write("# Available devices:\n")
+                        tf.write(f"# - CPU: {cpu_count}\n")
+                        if gpu_count > 0:
+                            tf.write(f"# - GPU: {gpu_count} (IDs: {', '.join(map(str, gpu_ids))})\n")
+                        tf.write("\n")
+                        tf.write("# Available models:\n")
+                        for model in models:
+                            tf.write(f"# - {model}\n")
+                        tf.write("\n")
+                        tf.write("# Model-execution configurations with unique IDs\n")
+                        tf.write(yaml.dump(test_schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
+                    self.log_message(f"[Success] Also generated test schedule: static_results/{test_filename} (4x min_val={target_val})")
+            except Exception as te:
+                self.log_message(f"[Error] Failed to generate _test.yaml: {te}")
         except Exception as e:
             self.log_message(f"[Error] Failed to write static_results/model_schedules.yaml: {e}")
             
