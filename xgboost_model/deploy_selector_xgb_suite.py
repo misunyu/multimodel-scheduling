@@ -389,18 +389,33 @@ def main():
                 df = df[feats]
 
                 dmat = xgb.DMatrix(df)
-                y1 = b1.predict(dmat)[0]
-                y2 = b2.predict(dmat)[0]
+                y1 = float(b1.predict(dmat)[0])
+                y2 = float(b2.predict(dmat)[0])
                 score = y1 - args.alpha * y2
+                
+                # [수정] 모든 수치를 소수점 4자리로 반올림하여 일관성 유지
+                y1 = round(y1, 4)
+                y2 = round(y2, 4)
+                score = round(score, 4)
+                
                 results.append((name, y1, y2, score))
 
             if results:
                 # TOP-K 정렬 출력
                 sorted_results = sorted(results, key=lambda x: x[3], reverse=True)
-                topk = max(1, min(args.topk, len(sorted_results)))
-                top_items = sorted_results[:topk]
+                
+                # [수정] top1과 score가 같은 것이 5개가 넘으면 다 보여줌
+                top1_score = sorted_results[0][3]
+                ties = [r for r in sorted_results if math.isclose(r[3], top1_score, rel_tol=1e-7)]
+                
+                if len(ties) > 5:
+                    top_items = ties
+                else:
+                    topk = max(1, min(args.topk, len(sorted_results)))
+                    top_items = sorted_results[:topk]
 
-                print(f"TOP-{topk}")
+                actual_topk = len(top_items)
+                print(f"TOP-{actual_topk}")
                 for rank, r in enumerate(top_items, start=1):
                     name, y1, y2, score = r
                     print(f"{rank}\t{name}\tpred_score={score:.4f}\t(T_norm={y1:.4f}, D_norm={y2:.4f})")
@@ -417,7 +432,7 @@ def main():
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "schedule file": p.name,
                     "best deployment": best[0],
-                    "score": round(float(best[3]), 4),
+                    "score": best[3],
                     "data": []
                 }
                 # [수정] 결과를 score 큰 순으로 정렬하여 저장
@@ -425,10 +440,10 @@ def main():
                 for r in sorted_all_results:
                     payload["data"].append({
                         "combination": r[0],
-                        "score": round(float(r[3]), 4),
+                        "score": r[3],
                         "derived": {
-                            "throughput_norm": round(float(r[1]), 4),
-                            "drop_rate_norm": round(float(r[2]), 4)
+                            "throughput_norm": r[1],
+                            "drop_rate_norm": r[2]
                         }
                     })
                 with out_path.open("w") as f:
