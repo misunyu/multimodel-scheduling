@@ -69,7 +69,8 @@ def recompute_scores():
             data_content['best deployment'] = best_combination
             
         # Save the result
-        output_file_path = os.path.join(output_dir, os.path.basename(file_path))
+        output_filename = "recompute_" + os.path.basename(file_path)
+        output_file_path = os.path.join(output_dir, output_filename)
         with open(output_file_path, 'w') as f:
             json.dump(data_content, f, indent=4)
         print(f"Saved recomputed results to {output_file_path}")
