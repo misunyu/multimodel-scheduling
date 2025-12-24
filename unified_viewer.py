@@ -1703,16 +1703,24 @@ class UnifiedViewer(QMainWindow):
                 print(f"[Save Throughput] Warning: failed to compute device metrics: {e}")
             
             # Determine if the current combination is the first schedule in the YAML
+            # BUT: if results_path was explicitly set by an external executor, we should ALWAYS append
+            # to preserve its initialization (e.g. ScheduleExecutor sets it to '[]' at start).
             is_first_schedule = False
-            try:
-                with open(self.schedule_file, "r", encoding="utf-8") as sf:
-                    cfg = yaml.safe_load(sf) or {}
-                if cfg:
-                    first_key = next(iter(cfg))
-                    is_first_schedule = (self.current_combination == first_key)
-            except Exception as e:
-                # If we cannot read the YAML, default to not-first to avoid accidental truncation
-                print(f"[Save Throughput] Warning: failed to read schedule file {self.schedule_file}: {e}")
+            external_executor = hasattr(self, 'executor_only') and self.executor_only
+
+            if not external_executor:
+                try:
+                    with open(self.schedule_file, "r", encoding="utf-8") as sf:
+                        cfg = yaml.safe_load(sf) or {}
+                    if cfg:
+                        first_key = next(iter(cfg))
+                        is_first_schedule = (self.current_combination == first_key)
+                except Exception as e:
+                    # If we cannot read the YAML, default to not-first to avoid accidental truncation
+                    print(f"[Save Throughput] Warning: failed to read schedule file {self.schedule_file}: {e}")
+                    is_first_schedule = False
+            else:
+                # In executor mode, ScheduleExecutor handles file initialization; viewer just appends.
                 is_first_schedule = False
 
             # Prepare aggregated results list. If this is the first schedule, clear previous contents.
