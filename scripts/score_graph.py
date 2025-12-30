@@ -50,6 +50,7 @@ plt.xticks(range(len(scenarios)), scenarios, rotation=45, ha="right")
 plt.ylabel("Best Score")
 plt.title("Best Schedule Scores per Scenario (Point Plot)")
 plt.legend()
+plt.ylim(bottom=0)
 plt.tight_layout()
 
 out="best_schedule_pointplot.pdf"
