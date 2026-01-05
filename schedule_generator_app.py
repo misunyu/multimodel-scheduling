@@ -666,63 +666,127 @@ class ONNXProfilerApp(QMainWindow):
             # Log the number of total combinations
             self.log_message(f"[Info] Generated {len(combinations)} possible combinations")
         
-        # Create the model_schedules.yaml content
-        schedules = {}
-        
-        for i, combination in enumerate(combinations):
-            combination_name = f"combination_{i+1}"
-            schedules[combination_name] = {}
+        # Get profiling data (infps) from total_table for each device
+        # Mapping: { model_name: { 'cpu': ms, 'npu0': ms, 'npu1': ms } }
+        model_device_times = {}
+        if hasattr(self, 'total_table') and self.total_table is not None:
+            for row in range(self.total_table.rowCount()):
+                item_model = self.total_table.item(row, 0)
+                if item_model:
+                    m_name = item_model.text()
+                    if m_name == "Total":
+                        continue
+                    
+                    times = {}
+                    # CPU Inf. (ms) - Column 1
+                    item_cpu = self.total_table.item(row, 1)
+                    if item_cpu:
+                        try:
+                            times['cpu'] = float(item_cpu.text())
+                        except ValueError:
+                            pass
+                            
+                    # NPU0 + CPU Inf. (ms) - Column 3
+                    item_npu0 = self.total_table.item(row, 3)
+                    if item_npu0:
+                        try:
+                            times['npu0'] = float(item_npu0.text())
+                        except ValueError:
+                            pass
+                            
+                    # NPU1 + CPU Inf. (ms) - Column 5
+                    item_npu1 = self.total_table.item(row, 5)
+                    if item_npu1:
+                        try:
+                            times['npu1'] = float(item_npu1.text())
+                        except ValueError:
+                            pass
+                    
+                    model_device_times[m_name] = times
+
+        # Model initials for filename
+        def get_model_initial(name):
+            lname = name.lower()
+            initial = lname[0] if len(lname) > 0 else "x"
             
-            for j, (model, device) in enumerate(combination.items()):
-                # Create a unique ID for this model-device pair
-                model_id = f"{model}_{device}"
-                
-                # Add the model configuration
-                # Determine default inference FPS based on model type
-                infps = None
-                lname = model.lower()
-                if "resnet50" in lname:
-                    infps = 2
-                elif "yolov3" in lname:
-                    infps = 30
-                schedules[combination_name][model_id] = {
-                    "model": model,
-                    "execution": device,
-                    "display": f"view{j+1}",  # Assign views in order
-                    **({"infps": infps} if infps is not None else {})
-                }
-        
-        # Write to model_schedules.yaml
-        try:
-            with open("../tests/model_schedules.yaml", "w") as f:
-                # Add header comments
-                f.write("# model_schedules.yaml\n")
-                f.write("# Auto-generated configuration for model execution on CPU or NPU\n\n")
-                
-                # Add target device file information
-                f.write(f"# Target device file: {self.device_settings_file}\n")
-                f.write("# Available devices:\n")
-                f.write(f"# - CPU: {cpu_count}\n")
-                if npu_count > 0:
-                    f.write(f"# - NPU: {npu_count} (IDs: {', '.join(map(str, npu_ids))})\n")
-                f.write("\n")
-                
-                # Add available models comment
-                f.write("# Available models:\n")
-                for model in models:
-                    f.write(f"# - {model}\n")
-                f.write("\n")
-                
-                # Add combinations
-                f.write("# Model-execution configurations with unique IDs\n")
-                
-                # Custom YAML dumping to add blank lines between combinations
-                f.write(yaml.dump(schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
-                
-            self.log_message(f"[Success] Generated {len(combinations)} combinations in model_schedules.yaml")
-        except Exception as e:
-            self.log_message(f"[Error] Failed to write model_schedules.yaml: {e}")
+            # Add character after the first underscore if it exists
+            if "_" in lname:
+                parts = lname.split("_")
+                if len(parts) > 1 and len(parts[1]) > 0:
+                    initial += parts[1][0]
             
+            return initial
+
+        initials = "".join([get_model_initial(m) for m in sorted(models)])
+        
+        # Multipliers for infps
+        multipliers = [1, 2, 3, 4]
+        
+        for mult in multipliers:
+            # Create the schedules content for this multiplier
+            schedules = {}
+            for i, combination in enumerate(combinations):
+                combination_name = f"combination_{i+1}"
+                schedules[combination_name] = {}
+                
+                for j, (model, device) in enumerate(combination.items()):
+                    model_id = f"{model}_{device}"
+                    
+                    # Use device-specific profiled inference time
+                    infer_ms = None
+                    if model in model_device_times:
+                        # device is like 'cpu', 'npu0', 'npu1'
+                        infer_ms = model_device_times[model].get(device)
+                    
+                    if infer_ms is not None and infer_ms > 0:
+                        base_infps = int(round(1000.0 / infer_ms))
+                    else:
+                        # Fallback to default if not profiled for this device
+                        lname = model.lower()
+                        if "resnet50" in lname:
+                            base_infps = 2
+                        elif "yolov3" in lname:
+                            base_infps = 30
+                        else:
+                            base_infps = 1
+                    
+                    # Apply multiplier
+                    final_infps = base_infps * mult
+                    
+                    schedules[combination_name][model_id] = {
+                        "model": model,
+                        "execution": device,
+                        "display": f"view{j+1}",
+                        "infps": final_infps
+                    }
+            
+            # File name with suffix for multipliers > 1
+            suffix = f"_{mult}x" if mult > 1 else ""
+            filename = f"model_schedules_{initials}{suffix}.yaml"
+            file_path = os.path.join("./tests", filename)
+            
+            # Write to YAML file
+            try:
+                with open(file_path, "w") as f:
+                    f.write(f"# {filename}\n")
+                    f.write("# Auto-generated configuration for model execution on CPU or NPU\n\n")
+                    f.write(f"# Target device file: {self.device_settings_file}\n")
+                    f.write("# Available devices:\n")
+                    f.write(f"# - CPU: {cpu_count}\n")
+                    if npu_count > 0:
+                        f.write(f"# - NPU: {npu_count} (IDs: {', '.join(map(str, npu_ids))})\n")
+                    f.write("\n")
+                    f.write("# Available models:\n")
+                    for model in models:
+                        f.write(f"# - {model}\n")
+                    f.write("\n")
+                    f.write("# Model-execution configurations with unique IDs\n")
+                    f.write(yaml.dump(schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
+                
+                self.log_message(f"[Success] Generated {len(combinations)} combinations in {filename}")
+            except Exception as e:
+                self.log_message(f"[Error] Failed to write {filename}: {e}")
+
         # Log assignments
         self.log_message("\n[Model Assignments]")
         for model, device in self.assignment_results:
