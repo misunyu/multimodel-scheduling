@@ -1332,14 +1332,37 @@ class ONNXProfilerApp(QMainWindow):
                     **perf_fields
                 }
         
-        # Write to static_results/model_schedules_<initials>.yaml
+        # Write to gen_schedules/model_schedules_<initials>.yaml
         try:
-            static_dir = os.path.join(os.getcwd(), "static_results")
+            static_dir = os.path.join(os.getcwd(), "gen_schedules")
             os.makedirs(static_dir, exist_ok=True)
-            # Build filename suffix from the first letters of the selected model names
+            # Build filename suffix from selected model names
             try:
-                # Keep duplicates if multiple models share the same first letter (e.g., resnet50 + resnext50 -> r_r)
-                initials = [m.strip()[0].lower() for m in models if isinstance(m, str) and m.strip()]
+                # Use first letter for abbreviation (e.g., mnasnet -> m)
+                # If there are collisions (different models having same first letter), use full names
+                model_to_abbr = {}
+                abbr_counts = {}
+                for m in models:
+                    if isinstance(m, str) and m.strip():
+                        name = m.strip()
+                        abbr = name[0].lower()
+                        model_to_abbr[name] = abbr
+                        # Count how many distinct model names share this abbreviation
+                        if abbr not in abbr_counts:
+                            abbr_counts[abbr] = set()
+                        abbr_counts[abbr].add(name)
+
+                initials = []
+                for m in models:
+                    if isinstance(m, str) and m.strip():
+                        name = m.strip()
+                        abbr = model_to_abbr.get(name)
+                        # If this abbreviation is shared by more than one distinct model name, use full name
+                        if len(abbr_counts.get(abbr, set())) > 1:
+                            initials.append(name.lower())
+                        else:
+                            initials.append(abbr)
+                
                 initials.sort()
             except Exception:
                 initials = []
@@ -1375,7 +1398,7 @@ class ONNXProfilerApp(QMainWindow):
                 # Custom YAML dumping to add blank lines between combinations
                 f.write(yaml.dump(schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
 
-            self.log_message(f"[Success] Generated {len(combinations)} combinations in static_results/{base_filename}")
+            self.log_message(f"[Success] Generated {len(combinations)} combinations in gen_schedules/{base_filename}")
 
             # Also generate scaled variants where ONLY 'infps' is multiplied (x2, x3)
             # - Request: files that previously ended with '_x1_3.yaml' should now end with '_x2.yaml' and have infps doubled
@@ -1428,64 +1451,47 @@ class ONNXProfilerApp(QMainWindow):
                         vf.write("\n")
                         vf.write("# Model-execution configurations with unique IDs\n")
                         vf.write(yaml.dump(scaled, default_flow_style=False).replace("combination_", "\ncombination_"))
-                    self.log_message(f"[Success] Also generated scaled schedule: static_results/{filename} (factor={factor:.3f})")
+                    self.log_message(f"[Success] Also generated scaled schedule: gen_schedules/{filename} (factor={factor:.3f})")
                 except Exception as ve:
                     self.log_message(f"[Error] Failed to write scaled schedule {filename}: {ve}")
 
-            # Generate _test.yaml variant where infps/intps are set to 4x the minimum value across all models
+            # Generate _test.yaml variant where infps/intps are 4x the profiled values
             try:
                 import copy
                 test_schedules = copy.deepcopy(schedules)
                 
-                # Find the minimum infps/intps value across all models in all combinations
-                min_val = None
                 for comb_name, entries in test_schedules.items():
                     if not isinstance(entries, dict): continue
                     for mid, cfg in entries.items():
                         if not isinstance(cfg, dict): continue
-                        v_infps = cfg.get("infps")
-                        v_intps = cfg.get("intps")
-                        if isinstance(v_infps, (int, float)):
-                            if min_val is None or v_infps < min_val:
-                                min_val = v_infps
-                        if isinstance(v_intps, (int, float)):
-                            if min_val is None or v_intps < min_val:
-                                min_val = v_intps
+                        if "infps" in cfg and isinstance(cfg["infps"], (int, float)):
+                            cfg["infps"] = int(round(cfg["infps"] * 4.0))
+                        if "intps" in cfg and isinstance(cfg["intps"], (int, float)):
+                            cfg["intps"] = int(round(cfg["intps"] * 4.0))
                 
-                if min_val is not None:
-                    target_val = int(round(min_val * 4.0))
-                    for comb_name, entries in test_schedules.items():
-                        if not isinstance(entries, dict): continue
-                        for mid, cfg in entries.items():
-                            if not isinstance(cfg, dict): continue
-                            if "infps" in cfg:
-                                cfg["infps"] = target_val
-                            if "intps" in cfg:
-                                cfg["intps"] = target_val
-                    
-                    test_filename = f"model_schedules{initials_suffix}_test.yaml"
-                    test_path = os.path.join(static_dir, test_filename)
-                    with open(test_path, "w") as tf:
-                        tf.write(f"# {test_filename}\n")
-                        tf.write("# Auto-generated configuration for model execution on CPU or GPU\n")
-                        tf.write(f"# This variant sets infps/intps to 4x the minimum found value ({min_val} * 4 = {target_val})\n\n")
-                        tf.write(f"# Target device file: {self.device_settings_file}\n")
-                        tf.write("# Available devices:\n")
-                        tf.write(f"# - CPU: {cpu_count}\n")
-                        if gpu_count > 0:
-                            tf.write(f"# - GPU: {gpu_count} (IDs: {', '.join(map(str, gpu_ids))})\n")
-                        tf.write("\n")
-                        tf.write("# Available models:\n")
-                        for model in models:
-                            tf.write(f"# - {model}\n")
-                        tf.write("\n")
-                        tf.write("# Model-execution configurations with unique IDs\n")
-                        tf.write(yaml.dump(test_schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
-                    self.log_message(f"[Success] Also generated test schedule: static_results/{test_filename} (4x min_val={target_val})")
+                test_filename = f"model_schedules{initials_suffix}_test.yaml"
+                test_path = os.path.join(static_dir, test_filename)
+                with open(test_path, "w") as tf:
+                    tf.write(f"# {test_filename}\n")
+                    tf.write("# Auto-generated configuration for model execution on CPU or GPU\n")
+                    tf.write(f"# This variant sets infps/intps to 4x the profiled value\n\n")
+                    tf.write(f"# Target device file: {self.device_settings_file}\n")
+                    tf.write("# Available devices:\n")
+                    tf.write(f"# - CPU: {cpu_count}\n")
+                    if gpu_count > 0:
+                        tf.write(f"# - GPU: {gpu_count} (IDs: {', '.join(map(str, gpu_ids))})\n")
+                    tf.write("\n")
+                    tf.write("# Available models:\n")
+                    for model in models:
+                        tf.write(f"# - {model}\n")
+                    tf.write("\n")
+                    tf.write("# Model-execution configurations with unique IDs\n")
+                    tf.write(yaml.dump(test_schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
+                self.log_message(f"[Success] Also generated test schedule: gen_schedules/{test_filename} (4x profiled values)")
             except Exception as te:
                 self.log_message(f"[Error] Failed to generate _test.yaml: {te}")
         except Exception as e:
-            self.log_message(f"[Error] Failed to write static_results/model_schedules.yaml: {e}")
+            self.log_message(f"[Error] Failed to write gen_schedules/model_schedules.yaml: {e}")
             
         # Log assignments
         self.log_message("\n[Model Assignments]")
