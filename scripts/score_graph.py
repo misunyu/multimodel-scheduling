@@ -33,26 +33,37 @@ def extract(dir_path, kind):
     return pd.DataFrame(rows,columns=["scenario","kind","schedule","score"])
 
 df=pd.concat([extract(run_dir,"Runtime"), extract(pred_dir,"Predicted")])
+global_max_score = df["score"].max()
 
-# sort scenarios
-scenarios=sorted(df["scenario"].unique(), key=lambda s:(s.count("_"),s))
-xpos={s:i for i,s in enumerate(scenarios)}
+def save_plot(df_sub, output_name, title):
+    scenarios = sorted(df_sub["scenario"].unique(), key=lambda s: (s.count("_"), s))
+    if not scenarios:
+        print(f"No scenarios for {output_name}, skipping.")
+        return
+    xpos = {s: i for i, s in enumerate(scenarios)}
 
-plt.figure(figsize=(14,5))
+    plt.figure(figsize=(max(8, len(scenarios) * 0.8), 5))
 
-# jittered scatter
-for kind,color,dx in [("Runtime","blue",-0.1),("Predicted","red",0.1)]:
-    sub=df[df.kind==kind]
-    xs=[xpos[s]+dx for s in sub.scenario]
-    plt.scatter(xs, sub.score, color=color, label=kind, s=60)
+    # jittered scatter
+    for kind, color, dx in [("Runtime", "blue", -0.1), ("Predicted", "red", 0.1)]:
+        sub = df_sub[df_sub.kind == kind]
+        xs = [xpos[s] + dx for s in sub.scenario if s in xpos]
+        plt.scatter(xs, sub.score, color=color, label=kind, s=60)
 
-plt.xticks(range(len(scenarios)), scenarios, rotation=45, ha="right")
-plt.ylabel("Best Score")
-plt.title("Best Schedule Scores per Scenario (Point Plot)")
-plt.legend()
-plt.ylim(bottom=0)
-plt.tight_layout()
+    plt.xticks(range(len(scenarios)), scenarios, rotation=45, ha="right")
+    plt.ylabel("Best Score")
+    plt.title(title)
+    plt.legend()
+    plt.ylim(0, global_max_score + 0.2)
+    plt.tight_layout()
 
-out="best_schedule_pointplot.pdf"
-plt.savefig(out)
-print(f"Saved plot to {out}")
+    plt.savefig(output_name)
+    print(f"Saved plot to {output_name}")
+
+# split scenarios: single model (no '_') vs multi model (has '_')
+df_single = df[~df['scenario'].str.contains('_')]
+df_multi = df[df['scenario'].str.contains('_')]
+
+save_plot(df_single, "best_schedule_pointplot_single.pdf", "Best Schedule Scores (Single Model)")
+save_plot(df_multi, "best_schedule_pointplot_multi.pdf", "Best Schedule Scores (Multi Model)")
+
