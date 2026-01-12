@@ -67,3 +67,39 @@ df_multi = df[df['scenario'].str.contains('_')]
 save_plot(df_single, "best_schedule_pointplot_single.pdf", "Best Schedule Scores (Single Model)")
 save_plot(df_multi, "best_schedule_pointplot_multi.pdf", "Best Schedule Scores (Multi Model)")
 
+# Save to Excel for ChatGPT with descriptions
+excel_path = "best_schedule_summary.xlsx"
+with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+    # Single Model Sheet
+    df_single_pivot = df_single.pivot(index='scenario', columns='kind', values=['schedule', 'score'])
+    # Flatten multi-index columns for easier reading
+    df_single_pivot.columns = [f"{col[1]} {col[0]}" for col in df_single_pivot.columns]
+    df_single_pivot = df_single_pivot.reset_index()
+    
+    # Description for Single Model
+    desc_single = pd.DataFrame([
+        ["Description:", "This table shows the best deployment schedule and its corresponding score for scenarios involving a single model."],
+        ["Graph Reference:", "Refer to 'best_schedule_pointplot_single.pdf' for a visual representation."],
+        ["Note:", "Runtime represents the actual measured score, while Predicted represents the score estimated by the XGBoost model."],
+        []
+    ])
+    desc_single.to_excel(writer, sheet_name='Single Model', index=False, header=False)
+    df_single_pivot.to_excel(writer, sheet_name='Single Model', startrow=len(desc_single), index=False)
+
+    # Multi Model Sheet
+    df_multi_pivot = df_multi.pivot(index='scenario', columns='kind', values=['schedule', 'score'])
+    df_multi_pivot.columns = [f"{col[1]} {col[0]}" for col in df_multi_pivot.columns]
+    df_multi_pivot = df_multi_pivot.reset_index()
+
+    # Description for Multi Model
+    desc_multi = pd.DataFrame([
+        ["Description:", "This table shows the best deployment schedule and its corresponding score for scenarios involving multiple models (multi-model scheduling)."],
+        ["Graph Reference:", "Refer to 'best_schedule_pointplot_multi.pdf' for a visual representation."],
+        ["Note:", "Scenario names with '_' indicate combinations of multiple models."],
+        []
+    ])
+    desc_multi.to_excel(writer, sheet_name='Multi Model', index=False, header=False)
+    df_multi_pivot.to_excel(writer, sheet_name='Multi Model', startrow=len(desc_multi), index=False)
+
+print(f"Saved Excel summary to {excel_path}")
+
