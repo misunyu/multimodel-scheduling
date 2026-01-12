@@ -1424,10 +1424,11 @@ class ONNXProfilerApp(QMainWindow):
                                 pass
                 return dst
 
-            # New naming and scaling: _x2.yaml (infps x2), _x3.yaml (infps x3)
+            # New naming and scaling: _x2.yaml (infps x2), _x3.yaml (infps x3), _x3-5_test.yaml (infps x3.5)
             variants = [
                 (f"model_schedules{initials_suffix}_x2.yaml", 2.0, "# This variant doubles input FPS (infps x2); intps unchanged\n"),
                 (f"model_schedules{initials_suffix}_x3.yaml", 3.0, "# This variant triples input FPS (infps x3); intps unchanged\n"),
+                (f"model_schedules{initials_suffix}_x3-5_test.yaml", 3.5, "# This variant sets input FPS to 3.5x (infps x3.5); intps unchanged\n"),
             ]
 
             for filename, factor, note in variants:
@@ -1454,6 +1455,43 @@ class ONNXProfilerApp(QMainWindow):
                     self.log_message(f"[Success] Also generated scaled schedule: gen_schedules/{filename} (factor={factor:.3f})")
                 except Exception as ve:
                     self.log_message(f"[Error] Failed to write scaled schedule {filename}: {ve}")
+
+            # Generate special variant: resnet50 is 3.5x and others are 2x
+            try:
+                import copy
+                special_schedules = copy.deepcopy(schedules)
+                for comb_name, entries in special_schedules.items():
+                    if not isinstance(entries, dict): continue
+                    for mid, cfg in entries.items():
+                        if not isinstance(cfg, dict): continue
+                        model_name = cfg.get("model", "")
+                        factor = 3.5 if "resnet50" in model_name.lower() else 2.0
+                        if "infps" in cfg and isinstance(cfg["infps"], (int, float)):
+                            cfg["infps"] = max(1, int(round(float(cfg["infps"]) * factor)))
+                        if "intps" in cfg and isinstance(cfg["intps"], (int, float)):
+                            cfg["intps"] = max(1, int(round(float(cfg["intps"]) * factor)))
+                
+                special_filename = f"model_schedules{initials_suffix}_2x_resnet3-5_test.yaml"
+                special_path = os.path.join(static_dir, special_filename)
+                with open(special_path, "w") as sf:
+                    sf.write(f"# {special_filename}\n")
+                    sf.write("# Auto-generated configuration for model execution on CPU or GPU\n")
+                    sf.write("# This variant sets resnet50 to 3.5x and others to 2x\n\n")
+                    sf.write(f"# Target device file: {self.device_settings_file}\n")
+                    sf.write("# Available devices:\n")
+                    sf.write(f"# - CPU: {cpu_count}\n")
+                    if gpu_count > 0:
+                        sf.write(f"# - GPU: {gpu_count} (IDs: {', '.join(map(str, gpu_ids))})\n")
+                    sf.write("\n")
+                    sf.write("# Available models:\n")
+                    for model in models:
+                        sf.write(f"# - {model}\n")
+                    sf.write("\n")
+                    sf.write("# Model-execution configurations with unique IDs\n")
+                    sf.write(yaml.dump(special_schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
+                self.log_message(f"[Success] Also generated special schedule: gen_schedules/{special_filename}")
+            except Exception as se:
+                self.log_message(f"[Error] Failed to generate {special_filename}: {se}")
 
             # Generate _test.yaml variant where infps/intps are 4x the profiled values
             try:
