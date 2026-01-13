@@ -4,7 +4,7 @@
 
 사용 예시:
   python scripts/show_top_combinations.py \
-    /home/msyu/PycharmProjects/multimodel-scheduling/xgboost_model/performance_results/prediction_test/predict_performance_20251215_150050_model_schedules_g_r_r.json
+    /home/msyu/PycharmProjects/multimodel-scheduling/xgboost_model/test/performance_results/prediction/predict_performance_20251215_150050_model_schedules_g_r_r.json
 
 옵션:
   --top N  출력할 상위 개수 (기본값: 5)

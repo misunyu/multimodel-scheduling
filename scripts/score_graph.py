@@ -7,8 +7,8 @@ import zipfile, json, os, re
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
 
-pred_dir = os.path.join(project_root, "xgboost_model/performance_results/prediction_test")
-run_dir = os.path.join(project_root, "xgboost_model/performance_results/runtime_test")
+pred_dir = os.path.join(project_root, "xgboost_model/test/performance_results/prediction")
+run_dir = os.path.join(project_root, "xgboost_model/test/performance_results/runtime")
 
 
 def compute_best_score(obj, best):
@@ -27,8 +27,19 @@ def extract(dir_path, kind):
             obj=json.load(f)
             best=obj.get("best deployment") or obj.get("best_schedule_name")
             score=obj.get("score") or compute_best_score(obj,best)
-            mm=re.search(r"model_schedules_(.+?)_test\.json$", filename)
-            scenario=mm.group(1) if mm else os.path.splitext(filename)[0]
+            
+            # Extract scenario from "schedule file" field if present, otherwise from filename
+            schedule_file = obj.get("schedule file") or obj.get("schedule_name")
+            if schedule_file:
+                scenario = os.path.splitext(schedule_file)[0]
+            else:
+                scenario = os.path.splitext(filename)[0]
+            
+            # Standardize scenario name: remove known prefixes and suffixes
+            scenario = re.sub(r"^(predict|recompute)_performance_\d{8}_\d{6}_", "", scenario)
+            scenario = re.sub(r"^model_schedules_", "", scenario)
+            scenario = re.sub(r"_test$", "", scenario)
+            
             rows.append((scenario,kind,best,float(score)))
     return pd.DataFrame(rows,columns=["scenario","kind","schedule","score"])
 
@@ -53,10 +64,9 @@ def save_plot(df_sub, output_name, title):
     plt.xticks(range(len(scenarios)), scenarios, rotation=45, ha="right")
     plt.ylabel("Best Score")
     plt.title(title)
-    plt.legend()
+    plt.legend(loc='lower right')
     plt.ylim(0, global_max_score + 0.2)
-    plt.tight_layout()
-
+    plt.subplots_adjust(bottom=0.3)  # plt.tight_layout() 대신 사용하거나 추가
     plt.savefig(output_name)
     print(f"Saved plot to {output_name}")
 

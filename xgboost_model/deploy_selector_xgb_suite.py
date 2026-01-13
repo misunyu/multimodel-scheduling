@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
- python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./xgboost_model/performance_results/train     --schedule_dir ./xgboost_model/schedules/train  --model_out ./xgboost_model/artifacts/xgb_model
- python ./xgboost_model/deploy_selector_xgb_suite.py predict     --schedule_dir ./xgboost_model/schedules/test     --model_in ./xgboost_model/artifacts/xgb_model
+ python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./xgboost_model/train/performance_results     --schedule_dir ./xgboost_model/train/schedules  --model_out ./xgboost_model/artifacts/xgb_model
+ python ./xgboost_model/deploy_selector_xgb_suite.py predict     --schedule_dir ./xgboost_model/test/schedules     --model_in ./xgboost_model/artifacts/xgb_model
 """
 
 import hashlib
@@ -424,7 +424,7 @@ def main():
                 print(f"BEST\t{best[0]}\tpred_score={best[3]:.4f}\t(T_norm={best[1]:.4f}, D_norm={best[2]:.4f})")
 
                 # 결과 파일 저장 (기존 형식 유지)
-                out_dir = Path("xgboost_model/performance_results/prediction_test")
+                out_dir = Path("xgboost_model/test/performance_results/prediction")
                 out_dir.mkdir(parents=True, exist_ok=True)
                 out_path = out_dir / f"predict_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{p.stem}.json"
 
