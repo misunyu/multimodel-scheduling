@@ -1,8 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
- python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./xgboost_model/train/performance_results     --schedule_dir ./xgboost_model/train/schedules  --model_out ./xgboost_model/artifacts/xgb_model
- python ./xgboost_model/deploy_selector_xgb_suite.py predict     --schedule_dir ./xgboost_model/test/schedules     --model_in ./xgboost_model/artifacts/xgb_model
+[Train]
+ 1) Using directory:
+    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./results_recompute --schedule_dir ./gen_schedules --model_out ./xgboost_model/artifacts/xgb_model
+
+ 2) Using CSV (Random split):
+    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_random.csv --schedule_csv train_schedules_random.csv --model_out ./xgboost_model/artifacts/xgb_model_random
+
+ 3) Using CSV (Pattern x3 split):
+    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/xgb_model_x3
+
+[Predict / Validate]
+ 1) Predict for new schedules (Top-K output):
+    python ./xgboost_model/deploy_selector_xgb_suite.py predict --schedule_dir ./gen_schedules --model_in ./xgboost_model/artifacts/xgb_model_random --topk 5 --alpha 0.2
+
+ 2) Validate with test CSV (Random split):
+    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_random.csv --schedule_csv test_schedules_random.csv --model_in ./xgboost_model/artifacts/xgb_model_random --alpha 0.2
+
+ 3) Validate with test CSV (Pattern x3 split):
+    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_x3.csv --schedule_csv test_schedules_x3.csv --model_in ./xgboost_model/artifacts/xgb_model_x3 --alpha 0.2
 """
 
 import hashlib
@@ -282,6 +299,67 @@ def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
 
 # ---------- Builder & Trainer ----------
 
+def _index_schedules_from_csv(csv_path: Path) -> Dict[str, Dict[str, Any]]:
+    if not csv_path.exists():
+        return {}
+    df = pd.read_csv(csv_path)
+    out = {}
+    for _, row in df.iterrows():
+        name = str(row["schedule_name"]).lower()
+        content = str(row["content"])
+        if yaml is not None:
+            try:
+                out[name] = yaml.safe_load(content) or {}
+                continue
+            except Exception:
+                pass
+        try:
+            out[name] = json.loads(content) or {}
+        except Exception:
+            pass
+    return out
+
+
+def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, schedule_csv: Optional[Path] = None):
+    if schedule_csv:
+        sched_index = _index_schedules_from_csv(schedule_csv)
+    elif schedule_dir:
+        sched_index = _index_schedules(schedule_dir)
+    else:
+        sched_index = {}
+
+    X_all, Y_all, M_all = [], [], []
+
+    df_csv = pd.read_csv(csv_path, header=None)
+    for _, row in df_csv.iterrows():
+        try:
+            # Try to load as JSON string from the first column
+            try:
+                w = json.loads(row[0])
+            except Exception:
+                # If that fails, maybe it has a header 'json_content'
+                w = json.loads(row["json_content"])
+            s_name = w.get("schedule_file") or w.get("schedule file")
+            s_doc = _find_schedule(sched_index, s_name)
+            c_name = w.get("combination")
+
+            infps_map = None
+            if s_doc and c_name:
+                infps_map = _build_infps_lookup(s_doc, c_name)
+
+            X, (y1, y2), meta = featurize_window(w, infps_map)
+            if math.isnan(y1) or math.isnan(y2): continue
+
+            X_all.append(X)
+            Y_all.append({"y1": y1, "y2": y2})
+            M_all.append(meta)
+        except Exception as e:
+            print(f"[WARN] CSV row error: {e}")
+
+    if not X_all: raise RuntimeError("No valid data rows found in CSV.")
+    return pd.DataFrame(X_all).fillna(0.0), pd.DataFrame(Y_all), pd.DataFrame(M_all)
+
+
 def build_dataset(perf_dir: Path, schedule_dir: Path):
     sched_index = _index_schedules(schedule_dir)
     X_all, Y_all, M_all = [], [], []
@@ -346,13 +424,17 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     tr = sub.add_parser("train")
-    tr.add_argument("--perf_dir", required=True)
-    tr.add_argument("--schedule_dir", required=True)
+    tr.add_argument("--perf_dir")
+    tr.add_argument("--perf_csv")
+    tr.add_argument("--schedule_dir")
+    tr.add_argument("--schedule_csv")
     tr.add_argument("--model_out", required=True)
     tr.add_argument("--dump_csv", default="")
 
     pr = sub.add_parser("predict")
-    pr.add_argument("--schedule_dir", required=True)
+    pr.add_argument("--schedule_dir")
+    pr.add_argument("--schedule_csv")
+    pr.add_argument("--perf_csv")
     pr.add_argument("--model_in", required=True)
     pr.add_argument("--alpha", type=float, default=0.2)
     pr.add_argument("--topk", type=int, default=5)
@@ -361,7 +443,28 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "train":
-        X, Y, M = build_dataset(Path(args.perf_dir), Path(args.schedule_dir))
+        if args.perf_csv:
+            p_csv = Path(args.perf_csv)
+            if not p_csv.exists():
+                alt_p = Path("xgboost_model/dataset") / p_csv.name
+                if alt_p.exists():
+                    p_csv = alt_p
+            
+            s_dir = Path(args.schedule_dir) if args.schedule_dir else None
+            
+            s_csv = Path(args.schedule_csv) if args.schedule_csv else None
+            if s_csv and not s_csv.exists():
+                alt_s = Path("xgboost_model/dataset") / s_csv.name
+                if alt_s.exists():
+                    s_csv = alt_s
+                    
+            X, Y, M = build_dataset_from_csv(p_csv, s_dir, s_csv)
+        elif args.perf_dir:
+            X, Y, M = build_dataset(Path(args.perf_dir), Path(args.schedule_dir))
+        else:
+            print("Error: Either --perf_dir or --perf_csv must be provided for train command.")
+            sys.exit(1)
+        
         train_two_targets(X, Y, Path(args.model_out))
         print("Training Done.")
 
@@ -369,7 +472,182 @@ def main():
         b1, b2, feats = load_models(Path(args.model_in))
         xgb = _lazy_import_xgb()
 
-        # schedule_dir 내의 모든 json/yaml 처리
+    # [추가] CSV 파일이 주어지면 해당 파일의 데이터에 대해 예측 수행
+        if args.perf_csv:
+            p_csv_path = Path(args.perf_csv)
+            # 만약 지정된 경로에 파일이 없고 xgboost_model/dataset 아래에 있다면 해당 경로 사용
+            if not p_csv_path.exists():
+                alt_path = Path("xgboost_model/dataset") / p_csv_path.name
+                if alt_path.exists():
+                    p_csv_path = alt_path
+
+            if args.schedule_csv:
+                s_csv_path = Path(args.schedule_csv)
+                if not s_csv_path.exists():
+                    alt_s_path = Path("xgboost_model/dataset") / s_csv_path.name
+                    if alt_s_path.exists():
+                        s_csv_path = alt_s_path
+                sched_index = _index_schedules_from_csv(s_csv_path)
+            else:
+                sched_index = _index_schedules(Path(args.schedule_dir))
+            
+            df_csv = pd.read_csv(p_csv_path, header=None)
+            
+            # [추가] 추론 결과를 저장할 리스트
+            detailed_results = []
+            
+            # Group by schedule_file to find best in each context (for summary)
+            scenario_data = {} # key: (schedule_file, timestamp), value: list of windows
+            
+            for index, row_csv in df_csv.iterrows():
+                try:
+                    try:
+                        w = json.loads(row_csv[0])
+                    except Exception:
+                        w = json.loads(row_csv["json_content"])
+                    
+                    s_name = w.get("schedule_file") or w.get("schedule file")
+                    ts = w.get("timestamp")
+                    c_name = w.get("combination")
+                    
+                    # Scenario grouping for summary
+                    key = (s_name, ts)
+                    if key not in scenario_data:
+                        scenario_data[key] = []
+                    scenario_data[key].append(w)
+
+                    # Prediction for this row
+                    s_doc = _find_schedule(sched_index, s_name)
+                    infps_map = _build_infps_lookup(s_doc, c_name) if s_doc else None
+                    
+                    # Ground Truth
+                    y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
+                    y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
+                    actual_score = y1_actual - args.alpha * y2_actual
+
+                    # Prediction
+                    X_dict, _, _ = featurize_window(w, infps_map)
+                    df_X = pd.DataFrame([X_dict])
+                    for c in feats:
+                        if c not in df_X.columns: df_X[c] = 0.0
+                    df_X = df_X[feats]
+                    
+                    dmat = xgb.DMatrix(df_X)
+                    y1_pred = float(b1.predict(dmat)[0])
+                    y2_pred = float(b2.predict(dmat)[0])
+                    pred_score = y1_pred - args.alpha * y2_pred
+                    
+                    detailed_results.append({
+                        "schedule_file": s_name,
+                        "timestamp": ts,
+                        "combination": c_name,
+                        "actual_T_norm": y1_actual,
+                        "actual_D_norm": y2_actual,
+                        "actual_score": actual_score,
+                        "pred_T_norm": y1_pred,
+                        "pred_D_norm": y2_pred,
+                        "pred_score": pred_score,
+                        "diff_score": abs(actual_score - pred_score)
+                    })
+                    
+                except Exception as e:
+                    print(f"[WARN] Predict CSV row load error at index {index}: {e}")
+
+            # CSV 저장
+            out_dir = Path("xgboost_model/prediction_result")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            res_df = pd.DataFrame(detailed_results)
+            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}.csv"
+            res_df.to_csv(csv_out_path, index=False)
+            print(f"Detailed prediction results saved to: {csv_out_path}")
+
+            top1_hits = 0
+            top5_hits = 0
+            score_gaps = []
+            y1_errs = []
+            y2_errs = []
+            total_scenarios = 0
+
+            # summary calculation using grouped scenario_data
+            for (s_name, ts), windows in scenario_data.items():
+                s_doc = _find_schedule(sched_index, s_name)
+                if not s_doc: continue
+                
+                total_scenarios += 1
+                scenario_results = []
+                
+                for w in windows:
+                    c_name = w.get("combination")
+                    infps_map = _build_infps_lookup(s_doc, c_name)
+                    
+                    # Ground Truth
+                    y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
+                    y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
+                    actual_score = y1_actual - args.alpha * y2_actual
+
+                    # Prediction
+                    X_dict, _, _ = featurize_window(w, infps_map)
+                    df_X = pd.DataFrame([X_dict])
+                    for c in feats:
+                        if c not in df_X.columns: df_X[c] = 0.0
+                    df_X = df_X[feats]
+                    
+                    dmat = xgb.DMatrix(df_X)
+                    y1_pred = float(b1.predict(dmat)[0])
+                    y2_pred = float(b2.predict(dmat)[0])
+                    pred_score = y1_pred - args.alpha * y2_pred
+                    
+                    y1_errs.append(abs(y1_actual - y1_pred))
+                    y2_errs.append(abs(y2_actual - y2_pred))
+                    
+                    scenario_results.append({
+                        "combination": c_name,
+                        "actual_score": actual_score,
+                        "pred_score": pred_score
+                    })
+                
+                if not scenario_results: continue
+                
+                # Sort by actual score to find actual best(s)
+                actual_sorted = sorted(scenario_results, key=lambda x: x["actual_score"], reverse=True)
+                max_actual_score = actual_sorted[0]["actual_score"]
+                # [수정] 정답이 여러 개일 수 있으므로 모든 최고점 조합을 찾음
+                actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score"], max_actual_score, rel_tol=1e-7)]
+                
+                actual_best_name = actual_sorted[0]["combination"]
+                actual_best_score = actual_sorted[0]["actual_score"]
+                
+                # Sort by predicted score
+                pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score"], reverse=True)
+                pred_best = pred_sorted[0]
+                pred_best_name = pred_best["combination"]
+                pred_best_actual_score = pred_best["actual_score"]
+                
+                # 1) Check if predicted best is in actual bests (Top-1 Hit)
+                if pred_best_name in actual_best_names:
+                    top1_hits += 1
+
+                # 2) Check if actual best is in top-5 predicted (Top-5 Hit)
+                top5_pred_names = [r["combination"] for r in pred_sorted[:5]]
+                if any(name in top5_pred_names for name in actual_best_names):
+                    top5_hits += 1
+                
+                # 3) Score gap: actual_best_score - predicted_best's_actual_score
+                gap = actual_best_score - pred_best_actual_score
+                score_gaps.append(max(0, gap)) 
+            
+            if total_scenarios > 0:
+                print("--- CSV Prediction Summary ---")
+                print(f"Total Scenarios: {total_scenarios}")
+                print(f"Y1 (Throughput) MAE: {np.mean(y1_errs):.4f}")
+                print(f"Y2 (Drop Rate) MAE: {np.mean(y2_errs):.4f}")
+                print(f"1) Top-1 Hit Ratio: {top1_hits / total_scenarios:.4f} ({top1_hits}/{total_scenarios})")
+                print(f"2) Top-5 Hit Ratio: {top5_hits / total_scenarios:.4f} ({top5_hits}/{total_scenarios})")
+                print(f"3) Avg Score Gap: {np.mean(score_gaps):.4f}")
+            
+            return
+
+        # 기존 로직: schedule_dir 내의 모든 json/yaml 처리
         import glob
         files = sorted(list(Path(args.schedule_dir).glob("*.yaml")) + list(Path(args.schedule_dir).glob("*.json")))
 
@@ -424,7 +702,7 @@ def main():
                 print(f"BEST\t{best[0]}\tpred_score={best[3]:.4f}\t(T_norm={best[1]:.4f}, D_norm={best[2]:.4f})")
 
                 # 결과 파일 저장 (기존 형식 유지)
-                out_dir = Path("xgboost_model/test/performance_results/prediction")
+                out_dir = Path("xgboost_model/prediction_result")
                 out_dir.mkdir(parents=True, exist_ok=True)
                 out_path = out_dir / f"predict_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{p.stem}.json"
 
