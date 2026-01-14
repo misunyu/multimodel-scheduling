@@ -556,11 +556,7 @@ def main():
             # CSV 저장
             out_dir = Path("xgboost_model/prediction_result")
             out_dir.mkdir(parents=True, exist_ok=True)
-            res_df = pd.DataFrame(detailed_results)
-            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}.csv"
-            res_df.to_csv(csv_out_path, index=False)
-            print(f"Detailed prediction results saved to: {csv_out_path}")
-
+            
             top1_hits = 0
             top5_hits = 0
             score_gaps = []
@@ -611,10 +607,8 @@ def main():
                 # Sort by actual score to find actual best(s)
                 actual_sorted = sorted(scenario_results, key=lambda x: x["actual_score"], reverse=True)
                 max_actual_score = actual_sorted[0]["actual_score"]
-                # [수정] 정답이 여러 개일 수 있으므로 모든 최고점 조합을 찾음
                 actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score"], max_actual_score, rel_tol=1e-7)]
                 
-                actual_best_name = actual_sorted[0]["combination"]
                 actual_best_score = actual_sorted[0]["actual_score"]
                 
                 # Sort by predicted score
@@ -632,10 +626,23 @@ def main():
                 if any(name in top5_pred_names for name in actual_best_names):
                     top5_hits += 1
                 
-                # 3) Score gap: actual_best_score - predicted_best's_actual_score
+                # 3) Score gap
                 gap = actual_best_score - pred_best_actual_score
-                score_gaps.append(max(0, gap)) 
+                score_gaps.append(max(0, gap))
+
+            res_df = pd.DataFrame(detailed_results)
+            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}.csv"
             
+            top1_ratio = top1_hits / total_scenarios if total_scenarios > 0 else 0
+            top5_ratio = top5_hits / total_scenarios if total_scenarios > 0 else 0
+            
+            with open(csv_out_path, 'w', encoding='utf-8') as f:
+                f.write(f"# Top-1 Hit Ratio: {top1_ratio:.4f} ({top1_hits}/{total_scenarios})\n")
+                f.write(f"# Top-5 Hit Ratio: {top5_ratio:.4f} ({top5_hits}/{total_scenarios})\n")
+                res_df.to_csv(f, index=False)
+            
+            print(f"Detailed prediction results saved to: {csv_out_path}")
+
             if total_scenarios > 0:
                 print("--- CSV Prediction Summary ---")
                 print(f"Total Scenarios: {total_scenarios}")

@@ -4,7 +4,7 @@ import csv
 import argparse
 from pathlib import Path
 
-def split_dataset(perf_dir_path, schedule_dir_path, ratio=0.8):
+def split_dataset(perf_dir_path, schedule_dir_path, output_dir="xgboost_model/dataset", ratio=0.8, pattern="_x3"):
     perf_dir = Path(perf_dir_path)
     schedule_dir = Path(schedule_dir_path)
     
@@ -39,14 +39,14 @@ def split_dataset(perf_dir_path, schedule_dir_path, ratio=0.8):
                 continue
                 
             data_list = content.get("data", [])
-            is_x3 = "_x3" in p_file.name
+            is_pattern = pattern in p_file.name
 
             for item in data_list:
                 item["schedule_file"] = schedule_file_name
                 entry = {
                     "perf_json": item,
                     "sched_content": sched_content,
-                    "is_x3": is_x3
+                    "is_pattern": is_pattern
                 }
                 all_data.append(entry)
 
@@ -94,27 +94,30 @@ def split_dataset(perf_dir_path, schedule_dir_path, ratio=0.8):
     test_random = random_all[split_idx:]
     
     # Output directory
-    out_dir = Path("xgboost_model/dataset")
+    out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     save_to_csv(train_random, out_dir / "train_random.csv", out_dir / "train_schedules_random.csv")
     save_to_csv(test_random, out_dir / "test_random.csv", out_dir / "test_schedules_random.csv")
     print(f"Random split saved to {out_dir}: {len(train_random)} train, {len(test_random)} test")
 
-    # 2) Pattern 분할 (_x3)
-    train_x3 = [d for d in all_data if not d["is_x3"]]
-    test_x3 = [d for d in all_data if d["is_x3"]]
+    # 2) Pattern 분할
+    train_pattern = [d for d in all_data if not d["is_pattern"]]
+    test_pattern = [d for d in all_data if d["is_pattern"]]
     
-    save_to_csv(train_x3, out_dir / "train_x3.csv", out_dir / "train_schedules_x3.csv")
-    save_to_csv(test_x3, out_dir / "test_x3.csv", out_dir / "test_schedules_x3.csv")
-    print(f"Pattern split saved to {out_dir}: {len(train_x3)} train, {len(test_x3)} test")
+    pattern_name = pattern.strip("_")
+    save_to_csv(train_pattern, out_dir / f"train_{pattern_name}.csv", out_dir / f"train_schedules_{pattern_name}.csv")
+    save_to_csv(test_pattern, out_dir / f"test_{pattern_name}.csv", out_dir / f"test_schedules_{pattern_name}.csv")
+    print(f"Pattern split ({pattern}) saved to {out_dir}: {len(train_pattern)} train, {len(test_pattern)} test")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Split dataset into train and test sets using both random and pattern modes.")
     parser.add_argument("--perf_dir", default="results_recompute", help="Directory containing performance JSON files")
     parser.add_argument("--schedule_dir", default="gen_schedules", help="Directory containing schedule files")
     parser.add_argument("--ratio", type=float, default=0.8, help="Ratio of training data (for random mode)")
+    parser.add_argument("--output_dir", default="xgboost_model/dataset", help="Output directory for CSV files")
+    parser.add_argument("--pattern", default="_x3", help="Pattern to identify test files (e.g., _x3 or _3x)")
     
     args = parser.parse_args()
     
-    split_dataset(args.perf_dir, args.schedule_dir, args.ratio)
+    split_dataset(args.perf_dir, args.schedule_dir, args.output_dir, args.ratio, args.pattern)

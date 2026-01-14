@@ -1,11 +1,9 @@
 import os
 import json
 import glob
+import argparse
 
-def recompute_scores():
-    input_dir = 'results'
-    output_dir = 'results_recompute'
-    
+def recompute_scores(input_dir, output_dir):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
@@ -76,4 +74,9 @@ def recompute_scores():
         print(f"Saved recomputed results to {output_file_path}")
 
 if __name__ == "__main__":
-    recompute_scores()
+    parser = argparse.ArgumentParser(description="Recompute scores for performance results.")
+    parser.add_argument("--input_dir", default="results", help="Input directory containing JSON files")
+    parser.add_argument("--output_dir", default="results_recompute", help="Output directory for recomputed JSON files")
+    
+    args = parser.parse_args()
+    recompute_scores(args.input_dir, args.output_dir)
