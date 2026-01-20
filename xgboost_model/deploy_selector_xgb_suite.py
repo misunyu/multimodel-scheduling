@@ -320,7 +320,7 @@ def _index_schedules_from_csv(csv_path: Path) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, schedule_csv: Optional[Path] = None):
+def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, schedule_csv: Optional[Path] = None, is_x3: bool = False):
     if schedule_csv:
         sched_index = _index_schedules_from_csv(schedule_csv)
     elif schedule_dir:
@@ -339,6 +339,22 @@ def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, 
             else:
                 # Fallback to the first column if no header matches
                 w = json.loads(row[0])
+            
+            # [추가] x3 모델인 경우 모델 개수가 3개 미만이면 제외
+            if is_x3:
+                models_count = 0
+                for k_v, view in w.get("models", {}).items():
+                    k_l = str(k_v).lower()
+                    if not (k_l.startswith("view") or k_l.startswith("headless")): continue
+                    model_name = view.get("model")
+                    exec_dev_raw = view.get("execution")
+                    if not model_name or not exec_dev_raw: continue
+                    exec_dev = _norm_exec(exec_dev_raw)
+                    if exec_dev in ("NPU0", "NPU1"): continue
+                    models_count += 1
+                if models_count < 3:
+                    continue
+
             s_name = w.get("schedule_file") or w.get("schedule file")
             s_doc = _find_schedule(sched_index, s_name)
             c_name = w.get("combination")
@@ -360,7 +376,7 @@ def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, 
     return pd.DataFrame(X_all).fillna(0.0), pd.DataFrame(Y_all), pd.DataFrame(M_all)
 
 
-def build_dataset(perf_dir: Path, schedule_dir: Path):
+def build_dataset(perf_dir: Path, schedule_dir: Path, is_x3: bool = False):
     sched_index = _index_schedules(schedule_dir)
     X_all, Y_all, M_all = [], [], []
 
@@ -368,6 +384,21 @@ def build_dataset(perf_dir: Path, schedule_dir: Path):
         try:
             blob = json.loads(path.read_text(encoding="utf-8"))
             for w in blob.get("data", []):
+                # [추가] x3 모델인 경우 모델 개수가 3개 미만이면 제외
+                if is_x3:
+                    models_count = 0
+                    for k_v, view in w.get("models", {}).items():
+                        k_l = str(k_v).lower()
+                        if not (k_l.startswith("view") or k_l.startswith("headless")): continue
+                        model_name = view.get("model")
+                        exec_dev_raw = view.get("execution")
+                        if not model_name or not exec_dev_raw: continue
+                        exec_dev = _norm_exec(exec_dev_raw)
+                        if exec_dev in ("NPU0", "NPU1"): continue
+                        models_count += 1
+                    if models_count < 3:
+                        continue
+
                 s_name = w.get("schedule file") or w.get("schedule_file")
                 s_doc = _find_schedule(sched_index, s_name)
                 c_name = w.get("combination")
@@ -483,6 +514,7 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "train":
+        is_x3 = "xgb_model_x3" in str(args.model_out)
         if args.perf_csv:
             p_csv = Path(args.perf_csv)
             if not p_csv.exists():
@@ -498,9 +530,9 @@ def main():
                 if alt_s.exists():
                     s_csv = alt_s
                     
-            X, Y, M = build_dataset_from_csv(p_csv, s_dir, s_csv)
+            X, Y, M = build_dataset_from_csv(p_csv, s_dir, s_csv, is_x3=is_x3)
         elif args.perf_dir:
-            X, Y, M = build_dataset(Path(args.perf_dir), Path(args.schedule_dir))
+            X, Y, M = build_dataset(Path(args.perf_dir), Path(args.schedule_dir), is_x3=is_x3)
         else:
             print("Error: Either --perf_dir or --perf_csv must be provided for train command.")
             sys.exit(1)
@@ -509,6 +541,7 @@ def main():
         print("Training Done.")
 
     elif args.cmd == "predict":
+        is_x3 = "xgb_model_x3" in str(args.model_in)
         b1, b2, feats = load_models(Path(args.model_in))
         xgb = _lazy_import_xgb()
 
@@ -550,6 +583,21 @@ def main():
                     ts = w.get("timestamp")
                     c_name = w.get("combination")
                     
+                    # [추가] x3 모델인 경우 모델 개수가 3개 미만이면 제외
+                    if is_x3:
+                        models_count = 0
+                        for k_v, view in w.get("models", {}).items():
+                            k_l = str(k_v).lower()
+                            if not (k_l.startswith("view") or k_l.startswith("headless")): continue
+                            model_name = view.get("model")
+                            exec_dev_raw = view.get("execution")
+                            if not model_name or not exec_dev_raw: continue
+                            exec_dev = _norm_exec(exec_dev_raw)
+                            if exec_dev in ("NPU0", "NPU1"): continue
+                            models_count += 1
+                        if models_count < 3:
+                            continue
+
                     # Scenario grouping for summary
                     key = (s_name, ts)
                     if key not in scenario_data:
@@ -709,6 +757,18 @@ def main():
             if not combos: continue
 
             for name, blob in combos:
+                # [추가] x3 모델인 경우 모델 개수가 3개 미만이면 제외
+                if is_x3:
+                    views = _rows_from_combo_struct(blob)
+                    models_count = 0
+                    for v in views:
+                        dev = _norm_exec(v.get("execution", ""))
+                        if dev in ("NPU0", "NPU1"): continue
+                        if v.get("model"):
+                            models_count += 1
+                    if models_count < 3:
+                        continue
+
                 df = featurize_from_combo(blob)
                 # Feature Align: 학습 때 쓴 피처만 순서대로 추출
                 for c in feats:
