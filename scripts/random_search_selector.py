@@ -87,7 +87,28 @@ def main():
         sched_name = row['schedule_name']
         print(f"Processing schedule: {sched_name}")
         
-        best_comb_name = random_search_best_combination(sched_name, perf_index, num_samples=num_samples)
+        # [수정] 모델 개수가 3개 이상인 데이터만 필터링하도록 random_search_best_combination 수정 필요
+        # 또는 여기서 직접 필터링
+        pure_sched_name = Path(sched_name).name
+        sched_perf = perf_index.get(pure_sched_name, {})
+        
+        # 3개 이상의 모델을 가진 조합만 필터링
+        filtered_sched_perf = {
+            c: data for c, data in sched_perf.items() 
+            if len(data.get('models', {})) >= 3
+        }
+        
+        best_comb_name = None
+        if filtered_sched_perf:
+            available_combs = list(filtered_sched_perf.keys())
+            sampled_combs = random.sample(available_combs, min(len(available_combs), num_samples))
+            
+            max_score = -1.0
+            for comb_name in sampled_combs:
+                score = filtered_sched_perf[comb_name].get("score", 0.0)
+                if score > max_score:
+                    max_score = score
+                    best_comb_name = comb_name
         
         if not best_comb_name:
             print(f"  [LOG] No performance data found for {sched_name}")

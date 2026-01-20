@@ -58,7 +58,7 @@ def main():
     
     print("Loading XGBoost models...")
     try:
-        model, feats = load_models(Path(model_prefix))
+        m1, m2, feats = load_models(Path(model_prefix))
     except Exception as e:
         print(f"Error loading models from {model_prefix}: {e}")
         return
@@ -95,7 +95,9 @@ def main():
                 df_X = df_X[feats]
                 
                 # Predict
-                pred_score = float(model.predict(df_X)[0])
+                y1_pred = float(m1.predict(df_X)[0])
+                y2_pred = float(m2.predict(df_X)[0])
+                pred_score = y1_pred - alpha * y2_pred
                 
                 if pred_score > max_pred_score:
                     max_pred_score = pred_score
@@ -104,6 +106,27 @@ def main():
                 print(f"  [WARN] Error predicting for {comb_name}: {e}")
                 continue
         
+        # Find ACTUAL best combination for this schedule
+        pure_sched_name = Path(sched_name).name
+        # Remove '_x3' or other suffixes if they were added by the prediction script logic
+        # But wait, sched_name from sched_index is what's used in prediction.
+        # Let's see what sched_name looks like.
+        
+        sched_perf = perf_index.get(pure_sched_name, {})
+        if not sched_perf:
+            # Try removing _x3 suffix from pure_sched_name
+            if pure_sched_name.endswith("_x3.yaml"):
+                alt_name = pure_sched_name.replace("_x3.yaml", ".yaml")
+                sched_perf = perf_index.get(alt_name, {})
+        
+        best_actual_comb = None
+        max_actual_score = -float('inf')
+        for comb_name, perf_item in sched_perf.items():
+            actual_score = perf_item.get('score', -float('inf'))
+            if actual_score > max_actual_score:
+                max_actual_score = actual_score
+                best_actual_comb = comb_name
+
         if not best_pred_comb:
             print(f"  [LOG] Could not find any valid combination for {sched_name}")
             results.append({
@@ -117,15 +140,26 @@ def main():
             continue
 
         # Get actual performance for the predicted best combination
-        pure_sched_name = Path(sched_name).name
-        sched_perf = perf_index.get(pure_sched_name, {})
         perf_item = sched_perf.get(best_pred_comb)
+        
+        display_comb = best_pred_comb
+        # Apply coloring: Blue for actual best, Red for predicted best
+        # If both are same, we can combine or use a special color. User asked Blue for actual, Red for predicted.
+        if best_pred_comb == best_actual_comb:
+            # Both are same
+            display_comb = f"<font color='purple'>{best_pred_comb}</font>"
+        else:
+            # Predicted is Red
+            display_comb = f"<font color='red'>{best_pred_comb}</font>"
+            # If the actual best is different, we should probably show it too in blue to satisfy the request.
+            if best_actual_comb:
+                display_comb += f" (Actual: <font color='blue'>{best_actual_comb}</font>)"
         
         if not perf_item:
             print(f"  [LOG] Predicted best combination '{best_pred_comb}' not found in actual results for {pure_sched_name}")
             results.append({
                 'schedule_file': sched_name,
-                'best_combination': best_pred_comb,
+                'best_combination': display_comb,
                 'normalized_throughput': '-',
                 'drop_rate': '-',
                 'score': '-',
@@ -137,7 +171,7 @@ def main():
         models_count = len(perf_item.get('models', {}))
         results.append({
             'schedule_file': sched_name,
-            'best_combination': best_pred_comb,
+            'best_combination': display_comb,
             'normalized_throughput': derived.get('throughput_norm'),
             'drop_rate': derived.get('drop_rate_norm'),
             'score': perf_item.get('score'),

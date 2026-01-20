@@ -320,7 +320,7 @@ def _index_schedules_from_csv(csv_path: Path) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, schedule_csv: Optional[Path] = None, is_x3: bool = False):
+def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, schedule_csv: Optional[Path] = None, is_constrained: bool = False):
     if schedule_csv:
         sched_index = _index_schedules_from_csv(schedule_csv)
     elif schedule_dir:
@@ -340,24 +340,14 @@ def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, 
                 # Fallback to the first column if no header matches
                 w = json.loads(row[0])
             
-            # [추가] x3 모델인 경우 모델 개수가 3개 미만이면 제외
-            if is_x3:
-                models_count = 0
-                for k_v, view in w.get("models", {}).items():
-                    k_l = str(k_v).lower()
-                    if not (k_l.startswith("view") or k_l.startswith("headless")): continue
-                    model_name = view.get("model")
-                    exec_dev_raw = view.get("execution")
-                    if not model_name or not exec_dev_raw: continue
-                    exec_dev = _norm_exec(exec_dev_raw)
-                    if exec_dev in ("NPU0", "NPU1"): continue
-                    models_count += 1
-                if models_count < 3:
-                    continue
-
             s_name = w.get("schedule_file") or w.get("schedule file")
             s_doc = _find_schedule(sched_index, s_name)
             c_name = w.get("combination")
+
+            if is_constrained:
+                models_count = len(w.get("models", {}))
+                if models_count < 3:
+                    continue
 
             infps_map = None
             if s_doc and c_name:
@@ -376,7 +366,7 @@ def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, 
     return pd.DataFrame(X_all).fillna(0.0), pd.DataFrame(Y_all), pd.DataFrame(M_all)
 
 
-def build_dataset(perf_dir: Path, schedule_dir: Path, is_x3: bool = False):
+def build_dataset(perf_dir: Path, schedule_dir: Path, is_constrained: bool = False):
     sched_index = _index_schedules(schedule_dir)
     X_all, Y_all, M_all = [], [], []
 
@@ -384,24 +374,14 @@ def build_dataset(perf_dir: Path, schedule_dir: Path, is_x3: bool = False):
         try:
             blob = json.loads(path.read_text(encoding="utf-8"))
             for w in blob.get("data", []):
-                # [추가] x3 모델인 경우 모델 개수가 3개 미만이면 제외
-                if is_x3:
-                    models_count = 0
-                    for k_v, view in w.get("models", {}).items():
-                        k_l = str(k_v).lower()
-                        if not (k_l.startswith("view") or k_l.startswith("headless")): continue
-                        model_name = view.get("model")
-                        exec_dev_raw = view.get("execution")
-                        if not model_name or not exec_dev_raw: continue
-                        exec_dev = _norm_exec(exec_dev_raw)
-                        if exec_dev in ("NPU0", "NPU1"): continue
-                        models_count += 1
-                    if models_count < 3:
-                        continue
-
                 s_name = w.get("schedule file") or w.get("schedule_file")
                 s_doc = _find_schedule(sched_index, s_name)
                 c_name = w.get("combination")
+
+                if is_constrained:
+                    models_count = len(w.get("models", {}))
+                    if models_count < 3:
+                        continue
 
                 infps_map = None
                 if s_doc and c_name:
@@ -514,7 +494,7 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "train":
-        is_x3 = "xgb_model_x3" in str(args.model_out)
+        is_constrained = "xgb_model_x3" in str(args.model_out) or "xgb_model_random" in str(args.model_out)
         if args.perf_csv:
             p_csv = Path(args.perf_csv)
             if not p_csv.exists():
@@ -530,9 +510,9 @@ def main():
                 if alt_s.exists():
                     s_csv = alt_s
                     
-            X, Y, M = build_dataset_from_csv(p_csv, s_dir, s_csv, is_x3=is_x3)
+            X, Y, M = build_dataset_from_csv(p_csv, s_dir, s_csv, is_constrained=is_constrained)
         elif args.perf_dir:
-            X, Y, M = build_dataset(Path(args.perf_dir), Path(args.schedule_dir), is_x3=is_x3)
+            X, Y, M = build_dataset(Path(args.perf_dir), Path(args.schedule_dir), is_constrained=is_constrained)
         else:
             print("Error: Either --perf_dir or --perf_csv must be provided for train command.")
             sys.exit(1)
@@ -541,7 +521,7 @@ def main():
         print("Training Done.")
 
     elif args.cmd == "predict":
-        is_x3 = "xgb_model_x3" in str(args.model_in)
+        is_constrained = "xgb_model_x3" in str(args.model_in) or "xgb_model_random" in str(args.model_in)
         b1, b2, feats = load_models(Path(args.model_in))
         xgb = _lazy_import_xgb()
 
@@ -579,25 +559,15 @@ def main():
                     else:
                         w = json.loads(row_csv[0])
                     
+                    if is_constrained:
+                        models_count = len(w.get("models", {}))
+                        if models_count < 3:
+                            continue
+
                     s_name = w.get("schedule_file") or w.get("schedule file")
                     ts = w.get("timestamp")
                     c_name = w.get("combination")
                     
-                    # [추가] x3 모델인 경우 모델 개수가 3개 미만이면 제외
-                    if is_x3:
-                        models_count = 0
-                        for k_v, view in w.get("models", {}).items():
-                            k_l = str(k_v).lower()
-                            if not (k_l.startswith("view") or k_l.startswith("headless")): continue
-                            model_name = view.get("model")
-                            exec_dev_raw = view.get("execution")
-                            if not model_name or not exec_dev_raw: continue
-                            exec_dev = _norm_exec(exec_dev_raw)
-                            if exec_dev in ("NPU0", "NPU1"): continue
-                            models_count += 1
-                        if models_count < 3:
-                            continue
-
                     # Scenario grouping for summary
                     key = (s_name, ts)
                     if key not in scenario_data:
@@ -628,13 +598,13 @@ def main():
                         "schedule_file": s_name,
                         "timestamp": ts,
                         "combination": c_name,
-                        "actual_T_norm": y1_actual,
-                        "actual_D_norm": y2_actual,
-                        "actual_score": actual_score,
-                        "pred_T_norm": y1_pred,
-                        "pred_D_norm": y2_pred,
-                        "pred_score": pred_score,
-                        "diff_score": abs(actual_score - pred_score)
+                        "actual_T_norm": round(y1_actual, 4),
+                        "actual_D_norm": round(y2_actual, 4),
+                        "actual_score": round(actual_score, 4),
+                        "pred_T_norm": round(y1_pred, 4),
+                        "pred_D_norm": round(y2_pred, 4),
+                        "pred_score": round(pred_score, 4),
+                        "diff_score": round(abs(actual_score - pred_score), 4)
                     })
                     
                 except Exception as e:
@@ -695,20 +665,31 @@ def main():
                 max_actual_score = actual_sorted[0]["actual_score"]
                 actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score"], max_actual_score, rel_tol=1e-7)]
                 
-                actual_best_score = actual_sorted[0]["actual_score"]
-                
-                # [추가] Oracle (Upper Bound)
-                oracle_best = actual_sorted[0]
-                oracle_best_name = oracle_best["combination"]
-
                 # Sort by predicted score
                 pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score"], reverse=True)
-                pred_best = pred_sorted[0]
-                pred_best_name = pred_best["combination"]
-                pred_best_actual_score = pred_best["actual_score"]
+                max_pred_score = pred_sorted[0]["pred_score"]
+                pred_best_names = [r["combination"] for r in pred_sorted if math.isclose(r["pred_score"], max_pred_score, rel_tol=1e-7)]
+
+                pred_best_name_first = pred_sorted[0]["combination"]
+                pred_best_actual_score = pred_sorted[0]["actual_score"]
+                actual_best_score = actual_sorted[0]["actual_score"]
+                
+                # Apply coloring to detailed_results for this scenario
+                for res in detailed_results:
+                    if res["schedule_file"] == s_name and res["timestamp"] == ts:
+                        c_name = res["combination"]
+                        is_actual_best = c_name in actual_best_names
+                        is_pred_best = c_name in pred_best_names
+                        
+                        if is_actual_best and is_pred_best:
+                            res["combination"] = f"<font color='purple'>{c_name}</font>"
+                        elif is_actual_best:
+                            res["combination"] = f"<font color='blue'>{c_name}</font>"
+                        elif is_pred_best:
+                            res["combination"] = f"<font color='red'>{c_name}</font>"
                 
                 # 1) Check if predicted best is in actual bests (Top-1 Hit)
-                if pred_best_name in actual_best_names:
+                if pred_best_name_first in actual_best_names:
                     top1_hits += 1
 
                 # 2) Check if actual best is in top-5 predicted (Top-5 Hit)
@@ -723,13 +704,10 @@ def main():
             res_df = pd.DataFrame(detailed_results)
             csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}.csv"
             
+            res_df.to_csv(csv_out_path, index=False)
+            
             top1_ratio = top1_hits / total_scenarios if total_scenarios > 0 else 0
             top5_ratio = top5_hits / total_scenarios if total_scenarios > 0 else 0
-            
-            with open(csv_out_path, 'w', encoding='utf-8') as f:
-                f.write(f"# Top-1 Hit Ratio: {top1_ratio:.4f} ({top1_hits}/{total_scenarios})\n")
-                f.write(f"# Top-5 Hit Ratio: {top5_ratio:.4f} ({top5_hits}/{total_scenarios})\n")
-                res_df.to_csv(f, index=False)
             
             print(f"Detailed prediction results saved to: {csv_out_path}")
 
@@ -757,18 +735,6 @@ def main():
             if not combos: continue
 
             for name, blob in combos:
-                # [추가] x3 모델인 경우 모델 개수가 3개 미만이면 제외
-                if is_x3:
-                    views = _rows_from_combo_struct(blob)
-                    models_count = 0
-                    for v in views:
-                        dev = _norm_exec(v.get("execution", ""))
-                        if dev in ("NPU0", "NPU1"): continue
-                        if v.get("model"):
-                            models_count += 1
-                    if models_count < 3:
-                        continue
-
                 df = featurize_from_combo(blob)
                 # Feature Align: 학습 때 쓴 피처만 순서대로 추출
                 for c in feats:
