@@ -70,8 +70,11 @@ def split_dataset(perf_dir_path, schedule_dir_path, output_dir="xgboost_model/da
         # Performance data CSV
         with open(perf_filename, 'w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
+            writer.writerow(["schedule_file", "combination", "json_content"])
             for item in data_list:
-                writer.writerow([json.dumps(item["perf_json"])])
+                s_file = item["perf_json"].get("schedule_file", "")
+                c_name = item["perf_json"].get("combination", "")
+                writer.writerow([s_file, c_name, json.dumps(item["perf_json"])])
         
         # Schedule data CSV
         unique_schedules = {}

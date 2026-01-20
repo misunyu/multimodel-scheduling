@@ -3,23 +3,23 @@
 """
 [Train]
  1) Using directory:
-    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./results_recompute --schedule_dir ./gen_schedules --model_out ./xgboost_model/artifacts/xgb_model
+    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./results_recompute --schedule_dir ./gen_schedules --model_out ./xgboost_model/artifacts/gpu/xgb_model
 
  2) Using CSV (Random split):
-    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_random.csv --schedule_csv train_schedules_random.csv --model_out ./xgboost_model/artifacts/xgb_model_random
+    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_random.csv --schedule_csv train_schedules_random.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_random
 
  3) Using CSV (Pattern x3 split):
-    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/xgb_model_x3
+    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_x3
 
 [Predict / Validate]
  1) Predict for new schedules (Top-K output):
-    python ./xgboost_model/deploy_selector_xgb_suite.py predict --schedule_dir ./gen_schedules --model_in ./xgboost_model/artifacts/xgb_model_random --topk 5 --alpha 0.2
+    python ./xgboost_model/deploy_selector_xgb_suite.py predict --schedule_dir ./gen_schedules --model_in ./xgboost_model/artifacts/gpu/xgb_model_random --topk 5 --alpha 0.2
 
  2) Validate with test CSV (Random split):
-    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_random.csv --schedule_csv test_schedules_random.csv --model_in ./xgboost_model/artifacts/xgb_model_random --alpha 0.2
+    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_random.csv --schedule_csv test_schedules_random.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_random --alpha 0.2
 
  3) Validate with test CSV (Pattern x3 split):
-    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_x3.csv --schedule_csv test_schedules_x3.csv --model_in ./xgboost_model/artifacts/xgb_model_x3 --alpha 0.2
+    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_x3.csv --schedule_csv test_schedules_x3.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_x3 --alpha 0.2
 """
 
 import hashlib
@@ -330,15 +330,15 @@ def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, 
 
     X_all, Y_all, M_all = [], [], []
 
-    df_csv = pd.read_csv(csv_path, header=None)
+    df_csv = pd.read_csv(csv_path)
     for _, row in df_csv.iterrows():
         try:
-            # Try to load as JSON string from the first column
-            try:
-                w = json.loads(row[0])
-            except Exception:
-                # If that fails, maybe it has a header 'json_content'
+            # Try to load 'json_content' column
+            if "json_content" in df_csv.columns:
                 w = json.loads(row["json_content"])
+            else:
+                # Fallback to the first column if no header matches
+                w = json.loads(row[0])
             s_name = w.get("schedule_file") or w.get("schedule file")
             s_doc = _find_schedule(sched_index, s_name)
             c_name = w.get("combination")
@@ -391,30 +391,69 @@ def build_dataset(perf_dir: Path, schedule_dir: Path):
 
 def train_two_targets(X, Y, prefix):
     xgb = _lazy_import_xgb()
-    # 컬럼 순서 고정 (매우 중요)
+    from sklearn.model_selection import train_test_split
+
+    # 컬럼 순서 고정
     cols = sorted(list(X.columns))
     X = X[cols]
 
-    params = {"objective": "reg:squarederror", "max_depth": 6, "eta": 0.1, "seed": 42}
+    # Hyperparameters
+    params = {
+        "n_estimators": 10000,
+        "max_depth": 8,
+        "learning_rate": 0.005,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "n_jobs": -1,
+        "random_state": 42,
+        "objective": "reg:squarederror",
+        "early_stopping_rounds": 50
+    }
 
-    # Train Y1
-    bst1 = xgb.train(params, xgb.DMatrix(X, label=Y["y1"]), num_boost_round=200)
-    bst1.save_model(str(prefix) + "_y1.json")
+    # Split for Early Stopping (10%)
+    X_train, X_val, Y_train, Y_val = train_test_split(X, Y, test_size=0.1, random_state=42)
 
-    # Train Y2
-    bst2 = xgb.train(params, xgb.DMatrix(X, label=Y["y2"]), num_boost_round=200)
-    bst2.save_model(str(prefix) + "_y2.json")
+    print(f"Training with {len(X_train)} samples, validating with {len(X_val)} samples.")
 
-    # Feature 이름 저장 (추론 시 정렬을 위해)
+    # 1. Train Throughput Model
+    model_throughput = xgb.XGBRegressor(**params)
+    model_throughput.fit(
+        X_train, Y_train["y1"],
+        eval_set=[(X_val, Y_val["y1"])],
+        verbose=100
+    )
+    model_throughput.save_model(str(prefix) + "_y1.json")
+
+    # 2. Train Drop Rate Model with Weights
+    weights_train = Y_train["y2"].apply(lambda x: 10.0 if x > 0.01 else 1.0).values
+    weights_val = Y_val["y2"].apply(lambda x: 10.0 if x > 0.01 else 1.0).values
+    
+    model_drop_rate = xgb.XGBRegressor(**params)
+    model_drop_rate.fit(
+        X_train, Y_train["y2"],
+        sample_weight=weights_train,
+        eval_set=[(X_val, Y_val["y2"])],
+        sample_weight_eval_set=[weights_val],
+        verbose=100
+    )
+    model_drop_rate.save_model(str(prefix) + "_y2.json")
+
+    # Feature 이름 저장
     Path(str(prefix) + "_features.json").write_text(json.dumps(cols))
 
 
 def load_models(prefix):
     xgb = _lazy_import_xgb()
-    b1 = xgb.Booster(model_file=str(prefix) + "_y1.json")
-    b2 = xgb.Booster(model_file=str(prefix) + "_y2.json")
+    
+    # XGBRegressor로 로드 (scikit-learn interface 유지)
+    m1 = xgb.XGBRegressor()
+    m1.load_model(str(prefix) + "_y1.json")
+    
+    m2 = xgb.XGBRegressor()
+    m2.load_model(str(prefix) + "_y2.json")
+    
     cols = json.loads(Path(str(prefix) + "_features.json").read_text())
-    return b1, b2, cols
+    return m1, m2, cols
 
 
 # ---------- Main ----------
@@ -436,6 +475,7 @@ def main():
     pr.add_argument("--schedule_csv")
     pr.add_argument("--perf_csv")
     pr.add_argument("--model_in", required=True)
+    pr.add_argument("--out_dir", default="xgboost_model/prediction_result")
     pr.add_argument("--alpha", type=float, default=0.2)
     pr.add_argument("--topk", type=int, default=5)
     pr.add_argument("--repeats", type=int, default=1)
@@ -491,7 +531,7 @@ def main():
             else:
                 sched_index = _index_schedules(Path(args.schedule_dir))
             
-            df_csv = pd.read_csv(p_csv_path, header=None)
+            df_csv = pd.read_csv(p_csv_path)
             
             # [추가] 추론 결과를 저장할 리스트
             detailed_results = []
@@ -501,10 +541,10 @@ def main():
             
             for index, row_csv in df_csv.iterrows():
                 try:
-                    try:
-                        w = json.loads(row_csv[0])
-                    except Exception:
+                    if "json_content" in df_csv.columns:
                         w = json.loads(row_csv["json_content"])
+                    else:
+                        w = json.loads(row_csv[0])
                     
                     s_name = w.get("schedule_file") or w.get("schedule file")
                     ts = w.get("timestamp")
@@ -532,9 +572,8 @@ def main():
                         if c not in df_X.columns: df_X[c] = 0.0
                     df_X = df_X[feats]
                     
-                    dmat = xgb.DMatrix(df_X)
-                    y1_pred = float(b1.predict(dmat)[0])
-                    y2_pred = float(b2.predict(dmat)[0])
+                    y1_pred = float(b1.predict(df_X)[0])
+                    y2_pred = float(b2.predict(df_X)[0])
                     pred_score = y1_pred - args.alpha * y2_pred
                     
                     detailed_results.append({
@@ -554,7 +593,7 @@ def main():
                     print(f"[WARN] Predict CSV row load error at index {index}: {e}")
 
             # CSV 저장
-            out_dir = Path("xgboost_model/prediction_result")
+            out_dir = Path(args.out_dir)
             out_dir.mkdir(parents=True, exist_ok=True)
             
             top1_hits = 0
@@ -588,9 +627,8 @@ def main():
                         if c not in df_X.columns: df_X[c] = 0.0
                     df_X = df_X[feats]
                     
-                    dmat = xgb.DMatrix(df_X)
-                    y1_pred = float(b1.predict(dmat)[0])
-                    y2_pred = float(b2.predict(dmat)[0])
+                    y1_pred = float(b1.predict(df_X)[0])
+                    y2_pred = float(b2.predict(df_X)[0])
                     pred_score = y1_pred - args.alpha * y2_pred
                     
                     y1_errs.append(abs(y1_actual - y1_pred))
@@ -611,6 +649,10 @@ def main():
                 
                 actual_best_score = actual_sorted[0]["actual_score"]
                 
+                # [추가] Oracle (Upper Bound)
+                oracle_best = actual_sorted[0]
+                oracle_best_name = oracle_best["combination"]
+
                 # Sort by predicted score
                 pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score"], reverse=True)
                 pred_best = pred_sorted[0]
@@ -673,9 +715,8 @@ def main():
                     if c not in df.columns: df[c] = 0.0
                 df = df[feats]
 
-                dmat = xgb.DMatrix(df)
-                y1 = float(b1.predict(dmat)[0])
-                y2 = float(b2.predict(dmat)[0])
+                y1 = float(b1.predict(df)[0])
+                y2 = float(b2.predict(df)[0])
                 score = y1 - args.alpha * y2
                 
                 # [수정] 모든 수치를 소수점 4자리로 반올림하여 일관성 유지
@@ -709,7 +750,7 @@ def main():
                 print(f"BEST\t{best[0]}\tpred_score={best[3]:.4f}\t(T_norm={best[1]:.4f}, D_norm={best[2]:.4f})")
 
                 # 결과 파일 저장 (기존 형식 유지)
-                out_dir = Path("xgboost_model/prediction_result")
+                out_dir = Path(args.out_dir)
                 out_dir.mkdir(parents=True, exist_ok=True)
                 out_path = out_dir / f"predict_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{p.stem}.json"
 
