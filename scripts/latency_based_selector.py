@@ -203,8 +203,27 @@ def main():
         # sched_name은 보통 경로를 포함할 수 있으므로 파일명만 추출
         pure_sched_name = Path(sched_name).name
         sched_perf = perf_index.get(pure_sched_name, {})
+
+        # Find ACTUAL best combination for this schedule in results_recompute
+        best_actual_comb = None
+        max_actual_score = -float('inf')
+        for c_name, p_item in sched_perf.items():
+            actual_score = p_item.get('score', -float('inf'))
+            if actual_score > max_actual_score:
+                max_actual_score = actual_score
+                best_actual_comb = c_name
+
         perf_item = sched_perf.get(best_comb_name)
         
+        display_comb = best_comb_name
+        # Apply coloring: Purple for match, Red for chosen, Blue for actual
+        if best_comb_name == best_actual_comb:
+            display_comb = f"<font color='purple'>{best_comb_name}</font>"
+        else:
+            display_comb = f"<font color='red'>{best_comb_name}</font>"
+            if best_actual_comb:
+                display_comb += f" (Actual: <font color='blue'>{best_actual_comb}</font>)"
+
         if not perf_item:
             print(f"  [LOG] NO MATCH in results_recompute for schedule='{pure_sched_name}' and combination='{best_comb_name}'")
             # 디버깅을 위해 해당 스케줄 파일의 다른 combination이 있는지 확인
@@ -216,7 +235,7 @@ def main():
 
             results.append({
                 'schedule_file': sched_name,
-                'best_combination': best_comb_name,
+                'best_combination': display_comb,
                 'normalized_throughput': '-',
                 'drop_rate': '-',
                 'score': '-',
@@ -229,7 +248,7 @@ def main():
         models_count = len(perf_item.get('models', {}))
         results.append({
             'schedule_file': sched_name,
-            'best_combination': best_comb_name,
+            'best_combination': display_comb,
             'normalized_throughput': derived.get('throughput_norm'),
             'drop_rate': derived.get('drop_rate_norm'),
             'score': perf_item.get('score'),

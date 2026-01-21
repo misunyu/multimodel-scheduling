@@ -87,25 +87,18 @@ def main():
         sched_name = row['schedule_name']
         print(f"Processing schedule: {sched_name}")
         
-        # [수정] 모델 개수가 3개 이상인 데이터만 필터링하도록 random_search_best_combination 수정 필요
-        # 또는 여기서 직접 필터링
+        # [수정] 모든 스케줄에 대해 처리하도록 수정
         pure_sched_name = Path(sched_name).name
         sched_perf = perf_index.get(pure_sched_name, {})
         
-        # 3개 이상의 모델을 가진 조합만 필터링
-        filtered_sched_perf = {
-            c: data for c, data in sched_perf.items() 
-            if len(data.get('models', {})) >= 3
-        }
-        
         best_comb_name = None
-        if filtered_sched_perf:
-            available_combs = list(filtered_sched_perf.keys())
+        if sched_perf:
+            available_combs = list(sched_perf.keys())
             sampled_combs = random.sample(available_combs, min(len(available_combs), num_samples))
             
             max_score = -1.0
             for comb_name in sampled_combs:
-                score = filtered_sched_perf[comb_name].get("score", 0.0)
+                score = sched_perf[comb_name].get("score", 0.0)
                 if score > max_score:
                     max_score = score
                     best_comb_name = comb_name
@@ -124,13 +117,34 @@ def main():
             
         # 성능 데이터 추출
         pure_sched_name = Path(sched_name).name
-        perf_item = perf_index[pure_sched_name][best_comb_name]
+        sched_perf = perf_index.get(pure_sched_name, {})
+        
+        # Find ACTUAL best combination for this schedule in results_recompute
+        best_actual_comb = None
+        max_actual_score = -float('inf')
+        for c_name, p_item in sched_perf.items():
+            actual_score = p_item.get('score', -float('inf'))
+            if actual_score > max_actual_score:
+                max_actual_score = actual_score
+                best_actual_comb = c_name
+
+        perf_item = sched_perf.get(best_comb_name)
+        
+        display_comb = best_comb_name
+        # Apply coloring: Purple for match, Red for chosen, Blue for actual
+        if best_comb_name == best_actual_comb:
+            display_comb = f"<font color='purple'>{best_comb_name}</font>"
+        else:
+            display_comb = f"<font color='red'>{best_comb_name}</font>"
+            if best_actual_comb:
+                display_comb += f" (Actual: <font color='blue'>{best_actual_comb}</font>)"
+
         derived = perf_item.get('derived', {})
         models_count = len(perf_item.get('models', {}))
         
         results.append({
             'schedule_file': sched_name,
-            'best_combination': best_comb_name,
+            'best_combination': display_comb,
             'normalized_throughput': derived.get('throughput_norm'),
             'drop_rate': derived.get('drop_rate_norm'),
             'score': perf_item.get('score'),
