@@ -1,3 +1,4 @@
+import argparse
 import json
 import csv
 import yaml
@@ -6,6 +7,20 @@ import pandas as pd
 import numpy as np
 import math
 import sys
+
+"""
+[Usage Examples]
+1) Run with default settings (Rank mode by default prefix):
+   python scripts/xgb_best_selector.py
+
+2) Run with specific model prefix:
+   python scripts/xgb_best_selector.py --model_prefix xgboost_model/artifacts/gpu/xgb_model_score
+
+3) Run without clipping:
+   python scripts/xgb_best_selector.py --no_clip_pred_score
+
+Note: Default model prefix is xgboost_model/artifacts/gpu/xgb_model_rank.
+"""
 
 # Import functions from deploy_selector_xgb_suite.py
 sys.path.append(str(Path.cwd() / "xgboost_model"))
@@ -50,15 +65,28 @@ def get_performance_index(results_dir):
     return perf_index
 
 def main():
-    results_recompute_dir = "results_recompute"
-    test_schedules_csv = "xgboost_model/dataset/gpu/test_schedules_x3.csv"
-    model_prefix = "xgboost_model/artifacts/gpu/xgb_model_x3"
-    output_csv = "xgb_best_results.csv"
-    alpha = 0.2
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--results_recompute_dir", type=str, default="results_recompute")
+    parser.add_argument("--test_schedules_csv", type=str, default="xgboost_model/dataset/gpu/test_schedules_x3.csv")
+    parser.add_argument("--model_prefix", type=str, default="xgboost_model/artifacts/gpu/xgb_model_rank")
+    parser.add_argument("--output_csv", type=str, default="xgb_best_results.csv")
+    parser.add_argument("--alpha", type=float, default=0.2)
+    parser.add_argument("--no_clip_pred_score", action="store_true", help="Disable prediction score clipping")
+    args_cli = parser.parse_args()
+
+    results_recompute_dir = args_cli.results_recompute_dir
+    test_schedules_csv = args_cli.test_schedules_csv
+    model_prefix = args_cli.model_prefix
+    output_csv = args_cli.output_csv
+    alpha = args_cli.alpha
+    clip_pred_score = not args_cli.no_clip_pred_score
     
-    print("Loading XGBoost models...")
+    print(f"Loading XGBoost models (clip_pred_score={clip_pred_score})...")
     try:
-        m1, m2, feats = load_models(Path(model_prefix))
+        # load_models handles both two_target and score modes
+        b1, b2, feats, mode, model_alpha = load_models(Path(model_prefix))
+        print(f"Loaded mode={mode}, model_prefix={model_prefix}, alpha={alpha}")
+        alpha = model_alpha # Use alpha from model meta
     except Exception as e:
         print(f"Error loading models from {model_prefix}: {e}")
         return
@@ -86,32 +114,61 @@ def main():
         # Store all combinations with their predicted scores
         all_pred_results = []
         
-        # Iterate over all combinations in the schedule
+        # Prepare features for all combinations in this schedule
+        all_combo_feats = []
+        comb_names = []
+        
         for comb_name, combo_blob in sched_doc.items():
             if not isinstance(combo_blob, dict): continue
-            
             try:
-                # Featurize
                 df_X = featurize_from_combo(combo_blob)
+                all_combo_feats.append(df_X.iloc[0].to_dict())
+                comb_names.append(comb_name)
+            except Exception as e:
+                print(f"  [WARN] Error featurizing for {comb_name}: {e}")
+                continue
+
+        if not all_combo_feats:
+            print(f"  [LOG] Could not find any valid combination for {sched_name}")
+            results.append({
+                'schedule_file': sched_name,
+                'best_combination': '-',
+                'normalized_throughput': '-',
+                'drop_rate': '-',
+                'score': '-',
+                'models_count': 0
+            })
+            continue
+
+        # Create a single DataFrame for all combinations and align features
+        df_batch = pd.DataFrame(all_combo_feats)
+        df_batch = df_batch.reindex(columns=feats, fill_value=0.0)
+        
+        # Batch Predict
+        try:
+            if mode == "score":
+                preds = b1.predict(df_batch)
+            elif mode == "rank":
+                preds = b1.predict(df_batch)
+            else:
+                y1_preds = b1.predict(df_batch)
+                y2_preds = b2.predict(df_batch)
+                preds = y1_preds - alpha * y2_preds
+            
+            for i, comb_name in enumerate(comb_names):
+                pred_score = float(preds[i])
                 
-                # Ensure all features are present and in correct order
-                for c in feats:
-                    if c not in df_X.columns:
-                        df_X[c] = 0.0
-                df_X = df_X[feats]
-                
-                # Predict
-                y1_pred = float(m1.predict(df_X)[0])
-                y2_pred = float(m2.predict(df_X)[0])
-                pred_score = y1_pred - alpha * y2_pred
+                # Apply clipping if enabled
+                if clip_pred_score and mode != "rank":
+                    pred_score = max(0.0, min(1.0, pred_score))
                 
                 all_pred_results.append({
                     'combination': comb_name,
                     'pred_score': pred_score
                 })
-            except Exception as e:
-                print(f"  [WARN] Error predicting for {comb_name}: {e}")
-                continue
+        except Exception as e:
+            print(f"  [WARN] Error predicting for schedule {sched_name}: {e}")
+            continue
         
         if not all_pred_results:
             print(f"  [LOG] Could not find any valid combination for {sched_name}")
@@ -127,6 +184,22 @@ def main():
 
         # Sort by predicted score
         all_pred_results.sort(key=lambda x: x['pred_score'], reverse=True)
+        
+        # [Added] Print Top-5 predicted combinations for this schedule
+        print(f"  Top-5 predicted combinations for {sched_name}:")
+        for i, res in enumerate(all_pred_results[:5]):
+            comb = res['combination']
+            p_score = res['pred_score']
+            # Get actual score from perf_index
+            pure_sched_name = Path(sched_name).name
+            sched_perf = perf_index.get(pure_sched_name, {})
+            if not sched_perf and pure_sched_name.endswith("_x3.yaml"):
+                alt_name = pure_sched_name.replace("_x3.yaml", ".yaml")
+                sched_perf = perf_index.get(alt_name, {})
+            
+            a_score = sched_perf.get(comb, {}).get('score', -1.0)
+            print(f"    {i+1}. {comb}: Pred={p_score:.4f}, Actual={a_score:.4f}")
+
         max_pred_score = all_pred_results[0]['pred_score']
         
         # Get all predicted best combinations (those with max score)
@@ -211,8 +284,8 @@ def main():
         results.append({
             'schedule_file': sched_name,
             'best_combination': display_comb,
-            'normalized_throughput': derived.get('throughput_norm'),
-            'drop_rate': derived.get('drop_rate_norm'),
+            'normalized_throughput': derived.get('throughput_norm') if mode not in ("score", "rank") else "-",
+            'drop_rate': derived.get('drop_rate_norm') if mode not in ("score", "rank") else "-",
             'score': perf_item.get('score'),
             'models_count': models_count
         })

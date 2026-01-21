@@ -2,14 +2,20 @@
 # -*- coding: utf-8 -*-
 """
 [Train]
- 1) Using directory:
+ 1) Using directory (two_target):
     python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./results_recompute --schedule_dir ./gen_schedules --model_out ./xgboost_model/artifacts/gpu/xgb_model
 
- 2) Using CSV (Random split):
+ 2) Using CSV (two_target, Random split):
     python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_random.csv --schedule_csv train_schedules_random.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_random
 
- 3) Using CSV (Pattern x3 split):
+ 3) Using CSV (two_target, Pattern x3 split):
     python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_x3
+
+ 4) Using Score Mode (1-target regression):
+    python ./xgboost_model/deploy_selector_xgb_suite.py train --train_mode score --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_score --alpha 0.2
+
+ 5) Using Rank Mode (Learning-to-Rank):
+    python ./xgboost_model/deploy_selector_xgb_suite.py train --train_mode rank --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_rank --alpha 0.2
 
 [Predict / Validate]
  1) Predict for new schedules (Top-K output):
@@ -20,6 +26,9 @@
 
  3) Validate with test CSV (Pattern x3 split):
     python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_x3.csv --schedule_csv test_schedules_x3.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_x3 --alpha 0.2
+
+ 4) Validate with Score/Rank model:
+    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_x3.csv --schedule_csv test_schedules_x3.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_score --alpha 0.2
 """
 
 import hashlib
@@ -34,6 +43,9 @@ from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 try:
     import yaml
@@ -43,7 +55,8 @@ except Exception:
 # ---------- Constants ----------
 WINDOW_SEC = 30.0
 ASSUME_WAIT_MS = 0.0
-MODEL_HASH_BUCKETS = 20  # 모델 이름을 식별하기 위한 해싱 버킷 크기
+MODEL_HASH_BUCKETS = 128  # 모델 이름을 식별하기 위한 해싱 버킷 크기
+PAIR_HASH_BUCKETS = 512
 
 
 def _lazy_import_xgb():
@@ -183,17 +196,46 @@ def _get_model_features(model_name: str) -> Dict[str, float]:
 
     h_val = fingerprint % MODEL_HASH_BUCKETS
 
-    for i in range(MODEL_HASH_BUCKETS):
-        feats[f"model_hash_{i}"] = 1.0 if i == h_val else 0.0
+    feats[f"model_hash_{h_val}"] = 1.0
     return feats
 
 
+def _pair_bucket(h1: int, h2: int, dev: str) -> int:
+    a, b = sorted([h1, h2])
+    key = f"{a}_{b}_{dev}"
+    return int(hashlib.md5(key.encode("utf-8")).hexdigest(), 16) % PAIR_HASH_BUCKETS
+
+
 # ---------- Feature Engineering (Fixed) ----------
+
+def get_group_id(window: Dict[str, Any]) -> str:
+    """
+    Generate a stable group ID for ranking.
+    Workloads from the same schedule file and with the same model composition
+    should be ranked against each other.
+    """
+    s_name = window.get("schedule_file") or window.get("schedule file") or "unknown"
+    models_blob = window.get("models", {})
+    model_list = sorted([str(v.get("model", "")) for v in models_blob.values() if v.get("model")])
+    model_composition = ",".join(model_list)
+    
+    # Include input rate to distinguish scenarios with same models but different rates
+    # Input rate is often stored in 'input_fps' or can be derived from 'infps' of models
+    rates = []
+    for v in models_blob.values():
+        r = v.get("infps") or v.get("intps") or 0.0
+        rates.append(str(r))
+    rate_str = ",".join(sorted(rates))
+    
+    return f"{s_name}_{model_composition}_{rate_str}"
+
 
 def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
     Dict[str, float], Tuple[float, float], Dict[str, Any]]:
     models = window.get("models", {})
     per_view_rows = []
+    cpu_items = []
+    gpu_items = []
 
     for k, view in models.items():
         k_l = str(k).lower()
@@ -211,17 +253,33 @@ def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
         # [FIX 1] 실제 측정값(throughput_fps 등)을 입력 피처에서 제거함!
 
         # [FIX 2] 모델 식별 정보 추가
-        row.update(_get_model_features(model_name))
+        model_feats = _get_model_features(model_name)
+        row.update(model_feats)
 
         # Device Flags
-        row["view.exec_cpu"] = 1.0 if exec_dev == "CPU" else 0.0
-        row["view.exec_gpu"] = 1.0 if exec_dev == "GPU" else 0.0
+        exec_cpu = 1.0 if exec_dev == "CPU" else 0.0
+        exec_gpu = 1.0 if exec_dev == "GPU" else 0.0
+
+        # [NEW] 결합 피처 (model_hash * device)
+        # Sparse generation: only create features for the actual hash bucket
+        h_val = int(hashlib.md5(model_name.lower().encode("utf-8")).hexdigest(), 16) % MODEL_HASH_BUCKETS
+        row[f"model_hash_{h_val}_on_cpu"] = 1.0 * exec_cpu
+        row[f"model_hash_{h_val}_on_gpu"] = 1.0 * exec_gpu
+
+        row["view.exec_cpu"] = exec_cpu
+        row["view.exec_gpu"] = exec_gpu
 
         # Planned FPS (Demand)
         infps_val = 0.0
         if infps_map:
             infps_val = float(infps_map.get((model_name, exec_dev), 0.0))
+        
+        if exec_dev == "CPU": cpu_items.append((h_val, infps_val))
+        if exec_dev == "GPU": gpu_items.append((h_val, infps_val))
+
         row["view.infps"] = infps_val
+        row["view.infps_on_cpu"] = infps_val * exec_cpu
+        row["view.infps_on_gpu"] = infps_val * exec_gpu
 
         per_view_rows.append(row)
 
@@ -236,6 +294,23 @@ def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
             for col, val in s.items():
                 X[f"views.{agg_name}.{col}"] = float(val)
         X["views.count.views"] = float(len(df))
+
+        # Add pairwise features directly into X
+        for i in range(len(cpu_items)):
+            for j in range(i + 1, len(cpu_items)):
+                h1, f1 = cpu_items[i]
+                h2, f2 = cpu_items[j]
+                b = _pair_bucket(h1, h2, "cpu")
+                w = f1 + f2
+                X[f"pairhash_{b}_on_cpu"] = X.get(f"pairhash_{b}_on_cpu", 0.0) + w
+
+        for i in range(len(gpu_items)):
+            for j in range(i + 1, len(gpu_items)):
+                h1, f1 = gpu_items[i]
+                h2, f2 = gpu_items[j]
+                b = _pair_bucket(h1, h2, "gpu")
+                w = f1 + f2
+                X[f"pairhash_{b}_on_gpu"] = X.get(f"pairhash_{b}_on_gpu", 0.0) + w
     else:
         X["views.count.views"] = 0.0
 
@@ -253,6 +328,8 @@ def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
 def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
     views = _rows_from_combo_struct(combo_blob)
     rows = []
+    cpu_items = []
+    gpu_items = []
 
     for v in views:
         m = v.get("model")
@@ -273,10 +350,27 @@ def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
 
         r = {}
         # [FIX] 추론 시에도 모델 식별 정보 사용
-        r.update(_get_model_features(m))
-        r["view.exec_cpu"] = 1.0 if dev == "CPU" else 0.0
-        r["view.exec_gpu"] = 1.0 if dev == "GPU" else 0.0
+        model_feats = _get_model_features(m)
+        r.update(model_feats)
+
+        exec_cpu = 1.0 if dev == "CPU" else 0.0
+        exec_gpu = 1.0 if dev == "GPU" else 0.0
+
+        # [NEW] 결합 피처 (model_hash * device)
+        # Sparse generation: only create features for the actual hash bucket
+        h_val = int(hashlib.md5(m.lower().encode("utf-8")).hexdigest(), 16) % MODEL_HASH_BUCKETS
+        r[f"model_hash_{h_val}_on_cpu"] = 1.0 * exec_cpu
+        r[f"model_hash_{h_val}_on_gpu"] = 1.0 * exec_gpu
+
+        if dev == "CPU": cpu_items.append((h_val, fps))
+        if dev == "GPU": gpu_items.append((h_val, fps))
+
+        r["view.exec_cpu"] = exec_cpu
+        r["view.exec_gpu"] = exec_gpu
+
         r["view.infps"] = fps
+        r["view.infps_on_cpu"] = fps * exec_cpu
+        r["view.infps_on_gpu"] = fps * exec_gpu
 
         rows.append(r)
 
@@ -291,6 +385,23 @@ def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
             for col, val in s.items():
                 X[f"views.{agg_name}.{col}"] = float(val)
         X["views.count.views"] = float(len(df))
+
+        # Add pairwise features directly into X
+        for i in range(len(cpu_items)):
+            for j in range(i + 1, len(cpu_items)):
+                h1, f1 = cpu_items[i]
+                h2, f2 = cpu_items[j]
+                b = _pair_bucket(h1, h2, "cpu")
+                w = f1 + f2
+                X[f"pairhash_{b}_on_cpu"] = X.get(f"pairhash_{b}_on_cpu", 0.0) + w
+
+        for i in range(len(gpu_items)):
+            for j in range(i + 1, len(gpu_items)):
+                h1, f1 = gpu_items[i]
+                h2, f2 = gpu_items[j]
+                b = _pair_bucket(h1, h2, "gpu")
+                w = f1 + f2
+                X[f"pairhash_{b}_on_gpu"] = X.get(f"pairhash_{b}_on_gpu", 0.0) + w
     else:
         X["views.count.views"] = 0.0
 
@@ -358,6 +469,7 @@ def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, 
 
             X_all.append(X)
             Y_all.append({"y1": y1, "y2": y2})
+            meta["group_id"] = get_group_id(w)
             M_all.append(meta)
         except Exception as e:
             print(f"[WARN] CSV row error: {e}")
@@ -392,6 +504,7 @@ def build_dataset(perf_dir: Path, schedule_dir: Path, is_constrained: bool = Fal
 
                 X_all.append(X)
                 Y_all.append({"y1": y1, "y2": y2})
+                meta["group_id"] = get_group_id(w)
                 M_all.append(meta)
         except Exception as e:
             print(f"[WARN] {path.name}: {e}")
@@ -400,7 +513,147 @@ def build_dataset(perf_dir: Path, schedule_dir: Path, is_constrained: bool = Fal
     return pd.DataFrame(X_all).fillna(0.0), pd.DataFrame(Y_all), pd.DataFrame(M_all)
 
 
-def train_two_targets(X, Y, prefix):
+def train_score(X, Y, prefix, alpha=0.2):
+    xgb = _lazy_import_xgb()
+    from sklearn.model_selection import train_test_split
+
+    # 컬럼 순서 고정
+    cols = sorted(list(X.columns))
+    X = X[cols]
+
+    # Calculate score target
+    y_score = Y["y1"] - alpha * Y["y2"]
+
+    # Hyperparameters for score mode
+    params = {
+        "n_estimators": 2000,
+        "learning_rate": 0.03,
+        "max_depth": 6,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_alpha": 0.0,
+        "reg_lambda": 1.0,
+        "min_child_weight": 1,
+        "gamma": 0,
+        "n_jobs": -1,
+        "random_state": 42,
+        "objective": "reg:squarederror",
+        "early_stopping_rounds": 50,
+        "eval_metric": "mae"
+    }
+
+    # Split for Early Stopping (10~20%)
+    X_train, X_val, y_train, y_val = train_test_split(X, y_score, test_size=0.15, random_state=42)
+
+    print(f"Training Score Model with {len(X_train)} samples, validating with {len(X_val)} samples.")
+
+    model = xgb.XGBRegressor(**params)
+    model.fit(
+        X_train, y_train,
+        eval_set=[(X_val, y_val)],
+        verbose=100
+    )
+    
+    model.save_model(str(prefix) + "_score.json")
+    # Meta info
+    meta = {
+        "mode": "score",
+        "alpha": alpha,
+        "features": cols
+    }
+    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta))
+
+
+def train_rank(X, Y, M, prefix, alpha=0.2):
+    xgb = _lazy_import_xgb()
+    
+    # 컬럼 순서 고정
+    cols = sorted(list(X.columns))
+    X = X[cols]
+
+    # Calculate score target for ranking
+    y_score = Y["y1"] - alpha * Y["y2"]
+    
+    df = X.copy()
+    df["y_score"] = y_score
+    df["group_id"] = M["group_id"]
+
+    # [수정] 그룹별 relevance 계산 (0~31)
+    # 각 그룹 내에서 y_score 순위에 따라 0~31로 매핑
+    def compute_group_relevance(group):
+        if len(group) <= 1:
+            group["target"] = 31
+            return group
+        
+        # rank() uses ascending by default, so higher score = higher rank
+        ranks = group["y_score"].rank(method='min', ascending=True) - 1 # 0 to len(group)-1
+        max_rank = ranks.max()
+        if max_rank == 0:
+            group["target"] = 31
+        else:
+            # Linear map to [0, 31]
+            # Use floating point division then round or cast to int
+            group["target"] = (ranks * 31.0 / max_rank).round().astype(int)
+        return group
+
+    df = df.groupby("group_id", group_keys=False).apply(compute_group_relevance)
+    y_relevance = df["target"]
+    
+    # Group-based split to avoid leakage
+    unique_groups = df["group_id"].unique()
+    np.random.seed(42)
+    np.random.shuffle(unique_groups)
+    
+    split_idx = int(len(unique_groups) * 0.85)
+    train_groups = unique_groups[:split_idx]
+    val_groups = unique_groups[split_idx:]
+    
+    df_train = df[df["group_id"].isin(train_groups)].sort_values("group_id")
+    df_val = df[df["group_id"].isin(val_groups)].sort_values("group_id")
+    
+    X_train = df_train[cols]
+    y_train = df_train["target"]
+    g_train = df_train.groupby("group_id").size().values
+    
+    X_val = df_val[cols]
+    y_val = df_val["target"]
+    g_val = df_val.groupby("group_id").size().values
+    
+    print(f"Training Ranker with {len(X_train)} samples ({len(g_train)} groups), "
+          f"validating with {len(X_val)} samples ({len(g_val)} groups).")
+
+    params = {
+        "n_estimators": 2000,
+        "learning_rate": 0.03,
+        "max_depth": 6,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "n_jobs": -1,
+        "random_state": 42,
+        "objective": "rank:pairwise",
+        "early_stopping_rounds": 100,
+    }
+
+    model = xgb.XGBRanker(**params)
+    model.fit(
+        X_train, y_train,
+        group=g_train,
+        eval_set=[(X_val, y_val)],
+        eval_group=[g_val],
+        verbose=100
+    )
+    
+    model.save_model(str(prefix) + "_rank.json")
+    # Meta info
+    meta = {
+        "mode": "rank",
+        "alpha": alpha,
+        "features": cols
+    }
+    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta))
+
+
+def train_two_targets(X, Y, prefix, alpha=0.2):
     xgb = _lazy_import_xgb()
     from sklearn.model_selection import train_test_split
 
@@ -449,22 +702,72 @@ def train_two_targets(X, Y, prefix):
     )
     model_drop_rate.save_model(str(prefix) + "_y2.json")
 
-    # Feature 이름 저장
+    # Meta info
+    meta = {
+        "mode": "two_target",
+        "alpha": alpha,
+        "features": cols
+    }
+    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta))
+    # For backward compatibility
     Path(str(prefix) + "_features.json").write_text(json.dumps(cols))
 
 
 def load_models(prefix):
     xgb = _lazy_import_xgb()
     
-    # XGBRegressor로 로드 (scikit-learn interface 유지)
-    m1 = xgb.XGBRegressor()
-    m1.load_model(str(prefix) + "_y1.json")
+    meta_path = Path(str(prefix) + "_meta.json")
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        mode = meta.get("mode", "two_target")
+        alpha = meta.get("alpha", 0.2)
+        cols = meta.get("features")
+    else:
+        # Legacy mode
+        mode = "two_target"
+        alpha = 0.2
+        cols = json.loads(Path(str(prefix) + "_features.json").read_text())
+
+    if mode == "score":
+        m_score = xgb.XGBRegressor()
+        m_score.load_model(str(prefix) + "_score.json")
+        return m_score, None, cols, mode, alpha
+    elif mode == "rank":
+        m_rank = xgb.XGBRanker()
+        m_rank.load_model(str(prefix) + "_rank.json")
+        return m_rank, None, cols, mode, alpha
+    else:
+        m1 = xgb.XGBRegressor()
+        m1.load_model(str(prefix) + "_y1.json")
+        m2 = xgb.XGBRegressor()
+        m2.load_model(str(prefix) + "_y2.json")
+        return m1, m2, cols, mode, alpha
+
+
+def plot_score_scatter(df: pd.DataFrame, output_path: Path, title: str):
+    """
+    Generate a scatter plot of actual vs predicted scores.
+    """
+    if df.empty:
+        return
+
+    plt.figure(figsize=(8, 8))
+    plt.scatter(df["actual_score"], df["pred_score"], alpha=0.5, color='blue')
     
-    m2 = xgb.XGBRegressor()
-    m2.load_model(str(prefix) + "_y2.json")
+    # 45-degree line
+    max_val = max(df["actual_score"].max(), df["pred_score"].max())
+    min_val = min(df["actual_score"].min(), df["pred_score"].min())
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
     
-    cols = json.loads(Path(str(prefix) + "_features.json").read_text())
-    return m1, m2, cols
+    plt.xlabel("Actual Score")
+    plt.ylabel("Predicted Score")
+    plt.title(title)
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Scatter plot saved to: {output_path}")
 
 
 # ---------- Main ----------
@@ -480,6 +783,10 @@ def main():
     tr.add_argument("--schedule_csv")
     tr.add_argument("--model_out", required=True)
     tr.add_argument("--dump_csv", default="")
+    tr.add_argument("--train_mode", choices=["two_target", "score", "rank"], default="rank")
+    tr.add_argument("--alpha", type=float, default=0.2)
+    tr.add_argument("--clip_pred_score", action="store_true", default=True)
+    tr.add_argument("--no_clip_pred_score", action="store_false", dest="clip_pred_score")
 
     pr = sub.add_parser("predict")
     pr.add_argument("--schedule_dir")
@@ -487,9 +794,11 @@ def main():
     pr.add_argument("--perf_csv")
     pr.add_argument("--model_in", required=True)
     pr.add_argument("--out_dir", default="xgboost_model/prediction_result")
-    pr.add_argument("--alpha", type=float, default=0.2)
+    pr.add_argument("--alpha", type=float, default=None, help="If not set, uses alpha from model meta")
     pr.add_argument("--topk", type=int, default=5)
     pr.add_argument("--repeats", type=int, default=1)
+    pr.add_argument("--clip_pred_score", action="store_true", default=True)
+    pr.add_argument("--no_clip_pred_score", action="store_false", dest="clip_pred_score")
 
     args = ap.parse_args()
 
@@ -517,12 +826,21 @@ def main():
             print("Error: Either --perf_dir or --perf_csv must be provided for train command.")
             sys.exit(1)
         
-        train_two_targets(X, Y, Path(args.model_out))
+        if args.train_mode == "score":
+            train_score(X, Y, Path(args.model_out), alpha=args.alpha)
+        elif args.train_mode == "rank":
+            train_rank(X, Y, M, Path(args.model_out), alpha=args.alpha)
+        else:
+            train_two_targets(X, Y, Path(args.model_out), alpha=args.alpha)
         print("Training Done.")
 
     elif args.cmd == "predict":
         is_constrained = "xgb_model_x3" in str(args.model_in) or "xgb_model_random" in str(args.model_in)
-        b1, b2, feats = load_models(Path(args.model_in))
+        b1, b2, feats, mode, model_alpha = load_models(Path(args.model_in))
+        
+        # Override alpha if provided in CLI
+        alpha = args.alpha if args.alpha is not None else model_alpha
+        
         xgb = _lazy_import_xgb()
 
     # [추가] CSV 파일이 주어지면 해당 파일의 데이터에 대해 예측 수행
@@ -569,7 +887,8 @@ def main():
                     c_name = w.get("combination")
                     
                     # Scenario grouping for summary
-                    key = (s_name, ts)
+                    # Use get_group_id to group by context
+                    key = get_group_id(w)
                     if key not in scenario_data:
                         scenario_data[key] = []
                     scenario_data[key].append(w)
@@ -581,19 +900,35 @@ def main():
                     # Ground Truth
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score = y1_actual - args.alpha * y2_actual
+                    actual_score = y1_actual - alpha * y2_actual
 
                     # Prediction
                     X_dict, _, _ = featurize_window(w, infps_map)
                     df_X = pd.DataFrame([X_dict])
-                    for c in feats:
-                        if c not in df_X.columns: df_X[c] = 0.0
-                    df_X = df_X[feats]
+                    df_X = df_X.reindex(columns=feats, fill_value=0.0)
                     
-                    y1_pred = float(b1.predict(df_X)[0])
-                    y2_pred = float(b2.predict(df_X)[0])
-                    pred_score = y1_pred - args.alpha * y2_pred
+                    if mode == "score":
+                        y1_pred = np.nan
+                        y2_pred = np.nan
+                        # [Modified] Use raw prediction from model b1 without clipping
+                        pred_score = float(b1.predict(df_X)[0])
+                    elif mode == "rank":
+                        y1_pred = np.nan
+                        y2_pred = np.nan
+                        # XGBRanker predict returns scores that represent relative ranking
+                        pred_score = float(b1.predict(df_X)[0])
+                    else:
+                        y1_pred = float(b1.predict(df_X)[0])
+                        y2_pred = float(b2.predict(df_X)[0])
+                        # [Modified] Calculate combined score
+                        pred_score = y1_pred - alpha * y2_pred
                     
+                    # [Modified] Apply clipping only if enabled via --clip_pred_score
+                    # For rank mode, clipping might not make sense as it's relative, 
+                    # but we'll follow the same logic. Usually, Ranker outputs are not in [0,1].
+                    if args.clip_pred_score and mode != "rank":
+                        pred_score = max(0.0, min(1.0, pred_score))
+
                     detailed_results.append({
                         "schedule_file": s_name,
                         "timestamp": ts,
@@ -601,8 +936,8 @@ def main():
                         "actual_T_norm": round(y1_actual, 4),
                         "actual_D_norm": round(y2_actual, 4),
                         "actual_score": round(actual_score, 4),
-                        "pred_T_norm": round(y1_pred, 4),
-                        "pred_D_norm": round(y2_pred, 4),
+                        "pred_T_norm": round(y1_pred, 4) if not np.isnan(y1_pred) else "",
+                        "pred_D_norm": round(y2_pred, 4) if not np.isnan(y2_pred) else "",
                         "pred_score": round(pred_score, 4),
                         "diff_score": round(abs(actual_score - pred_score), 4)
                     })
@@ -622,35 +957,56 @@ def main():
             total_scenarios = 0
 
             # summary calculation using grouped scenario_data
-            for (s_name, ts), windows in scenario_data.items():
-                s_doc = _find_schedule(sched_index, s_name)
-                if not s_doc: continue
+            for group_id, windows in scenario_data.items():
+                # We need a schedule doc to get infps_map for each window
+                # windows might have different schedule_files if they share same models
+                # but usually scenario_data[group_id] will have same schedule_file per group_id
+                # as per get_group_id implementation.
                 
                 total_scenarios += 1
                 scenario_results = []
                 
                 for w in windows:
+                    s_name = w.get("schedule_file") or w.get("schedule file")
+                    s_doc = _find_schedule(sched_index, s_name)
+                    if not s_doc: continue
+                    
                     c_name = w.get("combination")
                     infps_map = _build_infps_lookup(s_doc, c_name)
                     
                     # Ground Truth
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score = y1_actual - args.alpha * y2_actual
+                    actual_score = y1_actual - alpha * y2_actual
 
                     # Prediction
                     X_dict, _, _ = featurize_window(w, infps_map)
                     df_X = pd.DataFrame([X_dict])
-                    for c in feats:
-                        if c not in df_X.columns: df_X[c] = 0.0
-                    df_X = df_X[feats]
+                    df_X = df_X.reindex(columns=feats, fill_value=0.0)
                     
-                    y1_pred = float(b1.predict(df_X)[0])
-                    y2_pred = float(b2.predict(df_X)[0])
-                    pred_score = y1_pred - args.alpha * y2_pred
+                    if mode == "score":
+                        y1_pred = np.nan
+                        y2_pred = np.nan
+                        # [Modified] Use raw prediction from model b1
+                        pred_score = float(b1.predict(df_X)[0])
+                    elif mode == "rank":
+                        y1_pred = np.nan
+                        y2_pred = np.nan
+                        pred_score = float(b1.predict(df_X)[0])
+                    else:
+                        y1_pred = float(b1.predict(df_X)[0])
+                        y2_pred = float(b2.predict(df_X)[0])
+                        # [Modified] Combined score
+                        pred_score = y1_pred - alpha * y2_pred
                     
-                    y1_errs.append(abs(y1_actual - y1_pred))
-                    y2_errs.append(abs(y2_actual - y2_pred))
+                    # [Modified] Clipping controlled by --clip_pred_score
+                    if args.clip_pred_score and mode != "rank":
+                        pred_score = max(0.0, min(1.0, pred_score))
+                    
+                    if not np.isnan(y1_pred):
+                        y1_errs.append(abs(y1_actual - y1_pred))
+                    if not np.isnan(y2_pred):
+                        y2_errs.append(abs(y2_actual - y2_pred))
                     
                     scenario_results.append({
                         "combination": c_name,
@@ -706,6 +1062,11 @@ def main():
             
             res_df.to_csv(csv_out_path, index=False)
             
+            # [Added] Score scatter plot for score mode
+            if mode == "score":
+                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}.pdf"
+                plot_score_scatter(res_df, pdf_out_path, f"Score Prediction: Actual vs Predicted (alpha={alpha})")
+
             top1_ratio = top1_hits / total_scenarios if total_scenarios > 0 else 0
             top5_ratio = top5_hits / total_scenarios if total_scenarios > 0 else 0
             
@@ -714,8 +1075,10 @@ def main():
             if total_scenarios > 0:
                 print("--- CSV Prediction Summary ---")
                 print(f"Total Scenarios: {total_scenarios}")
-                print(f"Y1 (Throughput) MAE: {np.mean(y1_errs):.4f}")
-                print(f"Y2 (Drop Rate) MAE: {np.mean(y2_errs):.4f}")
+                if y1_errs:
+                    print(f"Y1 (Throughput) MAE: {np.mean(y1_errs):.4f}")
+                if y2_errs:
+                    print(f"Y2 (Drop Rate) MAE: {np.mean(y2_errs):.4f}")
                 print(f"1) Top-1 Hit Ratio: {top1_hits / total_scenarios:.4f} ({top1_hits}/{total_scenarios})")
                 print(f"2) Top-5 Hit Ratio: {top5_hits / total_scenarios:.4f} ({top5_hits}/{total_scenarios})")
                 print(f"3) Avg Score Gap: {np.mean(score_gaps):.4f}")
@@ -741,13 +1104,28 @@ def main():
                     if c not in df.columns: df[c] = 0.0
                 df = df[feats]
 
-                y1 = float(b1.predict(df)[0])
-                y2 = float(b2.predict(df)[0])
-                score = y1 - args.alpha * y2
+                if mode == "score":
+                    y1 = np.nan
+                    y2 = np.nan
+                    # [Modified] Raw prediction
+                    score = float(b1.predict(df)[0])
+                elif mode == "rank":
+                    y1 = np.nan
+                    y2 = np.nan
+                    score = float(b1.predict(df)[0])
+                else:
+                    y1 = float(b1.predict(df)[0])
+                    y2 = float(b2.predict(df)[0])
+                    # [Modified] Combined score
+                    score = y1 - alpha * y2
                 
+                # [Modified] Clipping controlled by --clip_pred_score
+                if args.clip_pred_score and mode != "rank":
+                    score = max(0.0, min(1.0, score))
+
                 # [수정] 모든 수치를 소수점 4자리로 반올림하여 일관성 유지
-                y1 = round(y1, 4)
-                y2 = round(y2, 4)
+                if not np.isnan(y1): y1 = round(y1, 4)
+                if not np.isnan(y2): y2 = round(y2, 4)
                 score = round(score, 4)
                 
                 results.append((name, y1, y2, score))
@@ -770,10 +1148,14 @@ def main():
                 print(f"TOP-{actual_topk}")
                 for rank, r in enumerate(top_items, start=1):
                     name, y1, y2, score = r
-                    print(f"{rank}\t{name}\tpred_score={score:.4f}\t(T_norm={y1:.4f}, D_norm={y2:.4f})")
+                    y1_str = f"{y1:.4f}" if not np.isnan(y1) else "NaN"
+                    y2_str = f"{y2:.4f}" if not np.isnan(y2) else "NaN"
+                    print(f"{rank}\t{name}\tpred_score={score:.4f}\t(T_norm={y1_str}, D_norm={y2_str})")
 
                 best = top_items[0]
-                print(f"BEST\t{best[0]}\tpred_score={best[3]:.4f}\t(T_norm={best[1]:.4f}, D_norm={best[2]:.4f})")
+                best_y1_str = f"{best[1]:.4f}" if not np.isnan(best[1]) else "NaN"
+                best_y2_str = f"{best[2]:.4f}" if not np.isnan(best[2]) else "NaN"
+                print(f"BEST\t{best[0]}\tpred_score={best[3]:.4f}\t(T_norm={best_y1_str}, D_norm={best_y2_str})")
 
                 # 결과 파일 저장 (기존 형식 유지)
                 out_dir = Path(args.out_dir)
@@ -794,8 +1176,8 @@ def main():
                         "combination": r[0],
                         "score": r[3],
                         "derived": {
-                            "throughput_norm": r[1],
-                            "drop_rate_norm": r[2]
+                            "throughput_norm": r[1] if not np.isnan(r[1]) else None,
+                            "drop_rate_norm": r[2] if not np.isnan(r[2]) else None
                         }
                     })
                 with out_path.open("w") as f:
@@ -804,3 +1186,56 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+# ---------- Usage Examples ----------
+
+1) two_target 학습:
+    python xgboost_model/deploy_selector_xgb_suite.py train \
+        --perf_csv xgboost_model/dataset/gpu/train_x3.csv \
+        --schedule_csv xgboost_model/dataset/gpu/train_schedules_x3.csv \
+        --model_out xgb_model_two_target \
+        --alpha 0.2
+
+2) score 학습 (1개 모델):
+    python xgboost_model/deploy_selector_xgb_suite.py train \
+        --train_mode score \
+        --perf_csv xgboost_model/dataset/gpu/train_x3.csv \
+        --schedule_csv xgboost_model/dataset/gpu/train_schedules_x3.csv \
+        --model_out xgb_model_score \
+        --alpha 0.2
+
+3) score 모델로 테스트 평가:
+    python xgboost_model/deploy_selector_xgb_suite.py predict \
+        --model_in xgb_model_score \
+        --perf_csv xgboost_model/dataset/gpu/test_x3.csv \
+        --schedule_csv xgboost_model/dataset/gpu/test_schedules_x3.csv \
+        --alpha 0.2 \
+        --out_dir out_score
+
+4) rank 학습 (Pairwise Ranking):
+    python xgboost_model/deploy_selector_xgb_suite.py train \
+        --train_mode rank \
+        --perf_csv xgboost_model/dataset/gpu/train_x3.csv \
+        --schedule_csv xgboost_model/dataset/gpu/train_schedules_x3.csv \
+        --model_out xgb_model_rank \
+        --alpha 0.2
+
+5) rank 모델로 테스트 평가:
+    python xgboost_model/deploy_selector_xgb_suite.py predict \
+        --model_in xgb_model_rank \
+        --perf_csv xgboost_model/dataset/gpu/test_x3.csv \
+        --schedule_csv xgboost_model/dataset/gpu/test_schedules_x3.csv \
+        --alpha 0.2 \
+        --out_dir out_rank
+
+# ---------- Sanity Check ----------
+수정 후 아래 명령어로 정상 작동 여부를 확인할 수 있습니다:
+(a) score 모델 학습: 
+    python xgboost_model/deploy_selector_xgb_suite.py train --train_mode score --perf_csv xgboost_model/dataset/gpu/train_x3.csv --schedule_csv xgboost_model/dataset/gpu/train_schedules_x3.csv --model_out xgb_sanity --alpha 0.2
+(b) predict 실행:
+    python xgboost_model/deploy_selector_xgb_suite.py predict --model_in xgb_sanity --perf_csv xgboost_model/dataset/gpu/test_x3.csv --schedule_csv xgboost_model/dataset/gpu/test_schedules_x3.csv --alpha 0.2
+(c) 결과 확인:
+    - out_dir (기본 xgboost_model/prediction_result)에 prediction_result_test_x3.csv 생성 확인
+    - 터미널에 "Total Scenarios", "Top-1 Hit Ratio", "Avg Score Gap" 출력 확인
+"""
