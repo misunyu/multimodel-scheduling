@@ -182,6 +182,13 @@ def main():
     
     results = []
     
+    top1_hits = 0
+    top5_hits = 0
+    top1_hits_ge3 = 0
+    top5_hits_ge3 = 0
+    total_valid_schedules = 0
+    total_valid_schedules_ge3 = 0
+    
     # test_schedules_random.csv에 명시된 모든 스케줄 파일에 대해
     for sched_name, sched_doc in sched_index.items():
         print(f"\nProcessing schedule: {sched_name}")
@@ -205,24 +212,46 @@ def main():
         sched_perf = perf_index.get(pure_sched_name, {})
 
         # Find ACTUAL best combination for this schedule in results_recompute
-        best_actual_comb = None
+        best_actual_combs = []
         max_actual_score = -float('inf')
         for c_name, p_item in sched_perf.items():
             actual_score = p_item.get('score', -float('inf'))
-            if actual_score > max_actual_score:
+            if np.isclose(actual_score, max_actual_score, atol=1e-7):
+                best_actual_combs.append(c_name)
+            elif actual_score > max_actual_score:
                 max_actual_score = actual_score
-                best_actual_comb = c_name
+                best_actual_combs = [c_name]
 
         perf_item = sched_perf.get(best_comb_name)
         
+        total_valid_schedules += 1
+        # Top-1 Accuracy
+        if best_comb_name in best_actual_combs:
+            top1_hits += 1
+            
+        # For latency-based, "Top-5 Accuracy" is tricky because it doesn't rank all.
+        # But we can define it as: is the actual best among the top-5 combinations ranked by latency-based heuristic?
+        # Actually, latency-based only picks ONE "best".
+        # If we want a Top-5, we'd need to rank all combinations by the heuristic.
+        # Let's skip Top-5 for latency-based or just set it equal to Top-1 if we only have one selection.
+        # However, to be consistent with others, let's see if we can rank.
+        # In find_best_combination, it currently returns immediately.
+        # Let's just use Top-1 as Top-5 for now, or just leave it. 
+        # Actually, let's just use Top-1 for both if Top-5 is not well-defined for this heuristic.
+        # Re-reading: "Top-5 accuracy는 추론한 상위 5개 그룹...에 속할 확률"
+        # Since latency-based currently only "infers" ONE best, the top-5 group only has that one combination.
+        if best_comb_name in best_actual_combs:
+            top5_hits += 1
+
         display_comb = best_comb_name
         # Apply coloring: Purple for match, Red for chosen, Blue for actual
-        if best_comb_name == best_actual_comb:
+        if best_comb_name in best_actual_combs:
             display_comb = f"<font color='purple'>{best_comb_name}</font>"
         else:
             display_comb = f"<font color='red'>{best_comb_name}</font>"
-            if best_actual_comb:
-                display_comb += f" (Actual: <font color='blue'>{best_actual_comb}</font>)"
+            if best_actual_combs:
+                actual_str = ", ".join([f"<font color='blue'>{c}</font>" for c in best_actual_combs])
+                display_comb += f" (Actual: {actual_str})"
 
         if not perf_item:
             print(f"  [LOG] NO MATCH in results_recompute for schedule='{pure_sched_name}' and combination='{best_comb_name}'")
@@ -246,6 +275,14 @@ def main():
         # 데이터 찾음
         derived = perf_item.get('derived', {})
         models_count = len(perf_item.get('models', {}))
+        
+        if models_count >= 3:
+            total_valid_schedules_ge3 += 1
+            if best_comb_name in best_actual_combs:
+                top1_hits_ge3 += 1
+            if best_comb_name in best_actual_combs:
+                top5_hits_ge3 += 1
+
         results.append({
             'schedule_file': sched_name,
             'best_combination': display_comb,
@@ -258,6 +295,13 @@ def main():
     if results:
         output_df = pd.DataFrame(results)
         
+        # Calculate accuracies
+        top1_acc = round(top1_hits / total_valid_schedules, 4) if total_valid_schedules > 0 else 0
+        top5_acc = round(top5_hits / total_valid_schedules, 4) if total_valid_schedules > 0 else 0
+        
+        top1_acc_ge3 = round(top1_hits_ge3 / total_valid_schedules_ge3, 4) if total_valid_schedules_ge3 > 0 else 0
+        top5_acc_ge3 = round(top5_hits_ge3 / total_valid_schedules_ge3, 4) if total_valid_schedules_ge3 > 0 else 0
+
         # 평균값 계산 (숫자 데이터만)
         numeric_throughput = pd.to_numeric(output_df['normalized_throughput'], errors='coerce')
         numeric_drop_rate = pd.to_numeric(output_df['drop_rate'], errors='coerce')
@@ -286,6 +330,10 @@ def main():
         # CSV 상단에 평균값 추가
         with open(output_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
+            writer.writerow(['Top-1 Accuracy', top1_acc])
+            writer.writerow(['Top-5 Accuracy', top5_acc])
+            writer.writerow(['Top-1 Accuracy (>= 3 models)', top1_acc_ge3])
+            writer.writerow(['Top-5 Accuracy (>= 3 models)', top5_acc_ge3])
             # 개별 모델 개수별 평균 추가
             for row in avg_rows:
                 writer.writerow(row)

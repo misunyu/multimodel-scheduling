@@ -73,14 +73,20 @@ def main():
 
     results = []
     
+    top1_hits = 0
+    top5_hits = 0
+    top1_hits_ge3 = 0
+    top5_hits_ge3 = 0
+    total_valid_schedules = 0
+    total_valid_schedules_ge3 = 0
+
     for sched_name, sched_doc in sched_index.items():
         print(f"Processing schedule: {sched_name}")
         
-        best_pred_comb = None
-        max_pred_score = -float('inf')
+        # Store all combinations with their predicted scores
+        all_pred_results = []
         
         # Iterate over all combinations in the schedule
-        # The YAML structure has combinations as top-level keys
         for comb_name, combo_blob in sched_doc.items():
             if not isinstance(combo_blob, dict): continue
             
@@ -99,35 +105,15 @@ def main():
                 y2_pred = float(m2.predict(df_X)[0])
                 pred_score = y1_pred - alpha * y2_pred
                 
-                if pred_score > max_pred_score:
-                    max_pred_score = pred_score
-                    best_pred_comb = comb_name
+                all_pred_results.append({
+                    'combination': comb_name,
+                    'pred_score': pred_score
+                })
             except Exception as e:
                 print(f"  [WARN] Error predicting for {comb_name}: {e}")
                 continue
         
-        # Find ACTUAL best combination for this schedule
-        pure_sched_name = Path(sched_name).name
-        # Remove '_x3' or other suffixes if they were added by the prediction script logic
-        # But wait, sched_name from sched_index is what's used in prediction.
-        # Let's see what sched_name looks like.
-        
-        sched_perf = perf_index.get(pure_sched_name, {})
-        if not sched_perf:
-            # Try removing _x3 suffix from pure_sched_name
-            if pure_sched_name.endswith("_x3.yaml"):
-                alt_name = pure_sched_name.replace("_x3.yaml", ".yaml")
-                sched_perf = perf_index.get(alt_name, {})
-        
-        best_actual_comb = None
-        max_actual_score = -float('inf')
-        for comb_name, perf_item in sched_perf.items():
-            actual_score = perf_item.get('score', -float('inf'))
-            if actual_score > max_actual_score:
-                max_actual_score = actual_score
-                best_actual_comb = comb_name
-
-        if not best_pred_comb:
+        if not all_pred_results:
             print(f"  [LOG] Could not find any valid combination for {sched_name}")
             results.append({
                 'schedule_file': sched_name,
@@ -139,24 +125,69 @@ def main():
             })
             continue
 
-        # Get actual performance for the predicted best combination
-        perf_item = sched_perf.get(best_pred_comb)
+        # Sort by predicted score
+        all_pred_results.sort(key=lambda x: x['pred_score'], reverse=True)
+        max_pred_score = all_pred_results[0]['pred_score']
         
-        display_comb = best_pred_comb
-        # Apply coloring: Blue for actual best, Red for predicted best
-        # If both are same, we can combine or use a special color. User asked Blue for actual, Red for predicted.
-        if best_pred_comb == best_actual_comb:
-            # Both are same
-            display_comb = f"<font color='purple'>{best_pred_comb}</font>"
-        else:
-            # Predicted is Red
-            display_comb = f"<font color='red'>{best_pred_comb}</font>"
-            # If the actual best is different, we should probably show it too in blue to satisfy the request.
-            if best_actual_comb:
-                display_comb += f" (Actual: <font color='blue'>{best_actual_comb}</font>)"
+        # Get all predicted best combinations (those with max score)
+        best_pred_combs = [r['combination'] for r in all_pred_results if math.isclose(r['pred_score'], max_pred_score, rel_tol=1e-7)]
+        
+        # Find ACTUAL best combination for this schedule
+        pure_sched_name = Path(sched_name).name
+        sched_perf = perf_index.get(pure_sched_name, {})
+        if not sched_perf:
+            # Try removing _x3 suffix from pure_sched_name
+            if pure_sched_name.endswith("_x3.yaml"):
+                alt_name = pure_sched_name.replace("_x3.yaml", ".yaml")
+                sched_perf = perf_index.get(alt_name, {})
+        
+        # Actual best combination(s) - handle ties in actual scores too if any
+        best_actual_combs = []
+        max_actual_score = -float('inf')
+        for comb_name, perf_item in sched_perf.items():
+            actual_score = perf_item.get('score', -float('inf'))
+            if math.isclose(actual_score, max_actual_score, rel_tol=1e-7):
+                best_actual_combs.append(comb_name)
+            elif actual_score > max_actual_score:
+                max_actual_score = actual_score
+                best_actual_combs = [comb_name]
+
+        total_valid_schedules += 1
+        
+        # Top-1 Accuracy: If one of predicted best is in actual best
+        # Actually, user said: "one of the best_combinations is actual best_deployment"
+        if any(c in best_actual_combs for c in best_pred_combs):
+            top1_hits += 1
+            
+        # Top-5 Accuracy: Top-5 groups (where a group has same score)
+        # Find combinations in Top-5 score groups
+        pred_scores_sorted = sorted(list(set([r['pred_score'] for r in all_pred_results])), reverse=True)
+        top5_threshold_score = pred_scores_sorted[min(4, len(pred_scores_sorted)-1)]
+        top5_group_combs = [r['combination'] for r in all_pred_results if r['pred_score'] >= top5_threshold_score - 1e-7]
+        
+        if any(c in top5_group_combs for c in best_actual_combs):
+            top5_hits += 1
+
+        # Prepare display string for best combinations
+        display_parts = []
+        for bpc in best_pred_combs:
+            if bpc in best_actual_combs:
+                display_parts.append(f"<font color='purple'>{bpc}</font>")
+            else:
+                display_parts.append(f"<font color='red'>{bpc}</font>")
+        
+        display_comb = ", ".join(display_parts)
+        
+        # If no predicted best matches actual best, show actual best in blue
+        if not any(c in best_actual_combs for c in best_pred_combs) and best_actual_combs:
+            actual_str = ", ".join([f"<font color='blue'>{c}</font>" for c in best_actual_combs])
+            display_comb += f" (Actual: {actual_str})"
+
+        # Get performance for the first predicted best combination (for simplicity in other columns)
+        perf_item = sched_perf.get(best_pred_combs[0])
         
         if not perf_item:
-            print(f"  [LOG] Predicted best combination '{best_pred_comb}' not found in actual results for {pure_sched_name}")
+            print(f"  [LOG] Predicted best combination '{best_pred_combs[0]}' not found in actual results for {pure_sched_name}")
             results.append({
                 'schedule_file': sched_name,
                 'best_combination': display_comb,
@@ -169,6 +200,14 @@ def main():
             
         derived = perf_item.get('derived', {})
         models_count = len(perf_item.get('models', {}))
+
+        if models_count >= 3:
+            total_valid_schedules_ge3 += 1
+            if any(c in best_actual_combs for c in best_pred_combs):
+                top1_hits_ge3 += 1
+            if any(c in top5_group_combs for c in best_actual_combs):
+                top5_hits_ge3 += 1
+
         results.append({
             'schedule_file': sched_name,
             'best_combination': display_comb,
@@ -181,6 +220,13 @@ def main():
     if results:
         output_df = pd.DataFrame(results)
         
+        # Calculate accuracies
+        top1_acc = round(top1_hits / total_valid_schedules, 4) if total_valid_schedules > 0 else 0
+        top5_acc = round(top5_hits / total_valid_schedules, 4) if total_valid_schedules > 0 else 0
+        
+        top1_acc_ge3 = round(top1_hits_ge3 / total_valid_schedules_ge3, 4) if total_valid_schedules_ge3 > 0 else 0
+        top5_acc_ge3 = round(top5_hits_ge3 / total_valid_schedules_ge3, 4) if total_valid_schedules_ge3 > 0 else 0
+
         # Calculate averages (numeric only)
         numeric_throughput = pd.to_numeric(output_df['normalized_throughput'], errors='coerce')
         numeric_drop_rate = pd.to_numeric(output_df['drop_rate'], errors='coerce')
@@ -208,6 +254,10 @@ def main():
 
         with open(output_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
+            writer.writerow(['Top-1 Accuracy', top1_acc])
+            writer.writerow(['Top-5 Accuracy', top5_acc])
+            writer.writerow(['Top-1 Accuracy (>= 3 models)', top1_acc_ge3])
+            writer.writerow(['Top-5 Accuracy (>= 3 models)', top5_acc_ge3])
             for row in avg_rows:
                 writer.writerow(row)
             writer.writerow(['Average', '', avg_throughput, avg_drop_rate, avg_score])

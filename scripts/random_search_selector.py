@@ -83,6 +83,13 @@ def main():
     
     results = []
     
+    top1_hits = 0
+    top5_hits = 0
+    top1_hits_ge3 = 0
+    top5_hits_ge3 = 0
+    total_valid_schedules = 0
+    total_valid_schedules_ge3 = 0
+    
     for _, row in schedules_df.iterrows():
         sched_name = row['schedule_name']
         print(f"Processing schedule: {sched_name}")
@@ -120,27 +127,61 @@ def main():
         sched_perf = perf_index.get(pure_sched_name, {})
         
         # Find ACTUAL best combination for this schedule in results_recompute
-        best_actual_comb = None
+        best_actual_combs = []
         max_actual_score = -float('inf')
         for c_name, p_item in sched_perf.items():
             actual_score = p_item.get('score', -float('inf'))
-            if actual_score > max_actual_score:
+            if np.isclose(actual_score, max_actual_score, atol=1e-7):
+                best_actual_combs.append(c_name)
+            elif actual_score > max_actual_score:
                 max_actual_score = actual_score
-                best_actual_comb = c_name
+                best_actual_combs = [c_name]
 
+        best_actual_comb = best_actual_combs[0] if best_actual_combs else None
         perf_item = sched_perf.get(best_comb_name)
         
+        total_valid_schedules += 1
+        # Top-1 Accuracy: If selected best is in actual best list
+        if best_comb_name in best_actual_combs:
+            top1_hits += 1
+
+        # Top-5 Accuracy: Check if any actual best is in top-5 group of random samples
+        # Actually, for random search, "Top-5 Accuracy" is often defined as whether the actual best is within top-5 predicted.
+        # But random search doesn't "predict" all. It only samples k.
+        # Wait, the prompt says "추론한 상위 5개 그룹 (score가 같은 것이 하나의 그룹)에 actual best_deployment가 속할 확률이야."
+        # For random search, we only have the sampled results.
+        # I should probably sort the sampled results and take top 5 score groups.
+        sampled_results = []
+        for c_name in sampled_combs:
+            sampled_results.append({'combination': c_name, 'score': sched_perf[c_name].get('score', 0.0)})
+        
+        sampled_results.sort(key=lambda x: x['score'], reverse=True)
+        distinct_scores = sorted(list(set([r['score'] for r in sampled_results])), reverse=True)
+        top5_threshold = distinct_scores[min(4, len(distinct_scores)-1)]
+        top5_sampled_combs = [r['combination'] for r in sampled_results if r['score'] >= top5_threshold - 1e-7]
+
+        if any(c in top5_sampled_combs for c in best_actual_combs):
+            top5_hits += 1
+
         display_comb = best_comb_name
         # Apply coloring: Purple for match, Red for chosen, Blue for actual
-        if best_comb_name == best_actual_comb:
+        if best_comb_name in best_actual_combs:
             display_comb = f"<font color='purple'>{best_comb_name}</font>"
         else:
             display_comb = f"<font color='red'>{best_comb_name}</font>"
-            if best_actual_comb:
-                display_comb += f" (Actual: <font color='blue'>{best_actual_comb}</font>)"
+            if best_actual_combs:
+                actual_str = ", ".join([f"<font color='blue'>{c}</font>" for c in best_actual_combs])
+                display_comb += f" (Actual: {actual_str})"
 
         derived = perf_item.get('derived', {})
         models_count = len(perf_item.get('models', {}))
+
+        if models_count >= 3:
+            total_valid_schedules_ge3 += 1
+            if best_comb_name in best_actual_combs:
+                top1_hits_ge3 += 1
+            if any(c in top5_sampled_combs for c in best_actual_combs):
+                top5_hits_ge3 += 1
         
         results.append({
             'schedule_file': sched_name,
@@ -154,6 +195,13 @@ def main():
     if results:
         output_df = pd.DataFrame(results)
         
+        # Calculate accuracies
+        top1_acc = round(top1_hits / total_valid_schedules, 4) if total_valid_schedules > 0 else 0
+        top5_acc = round(top5_hits / total_valid_schedules, 4) if total_valid_schedules > 0 else 0
+        
+        top1_acc_ge3 = round(top1_hits_ge3 / total_valid_schedules_ge3, 4) if total_valid_schedules_ge3 > 0 else 0
+        top5_acc_ge3 = round(top5_hits_ge3 / total_valid_schedules_ge3, 4) if total_valid_schedules_ge3 > 0 else 0
+
         # 평균값 계산 (숫자 데이터만)
         numeric_throughput = pd.to_numeric(output_df['normalized_throughput'], errors='coerce')
         numeric_drop_rate = pd.to_numeric(output_df['drop_rate'], errors='coerce')
@@ -182,6 +230,10 @@ def main():
         # CSV 저장
         with open(output_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
+            writer.writerow(['Top-1 Accuracy', top1_acc])
+            writer.writerow(['Top-5 Accuracy', top5_acc])
+            writer.writerow(['Top-1 Accuracy (>= 3 models)', top1_acc_ge3])
+            writer.writerow(['Top-5 Accuracy (>= 3 models)', top5_acc_ge3])
             for row in avg_rows:
                 writer.writerow(row)
             writer.writerow(['Average', '', avg_throughput, avg_drop_rate, avg_score])

@@ -344,10 +344,10 @@ def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, 
             s_doc = _find_schedule(sched_index, s_name)
             c_name = w.get("combination")
 
-            if is_constrained:
-                models_count = len(w.get("models", {}))
-                if models_count < 3:
-                    continue
+            # if is_constrained:
+            #     models_count = len(w.get("models", {}))
+            #     if models_count < 3:
+            #         continue
 
             infps_map = None
             if s_doc and c_name:
@@ -378,10 +378,10 @@ def build_dataset(perf_dir: Path, schedule_dir: Path, is_constrained: bool = Fal
                 s_doc = _find_schedule(sched_index, s_name)
                 c_name = w.get("combination")
 
-                if is_constrained:
-                    models_count = len(w.get("models", {}))
-                    if models_count < 3:
-                        continue
+                # if is_constrained:
+                #     models_count = len(w.get("models", {}))
+                #     if models_count < 3:
+                #         continue
 
                 infps_map = None
                 if s_doc and c_name:
@@ -559,10 +559,10 @@ def main():
                     else:
                         w = json.loads(row_csv[0])
                     
-                    if is_constrained:
-                        models_count = len(w.get("models", {}))
-                        if models_count < 3:
-                            continue
+                    # if is_constrained:
+                    #     models_count = len(w.get("models", {}))
+                    #     if models_count < 3:
+                    #         continue
 
                     s_name = w.get("schedule_file") or w.get("schedule file")
                     ts = w.get("timestamp")
