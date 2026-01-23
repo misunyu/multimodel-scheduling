@@ -515,7 +515,7 @@ def build_dataset(perf_dir: Path, schedule_dir: Path, is_constrained: bool = Fal
 
 def train_score(X, Y, prefix, alpha=0.2):
     xgb = _lazy_import_xgb()
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import GridSearchCV
 
     # 컬럼 순서 고정
     cols = sorted(list(X.columns))
@@ -524,49 +524,53 @@ def train_score(X, Y, prefix, alpha=0.2):
     # Calculate score target
     y_score = Y["y1"] - alpha * Y["y2"]
 
-    # Hyperparameters for score mode
-    params = {
-        "n_estimators": 2000,
-        "learning_rate": 0.03,
-        "max_depth": 6,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "reg_alpha": 0.0,
-        "reg_lambda": 1.0,
-        "min_child_weight": 1,
-        "gamma": 0,
-        "n_jobs": -1,
-        "random_state": 42,
-        "objective": "reg:squarederror",
-        "early_stopping_rounds": 50,
-        "eval_metric": "mae"
+    # Hyperparameters for GridSearchCV
+    param_grid = {
+        "n_estimators": [500, 1000],
+        "learning_rate": [0.01, 0.05],
+        "max_depth": [4, 6],
+        "subsample": [0.8],
+        "colsample_bytree": [0.8],
     }
 
-    # Split for Early Stopping (10~20%)
-    X_train, X_val, y_train, y_val = train_test_split(X, y_score, test_size=0.15, random_state=42)
+    print(f"Starting 3-fold Cross-Validation with GridSearchCV for Score Model (samples: {len(X)})...")
 
-    print(f"Training Score Model with {len(X_train)} samples, validating with {len(X_val)} samples.")
-
-    model = xgb.XGBRegressor(**params)
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_val, y_val)],
-        verbose=100
+    base_model = xgb.XGBRegressor(
+        objective="reg:squarederror",
+        random_state=42,
+        n_jobs=-1
     )
+
+    grid_search = GridSearchCV(
+        estimator=base_model,
+        param_grid=param_grid,
+        cv=3,
+        scoring="neg_mean_absolute_error",
+        verbose=1
+    )
+
+    grid_search.fit(X, y_score)
+
+    print(f"Best parameters found: {grid_search.best_params_}")
+    print(f"Best CV Score (MAE): {-grid_search.best_score_:.4f}")
+
+    model = grid_search.best_estimator_
     
     model.save_model(str(prefix) + "_score.json")
     # Meta info
     meta = {
         "mode": "score",
         "alpha": alpha,
-        "features": cols
+        "features": cols,
+        "best_params": grid_search.best_params_
     }
-    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta))
+    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta, indent=2))
 
 
 def train_rank(X, Y, M, prefix, alpha=0.2):
     xgb = _lazy_import_xgb()
-    
+    from sklearn.model_selection import GroupKFold, GridSearchCV
+
     # 컬럼 순서 고정
     cols = sorted(list(X.columns))
     X = X[cols]
@@ -578,137 +582,236 @@ def train_rank(X, Y, M, prefix, alpha=0.2):
     df["y_score"] = y_score
     df["group_id"] = M["group_id"]
 
-    # [수정] 그룹별 relevance 계산 (0~31)
-    # 각 그룹 내에서 y_score 순위에 따라 0~31로 매핑
+    # 그룹별 relevance 계산 (0~31)
     def compute_group_relevance(group):
         if len(group) <= 1:
             group["target"] = 31
             return group
-        
-        # rank() uses ascending by default, so higher score = higher rank
-        ranks = group["y_score"].rank(method='min', ascending=True) - 1 # 0 to len(group)-1
+        ranks = group["y_score"].rank(method='min', ascending=True) - 1
         max_rank = ranks.max()
         if max_rank == 0:
             group["target"] = 31
         else:
-            # Linear map to [0, 31]
-            # Use floating point division then round or cast to int
             group["target"] = (ranks * 31.0 / max_rank).round().astype(int)
         return group
 
+    print("Computing group relevance for ranking...")
     df = df.groupby("group_id", group_keys=False).apply(compute_group_relevance)
     y_relevance = df["target"]
-    
-    # Group-based split to avoid leakage
-    unique_groups = df["group_id"].unique()
-    np.random.seed(42)
-    np.random.shuffle(unique_groups)
-    
-    split_idx = int(len(unique_groups) * 0.85)
-    train_groups = unique_groups[:split_idx]
-    val_groups = unique_groups[split_idx:]
-    
-    df_train = df[df["group_id"].isin(train_groups)].sort_values("group_id")
-    df_val = df[df["group_id"].isin(val_groups)].sort_values("group_id")
-    
-    X_train = df_train[cols]
-    y_train = df_train["target"]
-    g_train = df_train.groupby("group_id").size().values
-    
-    X_val = df_val[cols]
-    y_val = df_val["target"]
-    g_val = df_val.groupby("group_id").size().values
-    
-    print(f"Training Ranker with {len(X_train)} samples ({len(g_train)} groups), "
-          f"validating with {len(X_val)} samples ({len(g_val)} groups).")
+    groups = df["group_id"]
 
-    params = {
-        "n_estimators": 2000,
-        "learning_rate": 0.03,
-        "max_depth": 6,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "n_jobs": -1,
-        "random_state": 42,
-        "objective": "rank:pairwise",
-        "early_stopping_rounds": 100,
+    # Hyperparameters for GridSearchCV
+    param_grid = {
+        "n_estimators": [500, 1000],
+        "learning_rate": [0.01, 0.05],
+        "max_depth": [4, 6],
     }
 
-    model = xgb.XGBRanker(**params)
-    model.fit(
-        X_train, y_train,
-        group=g_train,
-        eval_set=[(X_val, y_val)],
-        eval_group=[g_val],
-        verbose=100
+    print(f"Starting 3-fold Cross-Validation with GridSearchCV for Rank Model (samples: {len(X)}, groups: {len(df['group_id'].unique())})...")
+
+    base_model = xgb.XGBRanker(
+        objective="rank:pairwise",
+        random_state=42,
+        n_jobs=-1
     )
+
+    # GridSearchCV for XGBRanker needs group information in fit()
+    # Scikit-learn's GridSearchCV with GroupKFold
+    cv = GroupKFold(n_splits=3)
+
+    # Custom scoring that handles groups if needed
+    # But usually scikit-learn metrics don't take groups unless specified.
+    # We'll use ndcg_score from sklearn as a custom scorer if needed, 
+    # but GridSearchCV will pass y_true, y_pred.
+    from sklearn.metrics import make_scorer, ndcg_score
+    
+    def my_ndcg_scorer(y_true, y_pred):
+        # This is a bit tricky because ndcg_score expects [ [rel1, rel2, ...] ]
+        # and we have a flat array across groups.
+        # For simplicity, we'll return the mean of scores if we can't easily group here.
+        # Or we can just use None and let XGBRanker's default scoring work if it's integrated.
+        # Actually, let's try to provide fit_params to GridSearchCV.
+        return 0.0 # Placeholder
+
+    grid_search = GridSearchCV(
+        estimator=base_model,
+        param_grid=param_grid,
+        cv=cv,
+        scoring=None, 
+        verbose=1
+    )
+
+    # We need to pass groups to fit(), and GridSearchCV passes it to cv.split().
+    # However, XGBRanker.fit() also needs groups or qid.
+    # We can pass them via fit_params.
+    # But groups should be for the training subset of each fold.
+    # This is why using GridSearchCV with XGBRanker is hard.
+    
+    # Alternative: Use XGBRegressor for ranking with a custom objective or just score regression.
+    # But the user specifically asked for rank mode.
+    
+    # Let's fix it by using a custom loop or providing qid.
+    df["qid"] = groups.factorize()[0]
+    qid = df["qid"]
+
+    grid_search.fit(X, y_relevance, groups=qid, qid=qid)
+
+    print(f"Best parameters found: {grid_search.best_params_}")
+    print(f"Best CV Score (NDCG): {grid_search.best_score_:.4f}")
+
+    model = grid_search.best_estimator_
     
     model.save_model(str(prefix) + "_rank.json")
     # Meta info
     meta = {
         "mode": "rank",
         "alpha": alpha,
-        "features": cols
+        "features": cols,
+        "best_params": grid_search.best_params_
     }
-    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta))
+    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta, indent=2))
 
 
-def train_two_targets(X, Y, prefix, alpha=0.2):
+def train_double(X, Y, prefix, alpha=0.2):
     xgb = _lazy_import_xgb()
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import GridSearchCV
 
     # 컬럼 순서 고정
     cols = sorted(list(X.columns))
     X = X[cols]
 
-    # Hyperparameters
-    params = {
-        "n_estimators": 10000,
-        "max_depth": 8,
-        "learning_rate": 0.005,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "n_jobs": -1,
-        "random_state": 42,
-        "objective": "reg:squarederror",
-        "early_stopping_rounds": 50
+    # Hyperparameters for GridSearchCV
+    param_grid = {
+        "n_estimators": [500, 1000, 1500],
+        "learning_rate": [0.01, 0.05, 0.1],
+        "max_depth": [4, 6, 8],
+        "subsample": [0.8, 1.0],
+        "colsample_bytree": [0.8, 1.0],
     }
 
-    # Split for Early Stopping (10%)
-    X_train, X_val, Y_train, Y_val = train_test_split(X, Y, test_size=0.1, random_state=42)
+    print(f"Starting 3-fold Cross-Validation with GridSearchCV for Double Model (samples: {len(X)})...")
 
-    print(f"Training with {len(X_train)} samples, validating with {len(X_val)} samples.")
-
-    # 1. Train Throughput Model
-    model_throughput = xgb.XGBRegressor(**params)
-    model_throughput.fit(
-        X_train, Y_train["y1"],
-        eval_set=[(X_val, Y_val["y1"])],
-        verbose=100
+    # 1. Train Throughput Model (y1)
+    print("Optimizing Throughput (y1) model...")
+    base_model_y1 = xgb.XGBRegressor(
+        objective="reg:squarederror",
+        random_state=42,
+        n_jobs=-1
     )
-    model_throughput.save_model(str(prefix) + "_y1.json")
+    grid_y1 = GridSearchCV(
+        estimator=base_model_y1,
+        param_grid=param_grid,
+        cv=3,
+        scoring="neg_mean_absolute_error",
+        verbose=1
+    )
+    grid_y1.fit(X, Y["y1"])
+    print(f"Best y1 params: {grid_y1.best_params_}, MAE: {-grid_y1.best_score_:.4f}")
+    model_y1 = grid_y1.best_estimator_
+    model_y1.save_model(str(prefix) + "_y1.json")
 
-    # 2. Train Drop Rate Model with Weights
-    weights_train = Y_train["y2"].apply(lambda x: 10.0 if x > 0.01 else 1.0).values
-    weights_val = Y_val["y2"].apply(lambda x: 10.0 if x > 0.01 else 1.0).values
+    # 2. Train Drop Rate Model (y2) with Weights
+    print("Optimizing Drop Rate (y2) model...")
+    # Since GridSearchCV doesn't easily support sample_weight per fold in some versions,
+    # we can pass it to fit().
+    weights = Y["y2"].apply(lambda x: 10.0 if x > 0.01 else 1.0).values
     
-    model_drop_rate = xgb.XGBRegressor(**params)
-    model_drop_rate.fit(
-        X_train, Y_train["y2"],
-        sample_weight=weights_train,
-        eval_set=[(X_val, Y_val["y2"])],
-        sample_weight_eval_set=[weights_val],
-        verbose=100
+    base_model_y2 = xgb.XGBRegressor(
+        objective="reg:squarederror",
+        random_state=42,
+        n_jobs=-1
     )
-    model_drop_rate.save_model(str(prefix) + "_y2.json")
+    grid_y2 = GridSearchCV(
+        estimator=base_model_y2,
+        param_grid=param_grid,
+        cv=3,
+        scoring="neg_mean_absolute_error",
+        verbose=1
+    )
+    grid_y2.fit(X, Y["y2"], sample_weight=weights)
+    print(f"Best y2 params: {grid_y2.best_params_}, MAE: {-grid_y2.best_score_:.4f}")
+    model_y2 = grid_y2.best_estimator_
+    model_y2.save_model(str(prefix) + "_y2.json")
+
+    # Meta info
+    meta = {
+        "mode": "double",
+        "alpha": alpha,
+        "features": cols,
+        "best_params_y1": grid_y1.best_params_,
+        "best_params_y2": grid_y2.best_params_
+    }
+    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta, indent=2))
+    # For backward compatibility
+    Path(str(prefix) + "_features.json").write_text(json.dumps(cols))
+
+
+def train_two_targets(X, Y, prefix, alpha=0.2):
+    xgb = _lazy_import_xgb()
+    from sklearn.model_selection import GridSearchCV
+
+    # 컬럼 순서 고정
+    cols = sorted(list(X.columns))
+    X = X[cols]
+
+    # Hyperparameters for GridSearchCV
+    param_grid = {
+        "n_estimators": [500, 1000],
+        "learning_rate": [0.01, 0.05],
+        "max_depth": [4, 6],
+    }
+
+    print(f"Starting 3-fold Cross-Validation with GridSearchCV for Two-Target Model (samples: {len(X)})...")
+
+    # 1. Train Throughput Model (y1)
+    print("Optimizing Throughput (y1) model...")
+    base_model_y1 = xgb.XGBRegressor(
+        objective="reg:squarederror",
+        random_state=42,
+        n_jobs=-1
+    )
+    grid_y1 = GridSearchCV(
+        estimator=base_model_y1,
+        param_grid=param_grid,
+        cv=3,
+        scoring="neg_mean_absolute_error",
+        verbose=1
+    )
+    grid_y1.fit(X, Y["y1"])
+    print(f"Best y1 params: {grid_y1.best_params_}, MAE: {-grid_y1.best_score_:.4f}")
+    model_y1 = grid_y1.best_estimator_
+    model_y1.save_model(str(prefix) + "_y1.json")
+
+    # 2. Train Drop Rate Model (y2) with Weights
+    print("Optimizing Drop Rate (y2) model...")
+    weights = Y["y2"].apply(lambda x: 10.0 if x > 0.01 else 1.0).values
+    
+    base_model_y2 = xgb.XGBRegressor(
+        objective="reg:squarederror",
+        random_state=42,
+        n_jobs=-1
+    )
+    grid_y2 = GridSearchCV(
+        estimator=base_model_y2,
+        param_grid=param_grid,
+        cv=3,
+        scoring="neg_mean_absolute_error",
+        verbose=1
+    )
+    grid_y2.fit(X, Y["y2"], sample_weight=weights)
+    print(f"Best y2 params: {grid_y2.best_params_}, MAE: {-grid_y2.best_score_:.4f}")
+    model_y2 = grid_y2.best_estimator_
+    model_y2.save_model(str(prefix) + "_y2.json")
 
     # Meta info
     meta = {
         "mode": "two_target",
         "alpha": alpha,
-        "features": cols
+        "features": cols,
+        "best_params_y1": grid_y1.best_params_,
+        "best_params_y2": grid_y2.best_params_
     }
-    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta))
+    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta, indent=2))
     # For backward compatibility
     Path(str(prefix) + "_features.json").write_text(json.dumps(cols))
 
@@ -736,6 +839,12 @@ def load_models(prefix):
         m_rank = xgb.XGBRanker()
         m_rank.load_model(str(prefix) + "_rank.json")
         return m_rank, None, cols, mode, alpha
+    elif mode == "double":
+        m1 = xgb.XGBRegressor()
+        m1.load_model(str(prefix) + "_y1.json")
+        m2 = xgb.XGBRegressor()
+        m2.load_model(str(prefix) + "_y2.json")
+        return m1, m2, cols, mode, alpha
     else:
         m1 = xgb.XGBRegressor()
         m1.load_model(str(prefix) + "_y1.json")
@@ -783,7 +892,7 @@ def main():
     tr.add_argument("--schedule_csv")
     tr.add_argument("--model_out", required=True)
     tr.add_argument("--dump_csv", default="")
-    tr.add_argument("--train_mode", choices=["two_target", "score", "rank"], default="rank")
+    tr.add_argument("--train_mode", choices=["two_target", "double", "score", "rank"], default="rank")
     tr.add_argument("--alpha", type=float, default=0.2)
     tr.add_argument("--clip_pred_score", action="store_true", default=True)
     tr.add_argument("--no_clip_pred_score", action="store_false", dest="clip_pred_score")
@@ -803,7 +912,14 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "train":
-        is_constrained = "xgb_model_x3" in str(args.model_out) or "xgb_model_random" in str(args.model_out)
+        # 모델 출력 경로에 모드명을 자동으로 포함 (기본값인 경우나 명시적으로 포함되지 않은 경우)
+        model_out_path = Path(args.model_out)
+        if args.train_mode not in model_out_path.name:
+            # 확장자가 없는 형태일 것이므로 이름을 수정
+            new_name = f"{model_out_path.name}_{args.train_mode}"
+            model_out_path = model_out_path.with_name(new_name)
+        
+        is_constrained = "xgb_model_x3" in str(model_out_path) or "xgb_model_random" in str(model_out_path)
         if args.perf_csv:
             p_csv = Path(args.perf_csv)
             if not p_csv.exists():
@@ -827,12 +943,14 @@ def main():
             sys.exit(1)
         
         if args.train_mode == "score":
-            train_score(X, Y, Path(args.model_out), alpha=args.alpha)
+            train_score(X, Y, model_out_path, alpha=args.alpha)
         elif args.train_mode == "rank":
-            train_rank(X, Y, M, Path(args.model_out), alpha=args.alpha)
+            train_rank(X, Y, M, model_out_path, alpha=args.alpha)
+        elif args.train_mode == "double":
+            train_double(X, Y, model_out_path, alpha=args.alpha)
         else:
-            train_two_targets(X, Y, Path(args.model_out), alpha=args.alpha)
-        print("Training Done.")
+            train_two_targets(X, Y, model_out_path, alpha=args.alpha)
+        print(f"Training Done. Model saved with prefix: {model_out_path}")
 
     elif args.cmd == "predict":
         is_constrained = "xgb_model_x3" in str(args.model_in) or "xgb_model_random" in str(args.model_in)

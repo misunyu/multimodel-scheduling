@@ -284,8 +284,8 @@ def main():
         results.append({
             'schedule_file': sched_name,
             'best_combination': display_comb,
-            'normalized_throughput': derived.get('throughput_norm') if mode not in ("score", "rank") else "-",
-            'drop_rate': derived.get('drop_rate_norm') if mode not in ("score", "rank") else "-",
+            'normalized_throughput': derived.get('throughput_norm') if mode not in ("score", "rank") or mode == "double" else "-",
+            'drop_rate': derived.get('drop_rate_norm') if mode not in ("score", "rank") or mode == "double" else "-",
             'score': perf_item.get('score'),
             'models_count': models_count
         })
@@ -322,6 +322,10 @@ def main():
             else:
                 avg_rows.append([f'Average (>= {n} models)', '', 'nan', 'nan', 'nan'])
 
+        # Create output filename with mode suffix
+        if output_csv == "xgb_best_results.csv":
+            output_csv = f"xgb_best_results_{mode}.csv"
+            
         output_path = Path("experimental_results") / output_csv
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
