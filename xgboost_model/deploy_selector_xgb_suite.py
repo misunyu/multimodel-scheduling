@@ -410,13 +410,15 @@ def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
 
 # ---------- Builder & Trainer ----------
 
-def _index_schedules_from_csv(csv_path: Path) -> Dict[str, Dict[str, Any]]:
+def _index_schedules_from_csv(csv_path: Path, names: Optional[set] = None) -> Dict[str, Dict[str, Any]]:
     if not csv_path.exists():
         return {}
     df = pd.read_csv(csv_path)
     out = {}
     for _, row in df.iterrows():
         name = str(row["schedule_name"]).lower()
+        if names is not None and name not in names:
+            continue
         content = str(row["content"])
         if yaml is not None:
             try:
@@ -432,8 +434,22 @@ def _index_schedules_from_csv(csv_path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, schedule_csv: Optional[Path] = None, is_constrained: bool = False):
+    needed_names = set()
+    df_csv = pd.read_csv(csv_path)
+    for _, row in df_csv.iterrows():
+        try:
+            if "json_content" in df_csv.columns:
+                w = json.loads(row["json_content"])
+            else:
+                w = json.loads(row[0])
+            s_name = w.get("schedule_file") or w.get("schedule file")
+            if s_name:
+                needed_names.add(str(Path(s_name).name).lower())
+        except Exception:
+            pass
+
     if schedule_csv:
-        sched_index = _index_schedules_from_csv(schedule_csv)
+        sched_index = _index_schedules_from_csv(schedule_csv, names=needed_names)
     elif schedule_dir:
         sched_index = _index_schedules(schedule_dir)
     else:
@@ -441,7 +457,6 @@ def build_dataset_from_csv(csv_path: Path, schedule_dir: Optional[Path] = None, 
 
     X_all, Y_all, M_all = [], [], []
 
-    df_csv = pd.read_csv(csv_path)
     for _, row in df_csv.iterrows():
         try:
             # Try to load 'json_content' column
@@ -529,7 +544,7 @@ def train_score(X, Y, prefix, alpha=0.2):
         "n_estimators": [500, 1000],
         "learning_rate": [0.01, 0.05],
         "max_depth": [4, 6],
-        "subsample": [0.8],
+        "subsample": [0.8, 1.0],
         "colsample_bytree": [0.8],
     }
 
@@ -652,6 +667,10 @@ def train_rank(X, Y, M, prefix, alpha=0.2):
     
     # Let's fix it by using a custom loop or providing qid.
     df["qid"] = groups.factorize()[0]
+    # qid must be sorted for XGBRanker
+    df = df.sort_values("qid")
+    X = X.loc[df.index]
+    y_relevance = y_relevance.loc[df.index]
     qid = df["qid"]
 
     grid_search.fit(X, y_relevance, groups=qid, qid=qid)
@@ -682,11 +701,10 @@ def train_double(X, Y, prefix, alpha=0.2):
 
     # Hyperparameters for GridSearchCV
     param_grid = {
-        "n_estimators": [500, 1000, 1500],
-        "learning_rate": [0.01, 0.05, 0.1],
-        "max_depth": [4, 6, 8],
+        "n_estimators": [500, 1000],
+        "learning_rate": [0.01, 0.05],
+        "max_depth": [4, 6],
         "subsample": [0.8, 1.0],
-        "colsample_bytree": [0.8, 1.0],
     }
 
     print(f"Starting 3-fold Cross-Validation with GridSearchCV for Double Model (samples: {len(X)})...")
@@ -851,6 +869,61 @@ def load_models(prefix):
         m2 = xgb.XGBRegressor()
         m2.load_model(str(prefix) + "_y2.json")
         return m1, m2, cols, mode, alpha
+
+
+def plot_multi_scatter(df: pd.DataFrame, output_path: Path, title: str, alpha: float):
+    """
+    Generate a PDF with three scatter plots: norm_throughput, norm_drop_rate, and score.
+    """
+    if df.empty:
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(title, fontsize=16)
+
+    # 1. Throughput Plot
+    if "actual_T_norm" in df.columns and "pred_T_norm" in df.columns:
+        # Convert empty strings to NaN for plotting
+        actual_t = pd.to_numeric(df["actual_T_norm"], errors='coerce')
+        pred_t = pd.to_numeric(df["pred_T_norm"], errors='coerce')
+        
+        axes[0].scatter(actual_t, pred_t, alpha=0.5, color='blue')
+        max_val = max(actual_t.max(), pred_t.max()) if not actual_t.isna().all() else 1.0
+        min_val = min(actual_t.min(), pred_t.min()) if not actual_t.isna().all() else 0.0
+        axes[0].plot([min_val, max_val], [min_val, max_val], 'r--')
+        axes[0].set_xlabel("Actual Norm Throughput")
+        axes[0].set_ylabel("Predicted Norm Throughput")
+        axes[0].set_title("Normalized Throughput")
+        axes[0].grid(True, linestyle='--', alpha=0.7)
+
+    # 2. Drop Rate Plot
+    if "actual_D_norm" in df.columns and "pred_D_norm" in df.columns:
+        actual_d = pd.to_numeric(df["actual_D_norm"], errors='coerce')
+        pred_d = pd.to_numeric(df["pred_D_norm"], errors='coerce')
+        
+        axes[1].scatter(actual_d, pred_d, alpha=0.5, color='green')
+        max_val = max(actual_d.max(), pred_d.max()) if not actual_d.isna().all() else 1.0
+        min_val = min(actual_d.min(), pred_d.min()) if not actual_d.isna().all() else 0.0
+        axes[1].plot([min_val, max_val], [min_val, max_val], 'r--')
+        axes[1].set_xlabel("Actual Norm Drop Rate")
+        axes[1].set_ylabel("Predicted Norm Drop Rate")
+        axes[1].set_title("Normalized Drop Rate")
+        axes[1].grid(True, linestyle='--', alpha=0.7)
+
+    # 3. Score Plot
+    axes[2].scatter(df["actual_score"], df["pred_score"], alpha=0.5, color='purple')
+    max_val = max(df["actual_score"].max(), df["pred_score"].max())
+    min_val = min(df["actual_score"].min(), df["pred_score"].min())
+    axes[2].plot([min_val, max_val], [min_val, max_val], 'r--')
+    axes[2].set_xlabel("Actual Score")
+    axes[2].set_ylabel("Predicted Score")
+    axes[2].set_title(f"Combined Score (alpha={alpha})")
+    axes[2].grid(True, linestyle='--', alpha=0.7)
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Multi-scatter plot saved to: {output_path}")
 
 
 def plot_score_scatter(df: pd.DataFrame, output_path: Path, title: str):
@@ -1176,14 +1249,17 @@ def main():
                 score_gaps.append(max(0, gap))
 
             res_df = pd.DataFrame(detailed_results)
-            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}.csv"
+            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.csv"
             
             res_df.to_csv(csv_out_path, index=False)
             
             # [Added] Score scatter plot for score mode
             if mode == "score":
-                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}.pdf"
+                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.pdf"
                 plot_score_scatter(res_df, pdf_out_path, f"Score Prediction: Actual vs Predicted (alpha={alpha})")
+            elif mode in ("two_target", "double"):
+                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.pdf"
+                plot_multi_scatter(res_df, pdf_out_path, f"Multi-Model Prediction: {mode} (alpha={alpha})", alpha)
 
             top1_ratio = top1_hits / total_scenarios if total_scenarios > 0 else 0
             top5_ratio = top5_hits / total_scenarios if total_scenarios > 0 else 0

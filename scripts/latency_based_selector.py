@@ -8,27 +8,9 @@ import numpy as np
 def get_single_model_scores(results_dir):
     scores = {} # (model_name, execution) -> score
     
-    # 사용자가 명시한 특정 파일 목록
-    target_files = [
-        "recompute_performance_20251224_072115_model_schedules_g.json",
-        "recompute_performance_20251224_091202_model_schedules_m.json",
-        "recompute_performance_20260112_141147_model_schedules_resnet_x2.json",
-        "recompute_performance_20251224_093406_model_schedules_r_x2.json",
-        "recompute_performance_20251224_093750_model_schedules_t_x2.json"
-    ]
-    
     results_path = Path(results_dir)
-    for file_name in target_files:
-        p_file = results_path / file_name
-        if not p_file.exists():
-            # x2가 붙거나 안 붙은 경우 모두 고려 (사용자 입력과 실제 파일명 차이 대응)
-            alt_name = file_name.replace("_x2.json", ".json") if "_x2.json" in file_name else file_name.replace(".json", "_x2.json")
-            p_file = results_path / alt_name
-            
-        if not p_file.exists():
-            print(f"Warning: Target file {file_name} not found in {results_dir}")
-            continue
-            
+    # results_dir 내의 모든 json 파일을 탐색하여 단일 모델 결과를 수집
+    for p_file in results_path.glob("*.json"):
         try:
             with open(p_file, 'r', encoding='utf-8') as f:
                 content = json.load(f)
@@ -47,8 +29,9 @@ def get_single_model_scores(results_dir):
                 score = item.get("score")
                 
                 if model_name and execution and score is not None:
-                    # 중복되는 경우 더 높은 score를 유지하거나 마지막 것을 사용 (여기선 마지막 것)
-                    scores[(model_name, execution)] = score
+                    # 중복되는 경우 더 높은 score를 유지
+                    if (model_name, execution) not in scores or score > scores[(model_name, execution)]:
+                        scores[(model_name, execution)] = score
         except Exception as e:
             print(f"Error reading {p_file}: {e}")
             
@@ -153,10 +136,16 @@ def get_performance_index(results_dir):
     return perf_index
 
 def main():
-    results_recompute_dir = "results_recompute"
-    # test_random_csv = "xgboost_model/dataset/gpu/test_random.csv" # 더 이상 사용하지 않음
-    test_schedules_csv = "xgboost_model/dataset/gpu/test_schedules_x3.csv"
-    output_csv = "latency_based_best_results.csv"
+    import argparse
+    parser = argparse.ArgumentParser(description="Latency Based Selector")
+    parser.add_argument("--results_recompute_dir", default="results_recompute")
+    parser.add_argument("--test_schedules_csv", default="xgboost_model/dataset/gpu/test_schedules_x3.csv")
+    parser.add_argument("--output_csv", default="latency_based_best_results.csv")
+    args = parser.parse_args()
+
+    results_recompute_dir = args.results_recompute_dir
+    test_schedules_csv = args.test_schedules_csv
+    output_csv = args.output_csv
     
     print("Collecting single model scores...")
     model_scores = get_single_model_scores(results_recompute_dir)

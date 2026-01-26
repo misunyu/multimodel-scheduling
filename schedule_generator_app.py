@@ -1353,15 +1353,20 @@ class ONNXProfilerApp(QMainWindow):
                         abbr_counts[abbr].add(name)
 
                 initials = []
-                for m in models:
-                    if isinstance(m, str) and m.strip():
-                        name = m.strip()
-                        abbr = model_to_abbr.get(name)
-                        # If this abbreviation is shared by more than one distinct model name, use full name
-                        if len(abbr_counts.get(abbr, set())) > 1:
-                            initials.append(name.lower())
-                        else:
-                            initials.append(abbr)
+                if len(models) == 1:
+                    # If only one model is selected, use its full name in lower case
+                    name = models[0].strip()
+                    initials.append(name.lower())
+                else:
+                    for m in models:
+                        if isinstance(m, str) and m.strip():
+                            name = m.strip()
+                            abbr = model_to_abbr.get(name)
+                            # If this abbreviation is shared by more than one distinct model name, use full name
+                            if len(abbr_counts.get(abbr, set())) > 1:
+                                initials.append(name.lower())
+                            else:
+                                initials.append(abbr)
                 
                 initials.sort()
             except Exception:
@@ -1412,10 +1417,19 @@ class ONNXProfilerApp(QMainWindow):
                     for mid, cfg in entries.items():
                         if not isinstance(cfg, dict):
                             continue
-                        # Only scale 'infps' as requested; leave 'intps' unchanged
-                        if "infps" in cfg and isinstance(cfg["infps"], (int, float)):
-                            val = int(round(float(cfg["infps"]) * factor))
-                            cfg["infps"] = max(1, val)
+                        # Only scale 'infps' or 'intps' as requested
+                        if "infps" in cfg:
+                            try:
+                                val = int(round(float(cfg["infps"]) * factor))
+                                cfg["infps"] = max(1, val)
+                            except (ValueError, TypeError):
+                                pass
+                        if "intps" in cfg:
+                            try:
+                                val = int(round(float(cfg["intps"]) * factor))
+                                cfg["intps"] = max(1, val)
+                            except (ValueError, TypeError):
+                                pass
                         # Ensure no legacy 'time' field sneaks in
                         if "time" in cfg:
                             try:
@@ -1424,11 +1438,11 @@ class ONNXProfilerApp(QMainWindow):
                                 pass
                 return dst
 
-            # New naming and scaling: _x2.yaml (infps x2), _x3.yaml (infps x3), _x3-5_test.yaml (infps x3.5)
+            # New naming and scaling: _x2.yaml (infps/intps x2), _x3.yaml (infps/intps x3), _x4.yaml (infps/intps x4)
             variants = [
-                (f"model_schedules{initials_suffix}_x2.yaml", 2.0, "# This variant doubles input FPS (infps x2); intps unchanged\n"),
-                (f"model_schedules{initials_suffix}_x3.yaml", 3.0, "# This variant triples input FPS (infps x3); intps unchanged\n"),
-                (f"model_schedules{initials_suffix}_x3-5_test.yaml", 3.5, "# This variant sets input FPS to 3.5x (infps x3.5); intps unchanged\n"),
+                (f"model_schedules{initials_suffix}_x2.yaml", 2.0, "# This variant doubles input FPS/Tokens (infps/intps x2)\n"),
+                (f"model_schedules{initials_suffix}_x3.yaml", 3.0, "# This variant triples input FPS/Tokens (infps/intps x3)\n"),
+                (f"model_schedules{initials_suffix}_x4.yaml", 4.0, "# This variant quadruples input FPS/Tokens (infps/intps x4)\n"),
             ]
 
             for filename, factor, note in variants:
@@ -1456,78 +1470,6 @@ class ONNXProfilerApp(QMainWindow):
                 except Exception as ve:
                     self.log_message(f"[Error] Failed to write scaled schedule {filename}: {ve}")
 
-            # Generate special variant: resnet50 is 3.5x and others are 2x
-            try:
-                import copy
-                special_schedules = copy.deepcopy(schedules)
-                for comb_name, entries in special_schedules.items():
-                    if not isinstance(entries, dict): continue
-                    for mid, cfg in entries.items():
-                        if not isinstance(cfg, dict): continue
-                        model_name = cfg.get("model", "")
-                        factor = 3.5 if "resnet50" in model_name.lower() else 2.0
-                        if "infps" in cfg and isinstance(cfg["infps"], (int, float)):
-                            cfg["infps"] = max(1, int(round(float(cfg["infps"]) * factor)))
-                        if "intps" in cfg and isinstance(cfg["intps"], (int, float)):
-                            cfg["intps"] = max(1, int(round(float(cfg["intps"]) * factor)))
-                
-                special_filename = f"model_schedules{initials_suffix}_2x_resnet3-5_test.yaml"
-                special_path = os.path.join(static_dir, special_filename)
-                with open(special_path, "w") as sf:
-                    sf.write(f"# {special_filename}\n")
-                    sf.write("# Auto-generated configuration for model execution on CPU or GPU\n")
-                    sf.write("# This variant sets resnet50 to 3.5x and others to 2x\n\n")
-                    sf.write(f"# Target device file: {self.device_settings_file}\n")
-                    sf.write("# Available devices:\n")
-                    sf.write(f"# - CPU: {cpu_count}\n")
-                    if gpu_count > 0:
-                        sf.write(f"# - GPU: {gpu_count} (IDs: {', '.join(map(str, gpu_ids))})\n")
-                    sf.write("\n")
-                    sf.write("# Available models:\n")
-                    for model in models:
-                        sf.write(f"# - {model}\n")
-                    sf.write("\n")
-                    sf.write("# Model-execution configurations with unique IDs\n")
-                    sf.write(yaml.dump(special_schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
-                self.log_message(f"[Success] Also generated special schedule: gen_schedules/{special_filename}")
-            except Exception as se:
-                self.log_message(f"[Error] Failed to generate {special_filename}: {se}")
-
-            # Generate _test.yaml variant where infps/intps are 4x the profiled values
-            try:
-                import copy
-                test_schedules = copy.deepcopy(schedules)
-                
-                for comb_name, entries in test_schedules.items():
-                    if not isinstance(entries, dict): continue
-                    for mid, cfg in entries.items():
-                        if not isinstance(cfg, dict): continue
-                        if "infps" in cfg and isinstance(cfg["infps"], (int, float)):
-                            cfg["infps"] = int(round(cfg["infps"] * 4.0))
-                        if "intps" in cfg and isinstance(cfg["intps"], (int, float)):
-                            cfg["intps"] = int(round(cfg["intps"] * 4.0))
-                
-                test_filename = f"model_schedules{initials_suffix}_test.yaml"
-                test_path = os.path.join(static_dir, test_filename)
-                with open(test_path, "w") as tf:
-                    tf.write(f"# {test_filename}\n")
-                    tf.write("# Auto-generated configuration for model execution on CPU or GPU\n")
-                    tf.write(f"# This variant sets infps/intps to 4x the profiled value\n\n")
-                    tf.write(f"# Target device file: {self.device_settings_file}\n")
-                    tf.write("# Available devices:\n")
-                    tf.write(f"# - CPU: {cpu_count}\n")
-                    if gpu_count > 0:
-                        tf.write(f"# - GPU: {gpu_count} (IDs: {', '.join(map(str, gpu_ids))})\n")
-                    tf.write("\n")
-                    tf.write("# Available models:\n")
-                    for model in models:
-                        tf.write(f"# - {model}\n")
-                    tf.write("\n")
-                    tf.write("# Model-execution configurations with unique IDs\n")
-                    tf.write(yaml.dump(test_schedules, default_flow_style=False).replace("combination_", "\ncombination_"))
-                self.log_message(f"[Success] Also generated test schedule: gen_schedules/{test_filename} (4x profiled values)")
-            except Exception as te:
-                self.log_message(f"[Error] Failed to generate _test.yaml: {te}")
         except Exception as e:
             self.log_message(f"[Error] Failed to write gen_schedules/model_schedules.yaml: {e}")
             

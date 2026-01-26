@@ -100,6 +100,7 @@ def main():
     print(f"Loaded {len(sched_index)} schedules from {test_schedules_csv}")
 
     results = []
+    actual_best_metrics = [] # List to store (throughput, drop_rate, score, models_count) of actual bests
     
     top1_hits = 0
     top5_hits = 0
@@ -225,6 +226,23 @@ def main():
                 max_actual_score = actual_score
                 best_actual_combs = [comb_name]
 
+        # [Added] Collect metrics for actual best combinations
+        if best_actual_combs:
+            # Use the first one if there are ties
+            first_actual_best = sched_perf.get(best_actual_combs[0])
+            if first_actual_best:
+                a_derived = first_actual_best.get('derived', {})
+                a_t = a_derived.get('throughput_norm')
+                a_d = a_derived.get('drop_rate_norm')
+                a_s = first_actual_best.get('score')
+                a_m_count = len(first_actual_best.get('models', {}))
+                actual_best_metrics.append({
+                    'throughput': a_t,
+                    'drop_rate': a_d,
+                    'score': a_s,
+                    'models_count': a_m_count
+                })
+
         total_valid_schedules += 1
         
         # Top-1 Accuracy: If one of predicted best is in actual best
@@ -309,6 +327,15 @@ def main():
         avg_drop_rate = round(numeric_drop_rate.mean(), 2)
         avg_score = round(numeric_score.mean(), 2)
         
+        # [Added] Calculate averages for actual best metrics
+        actual_best_df = pd.DataFrame(actual_best_metrics)
+        if not actual_best_df.empty:
+            avg_actual_t = round(pd.to_numeric(actual_best_df['throughput'], errors='coerce').mean(), 2)
+            avg_actual_d = round(pd.to_numeric(actual_best_df['drop_rate'], errors='coerce').mean(), 2)
+            avg_actual_s = round(pd.to_numeric(actual_best_df['score'], errors='coerce').mean(), 2)
+        else:
+            avg_actual_t, avg_actual_d, avg_actual_s = 'nan', 'nan', 'nan'
+
         # 모델 개수별 누적 평균값 계산 (>= 3, 4, 5, 6, 7, 8)
         avg_rows = []
         for n in range(8, 2, -1):
@@ -318,6 +345,15 @@ def main():
                 avg_t = round(pd.to_numeric(subset['normalized_throughput'], errors='coerce').mean(), 2)
                 avg_d = round(pd.to_numeric(subset['drop_rate'], errors='coerce').mean(), 2)
                 avg_s = round(pd.to_numeric(subset['score'], errors='coerce').mean(), 2)
+                
+                # [Added] Actual best average for >= n models
+                subset_actual = actual_best_df[actual_best_df['models_count'] >= n]
+                if not subset_actual.empty:
+                    avg_a_t = round(pd.to_numeric(subset_actual['throughput'], errors='coerce').mean(), 2)
+                    avg_a_d = round(pd.to_numeric(subset_actual['drop_rate'], errors='coerce').mean(), 2)
+                    avg_a_s = round(pd.to_numeric(subset_actual['score'], errors='coerce').mean(), 2)
+                    avg_rows.append([f'Actual Best Average (>= {n} models)', '', avg_a_t, avg_a_d, avg_a_s])
+                
                 avg_rows.append([f'Average (>= {n} models)', '', avg_t, avg_d, avg_s])
             else:
                 avg_rows.append([f'Average (>= {n} models)', '', 'nan', 'nan', 'nan'])
@@ -335,6 +371,7 @@ def main():
             writer.writerow(['Top-5 Accuracy', top5_acc])
             writer.writerow(['Top-1 Accuracy (>= 3 models)', top1_acc_ge3])
             writer.writerow(['Top-5 Accuracy (>= 3 models)', top5_acc_ge3])
+            writer.writerow(['Actual Best Average', '', avg_actual_t, avg_actual_d, avg_actual_s])
             for row in avg_rows:
                 writer.writerow(row)
             writer.writerow(['Average', '', avg_throughput, avg_drop_rate, avg_score])

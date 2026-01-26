@@ -66,12 +66,14 @@ def main():
     parser = argparse.ArgumentParser(description="Random Search Selector for best combinations.")
     parser.add_argument("-k", type=int, default=5, help="Number of samples for random search (default: 5)")
     parser.add_argument("--test_csv", default="xgboost_model/dataset/gpu/test_schedules_x3.csv", help="Test schedules CSV")
+    parser.add_argument("--results_recompute_dir", default="results_recompute")
+    parser.add_argument("--output_csv", default="random_search_best_results.csv")
     args = parser.parse_args()
     
     num_samples = args.k
     test_schedules_csv = args.test_csv
-    output_csv = "random_search_best_results.csv"
-    results_recompute_dir = "results_recompute"
+    output_csv = args.output_csv
+    results_recompute_dir = args.results_recompute_dir
     
     print(f"Random Search with k={num_samples}")
     print("Indexing performance data from results_recompute...")
