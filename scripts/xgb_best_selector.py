@@ -302,8 +302,8 @@ def main():
         results.append({
             'schedule_file': sched_name,
             'best_combination': display_comb,
-            'normalized_throughput': derived.get('throughput_norm') if mode not in ("score", "rank") or mode == "double" else "-",
-            'drop_rate': derived.get('drop_rate_norm') if mode not in ("score", "rank") or mode == "double" else "-",
+            'normalized_throughput': derived.get('throughput_norm'),
+            'drop_rate': derived.get('drop_rate_norm'),
             'score': perf_item.get('score'),
             'models_count': models_count
         })
