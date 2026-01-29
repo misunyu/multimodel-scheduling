@@ -37,9 +37,9 @@ def recompute_scores(input_dir, output_dir):
         if dmax == 0:
             dmax = 1.0
             
-        # 2) Calculate scores and find best deployment
-        best_score = -float('inf')
-        best_combination = None
+        # 2) Calculate scores and find best deployment for various alphas
+        alphas = [round(i * 0.1, 1) for i in range(1, 11)]
+        best_deployments = {alpha: {'score': -float('inf'), 'comb': None} for alpha in alphas}
         
         for entry in data_content['data']:
             total_throughput = entry.get('total', {}).get('total_throughput_fps', 0.0)
@@ -55,16 +55,26 @@ def recompute_scores(input_dir, output_dir):
             entry['derived']['throughput_norm'] = throughput_norm
             entry['derived']['drop_rate_norm'] = drop_rate_norm
             
-            # score = throughput_norm - 0.2 * drop_rate_norm
-            score = round(throughput_norm - 0.2 * drop_rate_norm, 2)
-            entry['score'] = score
+            # Current behavior: score = throughput_norm - 0.2 * drop_rate_norm
+            score_02 = round(throughput_norm - 0.2 * drop_rate_norm, 2)
+            entry['score'] = score_02
             
-            if score > best_score:
-                best_score = score
-                best_combination = entry.get('combination')
-                
-        if best_combination:
-            data_content['best deployment'] = best_combination
+            # Calculate scores for all alphas and track best
+            for alpha in alphas:
+                s = round(throughput_norm - alpha * drop_rate_norm, 2)
+                if s > best_deployments[alpha]['score']:
+                    best_deployments[alpha]['score'] = s
+                    best_deployments[alpha]['comb'] = entry.get('combination')
+        
+        # Add best deployments to data_content
+        for alpha in alphas:
+            if best_deployments[alpha]['comb']:
+                key = f'best deployment-{alpha}'
+                data_content[key] = best_deployments[alpha]['comb']
+        
+        # Keep 'best deployment' for backward compatibility (alpha=0.2)
+        if best_deployments[0.2]['comb']:
+            data_content['best deployment'] = best_deployments[0.2]['comb']
             
         # Save the result
         output_filename = "recompute_" + os.path.basename(file_path)

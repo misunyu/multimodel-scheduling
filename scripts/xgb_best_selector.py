@@ -367,6 +367,7 @@ def main():
 
         with open(output_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
+            writer.writerow(['Alpha', alpha])
             writer.writerow(['Top-1 Accuracy', top1_acc])
             writer.writerow(['Top-5 Accuracy', top5_acc])
             writer.writerow(['Top-1 Accuracy (>= 3 models)', top1_acc_ge3])
