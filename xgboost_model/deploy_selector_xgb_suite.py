@@ -897,7 +897,7 @@ def plot_multi_scatter(df: pd.DataFrame, output_path: Path, title: str, alpha: f
         axes[0].plot([min_val, max_val], [min_val, max_val], 'r--')
         axes[0].set_xlabel("Actual Norm Throughput", fontsize=18)
         axes[0].set_ylabel("Predicted Norm Throughput", fontsize=18)
-        axes[0].set_title("Normalized Throughput", fontsize=16)
+        axes[0].set_title("Normalized Throughput", fontsize=20)
         axes[0].grid(True, linestyle='--', alpha=0.7)
         axes[0].tick_params(axis='both', which='major', labelsize=16)
 
@@ -912,7 +912,7 @@ def plot_multi_scatter(df: pd.DataFrame, output_path: Path, title: str, alpha: f
         axes[1].plot([min_val, max_val], [min_val, max_val], 'r--')
         axes[1].set_xlabel("Actual Norm Drop Rate", fontsize=18)
         axes[1].set_ylabel("Predicted Norm Drop Rate", fontsize=18)
-        axes[1].set_title("Normalized Drop Rate", fontsize=16)
+        axes[1].set_title("Normalized Drop Rate", fontsize=20)
         axes[1].grid(True, linestyle='--', alpha=0.7)
         axes[1].tick_params(axis='both', which='major', labelsize=16)
 
@@ -923,7 +923,7 @@ def plot_multi_scatter(df: pd.DataFrame, output_path: Path, title: str, alpha: f
     axes[2].plot([min_val, max_val], [min_val, max_val], 'r--')
     axes[2].set_xlabel("Actual Score", fontsize=18)
     axes[2].set_ylabel("Predicted Score", fontsize=18)
-    axes[2].set_title(f"Combined Score (alpha={alpha})", fontsize=16)
+    axes[2].set_title(f"Score (alpha={alpha})", fontsize=20)
     axes[2].grid(True, linestyle='--', alpha=0.7)
     axes[2].tick_params(axis='both', which='major', labelsize=16)
 

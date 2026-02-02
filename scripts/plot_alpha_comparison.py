@@ -35,9 +35,9 @@ def main():
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 3.75))
     
     metrics = [
-        ('avg_score_ge3', 'Average Score (Models >= 3)'),
-        ('top1_acc_ge3', 'Top-1 Accuracy (Models >= 3)'),
-        ('top5_acc_ge3', 'Top-5 Accuracy (Models >= 3)')
+        ('avg_score_ge3', 'Average Score'),
+        ('top1_acc_ge3', 'Top-1 Accuracy'),
+        ('top5_acc_ge3', 'Top-5 Accuracy')
     ]
 
 
@@ -66,15 +66,19 @@ def main():
         for spine in ax.spines.values():
             spine.set_linewidth(0.15)
         
-        # Y limit adjustment to fit labels
-        max_val = max(fixed_vals.max(), trained_vals.max())
-        ax.set_ylim(0, max_val * 1.4)
+        # Y limit adjustment
+        if i == 0:
+            ax.set_ylim(0, 1.0)
+        elif i == 1:
+            ax.set_ylim(0, 0.6)
+        elif i == 2:
+            ax.set_ylim(0, 1.0)
 
-    # Global legend at the top
+    # Global legend at the bottom
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=2, fontsize=10, frameon=False)
+    fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2, fontsize=10, frameon=False)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.82]) 
+    plt.tight_layout(rect=[0, 0.08, 1, 1.0]) 
     plt.savefig(output_path)
     print(f"Comparison plots saved to {output_path}")
 
