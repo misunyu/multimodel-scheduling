@@ -878,8 +878,12 @@ def plot_multi_scatter(df: pd.DataFrame, output_path: Path, title: str, alpha: f
     if df.empty:
         return
 
+    # Set font to match LaTeX appearance (Times New Roman)
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
+
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    fig.suptitle(title, fontsize=16)
+    # fig.suptitle(title, fontsize=20)
 
     # 1. Throughput Plot
     if "actual_T_norm" in df.columns and "pred_T_norm" in df.columns:
@@ -891,10 +895,11 @@ def plot_multi_scatter(df: pd.DataFrame, output_path: Path, title: str, alpha: f
         max_val = max(actual_t.max(), pred_t.max()) if not actual_t.isna().all() else 1.0
         min_val = min(actual_t.min(), pred_t.min()) if not actual_t.isna().all() else 0.0
         axes[0].plot([min_val, max_val], [min_val, max_val], 'r--')
-        axes[0].set_xlabel("Actual Norm Throughput")
-        axes[0].set_ylabel("Predicted Norm Throughput")
-        axes[0].set_title("Normalized Throughput")
+        axes[0].set_xlabel("Actual Norm Throughput", fontsize=18)
+        axes[0].set_ylabel("Predicted Norm Throughput", fontsize=18)
+        axes[0].set_title("Normalized Throughput", fontsize=16)
         axes[0].grid(True, linestyle='--', alpha=0.7)
+        axes[0].tick_params(axis='both', which='major', labelsize=16)
 
     # 2. Drop Rate Plot
     if "actual_D_norm" in df.columns and "pred_D_norm" in df.columns:
@@ -905,20 +910,22 @@ def plot_multi_scatter(df: pd.DataFrame, output_path: Path, title: str, alpha: f
         max_val = max(actual_d.max(), pred_d.max()) if not actual_d.isna().all() else 1.0
         min_val = min(actual_d.min(), pred_d.min()) if not actual_d.isna().all() else 0.0
         axes[1].plot([min_val, max_val], [min_val, max_val], 'r--')
-        axes[1].set_xlabel("Actual Norm Drop Rate")
-        axes[1].set_ylabel("Predicted Norm Drop Rate")
-        axes[1].set_title("Normalized Drop Rate")
+        axes[1].set_xlabel("Actual Norm Drop Rate", fontsize=18)
+        axes[1].set_ylabel("Predicted Norm Drop Rate", fontsize=18)
+        axes[1].set_title("Normalized Drop Rate", fontsize=16)
         axes[1].grid(True, linestyle='--', alpha=0.7)
+        axes[1].tick_params(axis='both', which='major', labelsize=16)
 
     # 3. Score Plot
     axes[2].scatter(df["actual_score"], df["pred_score"], alpha=0.5, color='purple')
     max_val = max(df["actual_score"].max(), df["pred_score"].max())
     min_val = min(df["actual_score"].min(), df["pred_score"].min())
     axes[2].plot([min_val, max_val], [min_val, max_val], 'r--')
-    axes[2].set_xlabel("Actual Score")
-    axes[2].set_ylabel("Predicted Score")
-    axes[2].set_title(f"Combined Score (alpha={alpha})")
+    axes[2].set_xlabel("Actual Score", fontsize=18)
+    axes[2].set_ylabel("Predicted Score", fontsize=18)
+    axes[2].set_title(f"Combined Score (alpha={alpha})", fontsize=16)
     axes[2].grid(True, linestyle='--', alpha=0.7)
+    axes[2].tick_params(axis='both', which='major', labelsize=16)
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(output_path)
@@ -933,6 +940,10 @@ def plot_score_scatter(df: pd.DataFrame, output_path: Path, title: str):
     if df.empty:
         return
 
+    # Set font to match LaTeX appearance (Times New Roman)
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
+
     plt.figure(figsize=(8, 8))
     plt.scatter(df["actual_score"], df["pred_score"], alpha=0.5, color='blue')
     
@@ -941,11 +952,13 @@ def plot_score_scatter(df: pd.DataFrame, output_path: Path, title: str):
     min_val = min(df["actual_score"].min(), df["pred_score"].min())
     plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal')
     
-    plt.xlabel("Actual Score")
-    plt.ylabel("Predicted Score")
-    plt.title(title)
-    plt.legend()
+    plt.xlabel("Actual Score", fontsize=18)
+    plt.ylabel("Predicted Score", fontsize=18)
+    # plt.title(title, fontsize=16)
+    plt.legend(fontsize=12)
     plt.grid(True, linestyle='--', alpha=0.7)
+    plt.xticks(fontsize=16)
+    plt.yticks(fontsize=16)
     
     plt.savefig(output_path)
     plt.close()

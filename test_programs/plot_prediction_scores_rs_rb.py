@@ -239,17 +239,22 @@ def plot_scores(scores_by_key: Dict[Tuple[int, ...], List[Tuple[str, float, bool
             y_norm.append(y)
             c_norm.append(c)
 
+    # Set font to match LaTeX appearance (Times New Roman)
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
+
     plt.figure(figsize=(max(10, len(ordered_keys) * 0.8), 6))
     if x_norm:
         plt.scatter(x_norm, y_norm, c=c_norm, s=16, marker='o', edgecolors='none')
     if x_best:
         plt.scatter(x_best, y_best, c=c_best, s=64, marker='*', edgecolors='k', linewidths=0.4, label='best deployment')
-    plt.xticks(ticks=x_positions, labels=x_labels, rotation=90)
-    plt.xlabel(f'{key_mode} keys')
-    plt.ylabel('score')
-    plt.title(f'Combination scores per {key_mode} key')
+    plt.xticks(ticks=x_positions, labels=x_labels, rotation=90, fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.xlabel(f'{key_mode} keys', fontsize=14)
+    plt.ylabel('score', fontsize=14)
+    # plt.title(f'Combination scores per {key_mode} key', fontsize=16)
     if x_best:
-        plt.legend(loc='best')
+        plt.legend(loc='best', fontsize=12)
     plt.grid(True, axis='y', linestyle='--', alpha=0.3)
     plt.tight_layout()
 

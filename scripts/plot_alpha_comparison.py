@@ -32,7 +32,7 @@ def main():
     width = 0.35
 
     # 그래프 생성
-    fig, axes = plt.subplots(1, 3, figsize=(9, 2.5))
+    fig, axes = plt.subplots(1, 3, figsize=(13.5, 3.75))
     
     metrics = [
         ('avg_score_ge3', 'Average Score (Models >= 3)'),
@@ -40,8 +40,6 @@ def main():
         ('top5_acc_ge3', 'Top-5 Accuracy (Models >= 3)')
     ]
 
-    edge_color1 = '#8888FF' # Lighter blue
-    edge_color2 = '#FF8888' # Lighter red
 
     for i, (col, title) in enumerate(metrics):
         ax = axes[i]
@@ -49,15 +47,15 @@ def main():
         trained_vals = df[f'{col}_trained'].values
 
         rects1 = ax.bar(x - width/2, fixed_vals, width, label='Multi-Objective Predictor', 
-                        color='skyblue', alpha=0.5, hatch='//', edgecolor=edge_color1, linewidth=0.3)
+                        color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.3)
         rects2 = ax.bar(x + width/2, trained_vals, width, label='Single-Objective Predictor', 
-                        color='lightcoral', alpha=0.5, hatch='..', edgecolor=edge_color2, linewidth=0.3)
+                        color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.3)
 
         if i == 0:
             ax.set_ylabel('Score', fontsize=10)
         else:
             ax.set_ylabel('Probability', fontsize=10)
-        ax.set_title(title, fontsize=12)
+        # ax.set_title(title, fontsize=12)
         ax.set_xticks(x)
         ax.set_xticklabels(alphas, fontsize=9)
         ax.set_xlabel('Alpha', fontsize=10)

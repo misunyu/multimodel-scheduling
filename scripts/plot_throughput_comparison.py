@@ -87,12 +87,12 @@ def plot_throughput_fraction():
     # We'll use a slightly lighter blue/red for the hatch/edge
     hatch_color1 = '#8888FF' # Lighter blue
     bar_inf = ax.bar(x, inf_fractions, width, label='Processed',
-                     color='skyblue', alpha=0.5, edgecolor=hatch_color1, hatch='//', linewidth=0.5)
+                     color='skyblue', alpha=0.5, edgecolor='black', hatch='//', linewidth=0.5)
     
     # Dropped - Red/Lightcoral style
     hatch_color2 = '#FF8888' # Lighter red
     bar_drop = ax.bar(x, drop_fractions, width, bottom=inf_fractions, label='Dropped',
-                      color='lightcoral', alpha=0.5, edgecolor=hatch_color2, hatch='..', linewidth=0.5)
+                      color='lightcoral', alpha=0.5, edgecolor='black', hatch='..', linewidth=0.5)
 
     # Add text labels on bars (matches autolabel style)
     for i in range(len(x)):
