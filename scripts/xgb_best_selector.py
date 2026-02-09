@@ -336,9 +336,9 @@ def main():
         else:
             avg_actual_t, avg_actual_d, avg_actual_s = 'nan', 'nan', 'nan'
 
-        # 모델 개수별 누적 평균값 계산 (>= 3, 4, 5, 6, 7, 8)
+        # 모델 개수별 누적 평균값 계산 (>= 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
         avg_rows = []
-        for n in range(8, 2, -1):
+        for n in range(12, 2, -1):
             mask = output_df['models_count'] >= n
             subset = output_df[mask]
             if not subset.empty:

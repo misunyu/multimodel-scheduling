@@ -1,118 +1,115 @@
+# Input file: results/performance_20260127_074757_model_schedules_g_m_t_x4.json
 import json
 import os
-import csv
+import glob
 import matplotlib.pyplot as plt
 import numpy as np
+import argparse
 from matplotlib import rcParams
 
-def plot_throughput_fraction():
-    csv_file = "better_throughput_results.csv"
-    if not os.path.exists(csv_file):
-        print(f"Error: {csv_file} not found.")
-        return
+def find_combinations_in_file(json_path):
+    try:
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+        
+        perf_data = data.get('data', [])
+        if not perf_data:
+            return None, None, 0
+            
+        # Filter entries that have score, score >= 0, and model count >= 2
+        valid_entries = []
+        for entry in perf_data:
+            if 'score' in entry and entry['score'] >= 0:
+                models_count = len(entry.get('models', {}))
+                if models_count >= 2:
+                    valid_entries.append(entry)
+                    
+        if len(valid_entries) < 2:
+            # If only one entry, best and worst are same, diff 0
+            if len(valid_entries) == 1:
+                return valid_entries[0], valid_entries[0], 0
+            return None, None, 0
+            
+        scores = [entry['score'] for entry in valid_entries]
+        min_score = min(scores)
+        max_score = max(scores)
+        diff = max_score - min_score
+        
+        # Find combinations
+        potential_best = [e for e in valid_entries if e['score'] == max_score]
+        potential_worst = [e for e in valid_entries if e['score'] == min_score]
+        
+        return potential_worst[0], potential_best[0], diff
+    except Exception as e:
+        print(f"Error processing {json_path}: {e}")
+        return None, None, 0
 
-    # Read the first row (after header) from CSV
-    with open(csv_file, 'r') as f:
-        reader = csv.DictReader(f)
-        first_row = next(reader, None)
+def plot_throughput_fraction(input_file):
+    worst_entry, best_entry, diff = find_combinations_in_file(input_file)
     
-    if not first_row:
-        print("CSV is empty.")
+    if not worst_entry or not best_entry:
+        print(f"No valid data found in {input_file}.")
         return
 
-    results_dir = first_row['directory']
-    filename = first_row['filename']
-    best_deployment = first_row['best_deployment']
-    better_combination = first_row['better_combination']
+    print(f"Using performance file: {input_file}")
+    print(f"Worst combination: {worst_entry['combination']} (Score: {worst_entry['score']})")
+    print(f"Best combination: {best_entry['combination']} (Score: {best_entry['score']})")
+    print(f"Score difference: {diff}")
 
-    json_path = os.path.join(results_dir, filename)
-    if not os.path.exists(json_path):
-        print(f"Error: JSON file {json_path} not found.")
-        return
-
-    with open(json_path, 'r') as f:
-        data = json.load(f)
-
-    def get_counts(comb_id):
-        for entry in data.get('data', []):
-            if entry.get('combination') == comb_id:
-                # Sum inference_count across all models
-                inf_count = sum(m.get('inference_count', 0) for m in entry.get('models', {}).values())
-                drop_count = entry.get('derived', {}).get('drop_count', 0)
-                return inf_count, drop_count
+    def get_fractions(entry):
+        # Sum inference_count across all models
+        inf_count = sum(m.get('inference_count', 0) for m in entry.get('models', {}).values())
+        drop_count = entry.get('derived', {}).get('drop_count', 0)
+        total = inf_count + drop_count
+        if total > 0:
+            return inf_count / total, drop_count / total
         return 0, 0
 
-    inf_best, drop_best = get_counts(best_deployment)
-    inf_better, drop_better = get_counts(better_combination)
-
-    # Fractions
-    total_best = inf_best + drop_best
-    total_better = inf_better + drop_better
-
-    frac_inf_best = inf_best / total_best if total_best > 0 else 0
-    frac_drop_best = drop_best / total_best if total_best > 0 else 0
-    
-    frac_inf_better = inf_better / total_better if total_better > 0 else 0
-    frac_drop_better = drop_better / total_better if total_better > 0 else 0
+    frac_inf_worst, frac_drop_worst = get_fractions(worst_entry)
+    frac_inf_best, frac_drop_best = get_fractions(best_entry)
 
     # Plotting
-    # Set font to match LaTeX appearance (Times New Roman)
     try:
         rcParams['font.family'] = 'serif'
         rcParams['font.serif'] = ['Times New Roman']
-        rcParams['hatch.linewidth'] = 0.3  # Thinner hatch lines
+        rcParams['hatch.linewidth'] = 0.3
     except:
         pass
 
-    labels = ['Throughput-Max (CPU)', 'Best Score (Ours)']
-    # better_combination is Throughput-Max (CPU), best_deployment is Best Score (Ours)
-    inf_fractions = [frac_inf_better, frac_inf_best]
-    drop_fractions = [frac_drop_better, frac_drop_best]
+    labels = ['Worst Combination', 'Best Combination']
+    inf_fractions = [frac_inf_worst, frac_inf_best]
+    drop_fractions = [frac_drop_worst, frac_drop_best]
 
     x = np.arange(len(labels))
-    width = 0.4  # bar width
+    width = 0.4
 
-    # Reduced height to 2/3: 3.5 * 2/3 approx 2.33
-    # Reduced width to half: 4.5 / 2 = 2.25
     fig, ax = plt.subplots(figsize=(2.25, 2.33))
 
-    # Inference (Processed) - Blue/Skyblue style
-    edge_color1 = 'blue'
-    # To make hatch color lighter than edge color, we can draw the bar twice
-    # Once for the fill and hatch, once for the border.
-    # But simpler is to use a lighter color for edgecolor and draw border separately if needed.
-    # However, user said "연하고 얇게" (lighter and thinner).
-    # Let's try setting edgecolor to a lighter version of blue/red and linewidth for hatch via rcParams.
-    
-    # We'll use a slightly lighter blue/red for the hatch/edge
-    hatch_color1 = '#8888FF' # Lighter blue
     bar_inf = ax.bar(x, inf_fractions, width, label='Processed',
                      color='skyblue', alpha=0.5, edgecolor='black', hatch='//', linewidth=0.5)
     
-    # Dropped - Red/Lightcoral style
-    hatch_color2 = '#FF8888' # Lighter red
     bar_drop = ax.bar(x, drop_fractions, width, bottom=inf_fractions, label='Dropped',
                       color='lightcoral', alpha=0.5, edgecolor='black', hatch='..', linewidth=0.5)
 
-    # Add text labels on bars (matches autolabel style)
     for i in range(len(x)):
         # Processed fraction text
-        total_height = inf_fractions[i]
-        ax.text(x[i], total_height / 2, 
-                f'{inf_fractions[i]:.2f}', 
-                ha='center', va='center', fontsize=7, fontfamily='serif')
+        if inf_fractions[i] > 0.05:
+            ax.text(x[i], inf_fractions[i] / 2, 
+                    f'{inf_fractions[i]:.2f}', 
+                    ha='center', va='center', fontsize=7, fontfamily='serif')
         # Dropped fraction text
-        ax.text(x[i], inf_fractions[i] + drop_fractions[i]/2, 
-                f'{drop_fractions[i]:.2f}', 
-                ha='center', va='center', fontsize=7, fontfamily='serif')
+        if drop_fractions[i] > 0.05:
+            ax.text(x[i], inf_fractions[i] + drop_fractions[i]/2, 
+                    f'{drop_fractions[i]:.2f}', 
+                    ha='center', va='center', fontsize=7, fontfamily='serif')
 
-    ax.set_ylabel('Fraction of Requests', fontsize=7)
+    ax.set_ylabel('Fraction of Requests', fontsize=8)
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=5)
+    ax.set_xticklabels(labels, fontsize=6)
+    ax.tick_params(axis='y', labelsize=5)
     ax.set_ylim(0, 1.0)
     ax.grid(axis='y', linestyle='--', alpha=0.3, color='gray')
     
-    # Legend style from compare_latency_vs_best.py
     ax.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=6, frameon=False)
 
     plt.tight_layout()
@@ -121,4 +118,8 @@ def plot_throughput_fraction():
     print(f"Graph saved to {output_pdf}")
 
 if __name__ == "__main__":
-    plot_throughput_fraction()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_json", help="Path to the performance JSON file")
+    args = parser.parse_args()
+    
+    plot_throughput_fraction(args.input_json)

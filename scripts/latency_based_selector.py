@@ -26,6 +26,8 @@ def get_single_model_scores(results_dir):
                 model_info = models[view_key]
                 model_name = model_info.get("model")
                 execution = model_info.get("execution", "").upper()
+                if execution.startswith("NPU"):
+                    execution = "NPU"
                 score = item.get("score")
                 
                 if model_name and execution and score is not None:
@@ -61,20 +63,20 @@ def find_best_combination(schedule_doc, model_scores):
         m_name = info.get("model")
         cpu_score = model_scores.get((m_name, 'CPU'))
         gpu_score = model_scores.get((m_name, 'GPU'))
+        npu_score = model_scores.get((m_name, 'NPU'))
         
-        if cpu_score is None or gpu_score is None:
-             missing = []
-             if cpu_score is None: missing.append("CPU")
-             if gpu_score is None: missing.append("GPU")
-             print(f"  [LOG] Model {m_name} is missing scores for: {', '.join(missing)}")
-             # Default to 0 if missing
+        if cpu_score is None and gpu_score is None and npu_score is None:
+             print(f"  [LOG] Model {m_name} is missing scores for all PUs")
+             cpu_score = 0
+             gpu_score = 0
+             npu_score = 0
+        else:
              cpu_score = cpu_score or 0
              gpu_score = gpu_score or 0
+             npu_score = npu_score or 0
 
-        if gpu_score > cpu_score:
-            target_pu_map[view_id] = 'GPU'
-        else:
-            target_pu_map[view_id] = 'CPU'
+        scores_map = {'CPU': cpu_score, 'GPU': gpu_score, 'NPU': npu_score}
+        target_pu_map[view_id] = max(scores_map, key=scores_map.get)
             
     # 2단계: 위 target_pu_map과 일치하는 combination 찾기
     print(f"  [LOG] Target PU mapping: {target_pu_map}")
@@ -94,9 +96,18 @@ def find_best_combination(schedule_doc, model_scores):
             # 해당 모델의 최적 PU 찾기
             cpu_score = model_scores.get((m_name, 'CPU'), 0)
             gpu_score = model_scores.get((m_name, 'GPU'), 0)
-            target_pu = 'GPU' if gpu_score > cpu_score else 'CPU'
+            npu_score = model_scores.get((m_name, 'NPU'), 0)
             
-            if execution != target_pu:
+            # CPU, GPU, NPU 중 가장 높은 점수를 가진 PU 선택
+            scores_map = {'CPU': cpu_score, 'GPU': gpu_score, 'NPU': npu_score}
+            target_pu = max(scores_map, key=scores_map.get)
+            
+            # combination의 execution이 NPU0, NPU1 등일 수 있으므로 처리
+            norm_execution = execution
+            if execution.startswith("NPU"):
+                norm_execution = "NPU"
+            
+            if norm_execution != target_pu:
                 match = False
                 break
         
@@ -300,9 +311,9 @@ def main():
         avg_drop_rate = round(numeric_drop_rate.sum() / 24.3, 2)
         avg_score = round(numeric_score.sum() / 24.3, 2)
 
-        # 모델 개수별 누적 평균값 계산 (>= 3, 4, 5, 6, 7, 8)
+        # 모델 개수별 누적 평균값 계산 (>= 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
         avg_rows = []
-        for n in range(8, 2, -1):
+        for n in range(12, 2, -1):
             mask = output_df['models_count'] >= n
             subset = output_df[mask]
             if not subset.empty:

@@ -1,15 +1,4 @@
-#python3 scripts/compare_latency_vs_best.py results/performance_20251224_071639_model_schedules_g_t_test.json results/performance_20251224_071047_model_schedules_g_r_y_x2.json results/performance_20251224_081235_model_schedules_m_r_r_t_y_x3.json results/performance_20251223_180231_model_schedules_g_m_r_r_s_s_t_v_x3.json
-
-### Latency-based Selection 결과
-#1.  **results/performance_20251224_071639_model_schedules_g_t_test.json**
-#    *   Combination: **combination_4**
-#2.  **results/performance_20251224_071047_model_schedules_g_r_y_x2.json**
-#    *   Combination: **combination_1**
-#3.  **results/performance_20251224_081235_model_schedules_m_r_r_t_y_x3.json**
-#    *   Combination: **combination_18**
-#4.  **results/performance_20251223_180231_model_schedules_g_m_r_r_s_s_t_v_x3.json**
-#    *   Combination: **combination_89**
-
+#%python3 scripts/compare_latency_vs_best.py results/performance_20260127_075226_model_schedules_g_m_x3.json results/performance_20260127_113858_model_schedules_r_t_v_y_x2.json results/performance_20260127_090404_model_schedules_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v.json
 ### 확인 방법
 #`scripts/get_latency_based_comb.py`
 
@@ -86,6 +75,13 @@ def process_file(input_path, results_dir, model_name_to_tag):
         print(f"No data in input file: {input_path}")
         return None
 
+    # Find the absolute best throughput in the data (Oracle)
+    max_throughput_in_data = 0
+    for entry in input_data.get('data', []):
+        total_tp = entry.get('total', {}).get('total_throughput_fps', 0)
+        if total_tp > max_throughput_in_data:
+            max_throughput_in_data = total_tp
+
     input_filename = os.path.basename(input_path)
     input_tags = get_model_tags(input_filename)
     input_rate_suffix = get_input_rate_suffix(input_filename)
@@ -118,19 +114,16 @@ def process_file(input_path, results_dir, model_name_to_tag):
         return True
 
     latency_based_throughput = 0
-    best_throughput = 0
+    latency_based_comb_name = None
     
     for entry in input_data.get('data', []):
-        comb_name = entry.get('combination')
         total_tp = entry.get('total', {}).get('total_throughput_fps', 0)
         
-        if comb_name == best_deploy_id:
-            best_throughput = total_tp
-            
         if match_combination(entry):
             latency_based_throughput = total_tp
+            latency_based_comb_name = entry.get('combination')
 
-    return best_throughput, latency_based_throughput
+    return max_throughput_in_data, latency_based_throughput, latency_based_comb_name
 
 def main():
     parser = argparse.ArgumentParser()
@@ -156,9 +149,10 @@ def main():
         results_dir = os.path.dirname(input_path) or '.'
         res = process_file(input_path, results_dir, model_name_to_tag)
         if res:
-            best_tp, latency_based_tp = res
+            best_tp, latency_based_tp, latency_based_comb = res
             results_list.append((best_tp, latency_based_tp))
             file_labels.append(os.path.basename(input_path))
+            print(f"File: {os.path.basename(input_path)}, Latency-based combination: {latency_based_comb}")
 
     if not results_list:
         print("No valid data processed.")
@@ -173,36 +167,75 @@ def main():
     rcParams['font.serif'] = ['Times New Roman']
     rcParams['hatch.linewidth'] = 0.3 # Thinner hatch lines
     
-    n_files = len(results_list)
+    # Calculate values and labels
+    oracle_vals = []
+    latency_vals = []
+    processed_labels = []
+    
+    for i, (best_tp, latency_based_tp) in enumerate(results_list):
+        input_path = args.input_files[i]
+        results_dir = os.path.dirname(input_path) or '.'
+        input_filename = os.path.basename(input_path)
+        input_tags = get_model_tags(input_filename)
+        input_rate_suffix = get_input_rate_suffix(input_filename)
+        
+        sum_single_best = 0
+        for tag in input_tags:
+            single_file = find_single_model_file(results_dir, tag, input_rate_suffix)
+            if single_file:
+                with open(single_file, 'r') as f:
+                    single_data = json.load(f)
+                max_tp = 0
+                for entry in single_data.get('data', []):
+                    tp = entry.get('total', {}).get('total_throughput_fps', 0)
+                    if tp > max_tp:
+                        max_tp = tp
+                sum_single_best += max_tp
+            else:
+                sum_single_best += 0 
+
+        if best_tp > 0:
+            oracle_val = 1.0
+            latency_val = latency_based_tp / best_tp
+        else:
+            oracle_val = 1.0
+            latency_val = 0.0
+        
+        oracle_vals.append(oracle_val)
+        latency_vals.append(latency_val)
+        
+        tags = [t.upper() for t in get_model_tags(file_labels[i])]
+        num_models = len(tags)
+        processed_labels.append(f"{num_models}")
+
+    # Limit to first 3 pairs as requested by user (2, 4, 6 models)
+    oracle_vals = oracle_vals[:3]
+    latency_vals = latency_vals[:3]
+    processed_labels = processed_labels[:3]
+    used_files = args.input_files[:3]
+
+    print("Using following performance files for the graph:")
+    for f in used_files:
+        print(f" - {f}")
+
+    n_files = len(oracle_vals)
     x = np.arange(n_files)
     width = 0.35
     
-    best_relative = [1.0] * n_files
-    latency_based_relative = []
-    processed_labels = []
-    for i, (best_tp, latency_based_tp) in enumerate(results_list):
-        if best_tp > 0:
-            latency_based_relative.append(latency_based_tp / best_tp)
-        else:
-            latency_based_relative.append(0.0)
-        
-        # Format labels: (G, M, R)
-        tags = [t.upper() for t in get_model_tags(file_labels[i])]
-        processed_labels.append(f"({', '.join(tags)})")
-
-    plt.figure(figsize=(max(4, n_files * 1.2), 2.67))
+    plt.figure(figsize=(max(4, n_files * 1.5), 3.0))
     
     edge_color1 = '#8888FF' # Lighter blue
     edge_color2 = '#FF8888' # Lighter red
 
-    bar1 = plt.bar(x - width/2, best_relative, width, label='Oracle Placement', color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
-    bar2 = plt.bar(x + width / 2, latency_based_relative, width, label='Latency-based Heuristic', color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
+    bar1 = plt.bar(x - width/2, oracle_vals, width, label='Oracle Placement', color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
+    bar2 = plt.bar(x + width / 2, latency_vals, width, label='Latency-based Heuristic', color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
     
-    plt.ylabel('Normalized Throughput')
-    plt.xticks(x, processed_labels, rotation=0, fontsize=6)
+    plt.ylabel('Total System Throughput')
+    plt.xlabel('Number of Applications')
+    plt.xticks(x, processed_labels, rotation=0, fontsize=8)
     leg = plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=8, frameon=False)
     
-    all_vals = best_relative + latency_based_relative
+    all_vals = oracle_vals + latency_vals
     plt.ylim(0, max(all_vals) * 1.2 if all_vals else 1.2)
     
     def autolabel(rects):

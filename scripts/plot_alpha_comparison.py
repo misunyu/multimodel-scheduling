@@ -54,7 +54,7 @@ def main():
         if i == 0:
             ax.set_ylabel('Score', fontsize=10)
         else:
-            ax.set_ylabel('Probability', fontsize=10)
+            ax.set_ylabel(title, fontsize=10)
         # ax.set_title(title, fontsize=12)
         ax.set_xticks(x)
         ax.set_xticklabels(alphas, fontsize=9)
@@ -81,6 +81,25 @@ def main():
     plt.tight_layout(rect=[0, 0.08, 1, 1.0]) 
     plt.savefig(output_path)
     print(f"Comparison plots saved to {output_path}")
+
+    # CSV 파일로 저장
+    csv_output_path = output_path.with_suffix('.csv')
+    
+    # xgboost 모델명 추가
+    df_csv = df.copy()
+    df_csv['xgboost_model_name_fixed'] = "xgb_model_x3_double"
+    df_csv['xgboost_model_name_trained'] = df_csv['alpha'].apply(lambda a: f"xgb_model_x3_score_alpha{a}")
+    
+    # 열 순서 재배치 (각 그룹 옆에 모델명 배치)
+    column_order = [
+        'alpha',
+        'xgboost_model_name_fixed', 'avg_score_ge3_fixed', 'top1_acc_ge3_fixed', 'top5_acc_ge3_fixed',
+        'xgboost_model_name_trained', 'avg_score_ge3_trained', 'top1_acc_ge3_trained', 'top5_acc_ge3_trained'
+    ]
+    df_csv = df_csv[column_order]
+    
+    df_csv.to_csv(csv_output_path, index=False)
+    print(f"Results saved to {csv_output_path}")
 
 if __name__ == "__main__":
     main()

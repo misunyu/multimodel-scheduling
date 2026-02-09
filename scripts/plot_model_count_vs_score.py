@@ -54,7 +54,7 @@ def main():
     
     plt.figure(figsize=(3.2, 2.5))
     
-    model_counts = sorted([3, 4, 5, 6, 7, 8])
+    model_counts = sorted([3, 4, 5, 6, 7, 8, 9])
     markers = ['o', 's', '^', 'D']
     # 진한 색상 설정
     colors = ['tab:red', 'tab:blue', 'forestgreen', 'black'] 
@@ -101,6 +101,23 @@ def main():
     plt.tight_layout(rect=[0, 0, 1, 0.90])
     plt.savefig(output_path)
     print(f"Line graph saved to {output_path}")
+
+    # CSV 파일로 저장
+    csv_output_path = output_path.with_suffix('.csv')
+    df_data = {'Model Count': model_counts}
+    
+    # Oracle 데이터 추가
+    if actual_best_scores:
+        df_data['Oracle'] = [actual_best_scores.get(n, np.nan) for n in model_counts]
+    
+    # 각 기법별 데이터 추가
+    for label in labels_order:
+        scores = data[label]
+        df_data[label] = [scores.get(n, np.nan) for n in model_counts]
+    
+    df_results = pd.DataFrame(df_data)
+    df_results.to_csv(csv_output_path, index=False)
+    print(f"Results saved to {csv_output_path}")
 
 if __name__ == "__main__":
     main()

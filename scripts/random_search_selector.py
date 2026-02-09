@@ -213,9 +213,9 @@ def main():
         avg_drop_rate = round(numeric_drop_rate.mean(), 2) if not numeric_drop_rate.isna().all() else 0.0
         avg_score = round(numeric_score.mean(), 2) if not numeric_score.isna().all() else 0.0
         
-        # 모델 개수별 누적 평균값 계산 (>= 3, 4, 5, 6, 7, 8)
+        # 모델 개수별 누적 평균값 계산 (>= 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
         avg_rows = []
-        for n in range(8, 2, -1):
+        for n in range(12, 2, -1):
             mask = output_df['models_count'] >= n
             subset = output_df[mask]
             if not subset.empty:
