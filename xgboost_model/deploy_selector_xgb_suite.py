@@ -1139,11 +1139,11 @@ def main():
                         "combination": c_name,
                         "actual_T_norm": round(y1_actual, 4),
                         "actual_D_norm": round(y2_actual, 4),
-                        "actual_score": round(actual_score, 4),
+                        "actual_score": round(actual_score, 2),
                         "pred_T_norm": round(y1_pred, 4) if not np.isnan(y1_pred) else "",
                         "pred_D_norm": round(y2_pred, 4) if not np.isnan(y2_pred) else "",
-                        "pred_score": round(pred_score, 4),
-                        "diff_score": round(abs(actual_score - pred_score), 4)
+                        "pred_score": round(pred_score, 2),
+                        "diff_score": round(abs(round(actual_score, 2) - round(pred_score, 2)), 4)
                     })
                     
                 except Exception as e:
@@ -1185,7 +1185,7 @@ def main():
                     # Ground Truth
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score = y1_actual - alpha * y2_actual
+                    actual_score = round(y1_actual - alpha * y2_actual, 2)
 
                     # Prediction
                     X_dict, _, _ = featurize_window(w, infps_map)
@@ -1208,6 +1208,8 @@ def main():
                     if args.clip_pred_score and mode != "rank":
                         pred_score = max(0.0, min(1.0, pred_score))
                     
+                    pred_score = round(pred_score, 2)
+
                     if not np.isnan(y1_pred):
                         y1_errs.append(abs(y1_actual - y1_pred))
                     if not np.isnan(y2_pred):
@@ -1262,18 +1264,33 @@ def main():
                                 res["combination"] = f"<font color='red'>{c_name}</font> (Actual: {actual_hint})"
                             break
                 
-                # 1) Check if predicted best is in actual bests (Top-1 Hit)
-                is_top1 = False
-                if pred_best_name_first in actual_best_names:
+                # 1) Top-1 Accuracy: any(Predicted Top-1) in Actual Top-1
+                # (Predicted Top-1 combinations: pred_best_names, Actual Top-1 combinations: actual_best_names)
+                is_top1 = any(name in actual_best_names for name in pred_best_names)
+                if is_top1:
                     top1_hits += 1
-                    is_top1 = True
 
-                # 2) Check if actual best is in top-5 predicted (Top-5 Hit)
-                top5_pred_names = [r["combination"] for r in pred_sorted[:5]]
-                is_top5 = any(name in top5_pred_names for name in actual_best_names)
+                # 2) Top-5 Accuracy: any(Predicted Top-1) in Actual Top-5 groups
+                # (Predicted Top-1 combinations: pred_best_names)
+                unique_actual_scores = sorted(list(set([r["actual_score"] for r in scenario_results])), reverse=True)
+                if len(unique_actual_scores) > 0:
+                    top5_actual_threshold = unique_actual_scores[min(4, len(unique_actual_scores)-1)]
+                    actual_top5_names = [r["combination"] for r in scenario_results if r["actual_score"] >= (top5_actual_threshold - 1e-7)]
+                else:
+                    actual_top5_names = []
+                
+                is_top5 = any(name in actual_top5_names for name in pred_best_names)
                 if is_top5:
                     top5_hits += 1
                 
+                # [Note] Keep top5_group_scores as predicted scores for the report as per previous instructions
+                unique_pred_scores = sorted(list(set([r["pred_score"] for r in scenario_results])), reverse=True)
+                if len(unique_pred_scores) > 0:
+                    top5_pred_threshold = unique_pred_scores[min(4, len(unique_pred_scores)-1)]
+                    top5_group_scores = sorted(list(set([round(r["pred_score"], 2) for r in scenario_results if r["pred_score"] >= (top5_pred_threshold - 1e-7)])), reverse=True)
+                else:
+                    top5_group_scores = []
+
                 # 3) Score gap
                 gap = actual_best_score - pred_best_actual_score
                 score_gaps.append(max(0, gap))
@@ -1282,6 +1299,7 @@ def main():
                     "m_count": model_count,
                     "is_top1": is_top1,
                     "is_top5": is_top5,
+                    "top5_scores": top5_group_scores,
                     "oracle_T": actual_best_row["actual_T_norm"],
                     "oracle_D": actual_best_row["actual_D_norm"],
                     "oracle_S": actual_best_row["actual_score"],
@@ -1307,7 +1325,16 @@ def main():
                     top1_ge3 = sum(1 for d in ge3_scenarios if d["is_top1"]) / len(ge3_scenarios)
                     top5_ge3 = sum(1 for d in ge3_scenarios if d["is_top5"]) / len(ge3_scenarios)
                     f.write(f"Top-1 Accuracy (>= 3 models),{top1_ge3:.4f}\n")
-                    f.write(f"Top-5 Accuracy (>= 3 models),{top5_ge3:.4f}\n")
+                    
+                    # Collect all Top-5 scores from GE3 scenarios
+                    all_top5_scores_ge3 = []
+                    for d in ge3_scenarios:
+                        all_top5_scores_ge3.extend(d["top5_scores"])
+                    # Unique and sorted scores for display
+                    unique_top5_scores_ge3 = sorted(list(set(all_top5_scores_ge3)), reverse=True)
+                    scores_str = " ".join([str(s) for s in unique_top5_scores_ge3])
+                    
+                    f.write(f"Top-5 Accuracy (>= 3 models),{top5_ge3:.4f},{scores_str}\n")
                 
                 # Actual Best Average
                 avg_oracle_T = np.mean([d["oracle_T"] for d in scenario_summary_data])
@@ -1351,7 +1378,7 @@ def main():
                     
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score = y1_actual - alpha * y2_actual
+                    actual_score = round(y1_actual - alpha * y2_actual, 2)
 
                     X_dict, _, _ = featurize_window(w, infps_map)
                     df_X = pd.DataFrame([X_dict]).reindex(columns=feats, fill_value=0.0)
@@ -1362,6 +1389,8 @@ def main():
                     
                     if args.clip_pred_score and mode != "rank":
                         pred_score = max(0.0, min(1.0, pred_score))
+                    
+                    pred_score = round(pred_score, 2)
                     
                     scenario_results.append({
                         "combination": c_name,
@@ -1374,23 +1403,36 @@ def main():
                 
                 if not scenario_results: continue
                 
-                # Best predicted
+                # Best predicted (Multiple if tied)
                 pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score"], reverse=True)
-                pred_best = pred_sorted[0]
+                max_pred = pred_sorted[0]["pred_score"]
+                pred_best_all = [r for r in pred_sorted if math.isclose(r["pred_score"], max_pred, rel_tol=1e-7)]
+                
+                # Use the first one for numerical metrics
+                pred_best = pred_best_all[0]
                 
                 # Actual bests
                 actual_sorted = sorted(scenario_results, key=lambda x: x["actual_score"], reverse=True)
                 max_actual = actual_sorted[0]["actual_score"]
                 actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score"], max_actual, rel_tol=1e-7)]
                 
-                c_name = pred_best["combination"]
-                is_actual_best = c_name in actual_best_names
+                # Construct best_combination string with multiple names if tied
+                comb_parts = []
+                all_pred_best_are_actual_best = True
+                for pb in pred_best_all:
+                    c_name = pb["combination"]
+                    is_actual_best = c_name in actual_best_names
+                    if is_actual_best:
+                        comb_parts.append(f"<font color='purple'>{c_name}</font>")
+                    else:
+                        comb_parts.append(f"<font color='red'>{c_name}</font>")
+                        all_pred_best_are_actual_best = False
                 
-                if is_actual_best:
-                    best_comb_str = f"<font color='purple'>{c_name}</font>"
-                else:
+                best_comb_str = ", ".join(comb_parts)
+                
+                if not all_pred_best_are_actual_best:
                     actual_hint = ", ".join([f"<font color='blue'>{n}</font>" for n in actual_best_names])
-                    best_comb_str = f"<font color='red'>{c_name}</font> (Actual: {actual_hint})"
+                    best_comb_str += f" (Actual: {actual_hint})"
                 
                 summary_rows.append({
                     "schedule_file": pred_best["schedule_file"],
@@ -1399,6 +1441,31 @@ def main():
                     "drop_rate": round(pred_best["actual_D_norm"], 2),
                     "score": round(pred_best["actual_score"], 2)
                 })
+
+                # [Added] Save detailed scores for all combinations in this scenario (JSON format)
+                score_dir = out_dir / "score"
+                score_dir.mkdir(parents=True, exist_ok=True)
+                
+                s_base = Path(pred_best["schedule_file"]).stem
+                score_out_path = score_dir / f"scores_{s_base}.json"
+                
+                # Payload matching results_recompute format
+                score_payload = {
+                    "best deployment": best_comb_str,
+                    "schedule file": pred_best["schedule_file"],
+                    "data": []
+                }
+                
+                for r in scenario_results:
+                    score_payload["data"].append({
+                        "combination": r["combination"],
+                        "throughput_norm": round(r["actual_T_norm"], 4),
+                        "drop_rate_norm": round(r["actual_D_norm"], 4),
+                        "score": round(r["pred_score"], 2)
+                    })
+                
+                with open(score_out_path, "w", encoding="utf-8") as sf:
+                    json.dump(score_payload, sf, indent=4)
 
             # Append summary results (one row per scenario)
             res_df = pd.DataFrame(summary_rows)
@@ -1474,7 +1541,7 @@ def main():
                 # [수정] 모든 수치를 소수점 4자리로 반올림하여 일관성 유지
                 if not np.isnan(y1): y1 = round(y1, 4)
                 if not np.isnan(y2): y2 = round(y2, 4)
-                score = round(score, 4)
+                score = round(score, 2)
                 
                 results.append((name, y1, y2, score))
 
