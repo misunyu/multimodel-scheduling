@@ -24,7 +24,7 @@ def get_performance_index(results_dir):
     perf_index = {} # schedule_file_name -> { combination_name -> performance_data }
     results_path = Path(results_dir)
     
-    for p_file in results_path.glob("*.json"):
+    for p_file in results_path.glob("recompute_performance_*_x3.json"):
         try:
             with open(p_file, 'r', encoding='utf-8') as f:
                 content = json.load(f)
@@ -65,46 +65,8 @@ def calculate_metrics_for_alpha(alpha, model_prefix_template, sched_index, perf_
     scores_ge3 = []
 
     for sched_name, sched_doc in sched_index.items():
-        all_combo_feats = []
-        comb_names = []
-        
-        for comb_name, combo_blob in sched_doc.items():
-            if not isinstance(combo_blob, dict): continue
-            try:
-                df_X = featurize_from_combo(combo_blob)
-                all_combo_feats.append(df_X.iloc[0].to_dict())
-                comb_names.append(comb_name)
-            except:
-                continue
-
-        if not all_combo_feats:
-            continue
-
-        df_batch = pd.DataFrame(all_combo_feats)
-        df_batch = df_batch.reindex(columns=feats, fill_value=0.0)
-        
-        try:
-            if mode == "score":
-                preds = b1.predict(df_batch)
-            elif mode == "rank":
-                preds = b1.predict(df_batch)
-            else:
-                y1_preds = b1.predict(df_batch)
-                y2_preds = b2.predict(df_batch)
-                preds = y1_preds - alpha * y2_preds
-            
-            all_pred_results = []
-            for i, comb_name in enumerate(comb_names):
-                pred_score = float(preds[i])
-                if clip_pred_score and mode != "rank":
-                    pred_score = max(0.0, min(1.0, pred_score))
-                all_pred_results.append({'combination': comb_name, 'pred_score': pred_score})
-        except:
-            continue
-        
-        all_pred_results.sort(key=lambda x: x['pred_score'], reverse=True)
-        max_pred_score = all_pred_results[0]['pred_score']
-        best_pred_combs = [r['combination'] for r in all_pred_results if math.isclose(r['pred_score'], max_pred_score, rel_tol=1e-7)]
+        scenario_results = []
+        models_count = 0
         
         pure_sched_name = Path(sched_name).name
         sched_perf = perf_index.get(pure_sched_name, {})
@@ -112,36 +74,79 @@ def calculate_metrics_for_alpha(alpha, model_prefix_template, sched_index, perf_
             alt_name = pure_sched_name.replace("_x3.yaml", ".yaml")
             sched_perf = perf_index.get(alt_name, {})
 
-        best_actual_combs = []
-        max_actual_score = -float('inf')
-        for comb_name, perf_item in sched_perf.items():
-            actual_score = perf_item.get('score', -float('inf'))
-            if math.isclose(actual_score, max_actual_score, rel_tol=1e-7):
-                best_actual_combs.append(comb_name)
-            elif actual_score > max_actual_score:
-                max_actual_score = actual_score
-                best_actual_combs = [comb_name]
+        for comb_name, combo_blob in sched_doc.items():
+            if not isinstance(combo_blob, dict): continue
+            
+            # Ground truth from perf_index
+            perf_item = sched_perf.get(comb_name)
+            if not perf_item: continue
 
-        # Get models count for the first predicted best
-        perf_item = sched_perf.get(best_pred_combs[0])
-        if not perf_item: continue
+            if models_count == 0:
+                models_count = len(perf_item.get('models', {}))
+
+            try:
+                df_X = featurize_from_combo(combo_blob)
+                df_X = df_X.reindex(columns=feats, fill_value=0.0)
+                
+                if mode == "score":
+                    pred_score = float(b1.predict(df_X)[0])
+                elif mode == "rank":
+                    pred_score = float(b1.predict(df_X)[0])
+                else:
+                    y1_p = b1.predict(df_X)[0]
+                    y2_p = b2.predict(df_X)[0]
+                    pred_score = y1_p - alpha * y2_p
+                
+                if clip_pred_score and mode != "rank":
+                    pred_score = max(0.0, min(1.0, pred_score))
+                
+                pred_score = round(pred_score, 2)
+                
+                actual_T = float(perf_item.get('derived', {}).get('throughput_norm', 0))
+                actual_D = float(perf_item.get('derived', {}).get('drop_rate_norm', 0))
+                actual_score = round(actual_T - alpha * actual_D, 2)
+
+                scenario_results.append({
+                    'combination': comb_name,
+                    'actual_score': actual_score,
+                    'pred_score': pred_score
+                })
+            except:
+                continue
+
+        if not scenario_results:
+            continue
         
-        models_count = len(perf_item.get('models', {}))
-        
+        # Sort by actual score to find actual best(s)
+        actual_sorted = sorted(scenario_results, key=lambda x: x['actual_score'], reverse=True)
+        max_actual_score = actual_sorted[0]['actual_score']
+        actual_top1_names = [r['combination'] for r in actual_sorted if math.isclose(r['actual_score'], max_actual_score, rel_tol=1e-7)]
+
+        # Sort by predicted score
+        pred_sorted = sorted(scenario_results, key=lambda x: x['pred_score'], reverse=True)
+        max_pred_score = pred_sorted[0]['pred_score']
+        pred_best_names = [r['combination'] for r in pred_sorted if math.isclose(r['pred_score'], max_pred_score, rel_tol=1e-7)]
+
         if models_count >= 3:
             total_valid_schedules_ge3 += 1
-            # Top-1 Accuracy
-            if any(c in best_actual_combs for c in best_pred_combs):
+            # Top-1 Accuracy: any(Predicted Top-1) in Actual Top-1
+            is_top1 = any(name in actual_top1_names for name in pred_best_names)
+            if is_top1:
                 top1_hits_ge3 += 1
             
-            # Top-5 Accuracy
-            pred_scores_sorted = sorted(list(set([r['pred_score'] for r in all_pred_results])), reverse=True)
-            top5_threshold_score = pred_scores_sorted[min(4, len(pred_scores_sorted)-1)]
-            top5_group_combs = [r['combination'] for r in all_pred_results if r['pred_score'] >= top5_threshold_score - 1e-7]
-            if any(c in top5_group_combs for c in best_actual_combs):
+            # Top-5 Accuracy: any(Predicted Top-1) in Actual Top-5 groups
+            unique_actual_scores = sorted(list(set([r['actual_score'] for r in scenario_results])), reverse=True)
+            top5_actual_threshold = unique_actual_scores[min(4, len(unique_actual_scores)-1)]
+            actual_top5_names = [r['combination'] for r in scenario_results if r['actual_score'] >= (top5_actual_threshold - 1e-7)]
+            
+            is_top5 = any(name in actual_top5_names for name in pred_best_names)
+            if is_top5:
                 top5_hits_ge3 += 1
             
-            scores_ge3.append(perf_item.get('score'))
+            # Score of first predicted best
+            pred_best_name_first = pred_best_names[0]
+            pred_best_actual_score = next(r['actual_score'] for r in scenario_results if r['combination'] == pred_best_name_first)
+            scores_ge3.append(pred_best_actual_score)
 
     if total_valid_schedules_ge3 == 0:
         return None
