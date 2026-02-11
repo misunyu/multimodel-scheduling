@@ -1160,21 +1160,25 @@ def main():
             y2_errs = []
             total_scenarios = 0
 
+            # For summary table (similar to fix_prediction_summary.py)
+            scenario_summary_data = []
+
             # summary calculation using grouped scenario_data
             for group_id, windows in scenario_data.items():
-                # We need a schedule doc to get infps_map for each window
-                # windows might have different schedule_files if they share same models
-                # but usually scenario_data[group_id] will have same schedule_file per group_id
-                # as per get_group_id implementation.
-                
                 total_scenarios += 1
                 scenario_results = []
                 
+                # To determine model count for this scenario
+                model_count = 0
+
                 for w in windows:
                     s_name = w.get("schedule_file") or w.get("schedule file")
                     s_doc = _find_schedule(sched_index, s_name)
                     if not s_doc: continue
                     
+                    if model_count == 0:
+                        model_count = len(w.get("models", {}))
+
                     c_name = w.get("combination")
                     infps_map = _build_infps_lookup(s_doc, c_name)
                     
@@ -1191,7 +1195,6 @@ def main():
                     if mode == "score":
                         y1_pred = np.nan
                         y2_pred = np.nan
-                        # [Modified] Use raw prediction from model b1
                         pred_score = float(b1.predict(df_X)[0])
                     elif mode == "rank":
                         y1_pred = np.nan
@@ -1200,10 +1203,8 @@ def main():
                     else:
                         y1_pred = float(b1.predict(df_X)[0])
                         y2_pred = float(b2.predict(df_X)[0])
-                        # [Modified] Combined score
                         pred_score = y1_pred - alpha * y2_pred
                     
-                    # [Modified] Clipping controlled by --clip_pred_score
                     if args.clip_pred_score and mode != "rank":
                         pred_score = max(0.0, min(1.0, pred_score))
                     
@@ -1214,8 +1215,12 @@ def main():
                     
                     scenario_results.append({
                         "combination": c_name,
+                        "actual_T_norm": y1_actual,
+                        "actual_D_norm": y2_actual,
                         "actual_score": actual_score,
-                        "pred_score": pred_score
+                        "pred_score": pred_score,
+                        "schedule_file": s_name,
+                        "timestamp": w.get("timestamp")
                     })
                 
                 if not scenario_results: continue
@@ -1230,49 +1235,185 @@ def main():
                 max_pred_score = pred_sorted[0]["pred_score"]
                 pred_best_names = [r["combination"] for r in pred_sorted if math.isclose(r["pred_score"], max_pred_score, rel_tol=1e-7)]
 
-                pred_best_name_first = pred_sorted[0]["combination"]
-                pred_best_actual_score = pred_sorted[0]["actual_score"]
-                actual_best_score = actual_sorted[0]["actual_score"]
+                pred_best_row = pred_sorted[0]
+                pred_best_name_first = pred_best_row["combination"]
+                pred_best_actual_score = pred_best_row["actual_score"]
+                actual_best_row = actual_sorted[0]
+                actual_best_score = actual_best_row["actual_score"]
                 
-                # Apply coloring to detailed_results for this scenario
+                # Apply coloring and marking to detailed_results
                 for res in detailed_results:
-                    if res["schedule_file"] == s_name and res["timestamp"] == ts:
-                        c_name = res["combination"]
-                        is_actual_best = c_name in actual_best_names
-                        is_pred_best = c_name in pred_best_names
-                        
-                        if is_actual_best and is_pred_best:
-                            res["combination"] = f"<font color='purple'>{c_name}</font>"
-                        elif is_actual_best:
-                            res["combination"] = f"<font color='blue'>{c_name}</font>"
-                        elif is_pred_best:
-                            res["combination"] = f"<font color='red'>{c_name}</font>"
+                    # Match by schedule_file and timestamp and combination
+                    # Note: res["combination"] might already be colored if multiple scenarios share same rows (unlikely but possible)
+                    # We use group_id based grouping so it should be fine.
+                    for s_res in scenario_results:
+                        if res["schedule_file"] == s_res["schedule_file"] and res["timestamp"] == s_res["timestamp"] and res["combination"] == s_res["combination"]:
+                            c_name = s_res["combination"]
+                            is_actual_best = c_name in actual_best_names
+                            is_pred_best = c_name in pred_best_names
+                            
+                            if is_actual_best and is_pred_best:
+                                res["combination"] = f"<font color='purple'>{c_name}</font>"
+                            elif is_actual_best:
+                                res["combination"] = f"<font color='blue'>{c_name}</font>"
+                            elif is_pred_best:
+                                # Add (Actual: ...) hint if predicted best is not actual best
+                                actual_hint = ", ".join([f"<font color='blue'>{n}</font>" for n in actual_best_names])
+                                res["combination"] = f"<font color='red'>{c_name}</font> (Actual: {actual_hint})"
+                            break
                 
                 # 1) Check if predicted best is in actual bests (Top-1 Hit)
+                is_top1 = False
                 if pred_best_name_first in actual_best_names:
                     top1_hits += 1
+                    is_top1 = True
 
                 # 2) Check if actual best is in top-5 predicted (Top-5 Hit)
                 top5_pred_names = [r["combination"] for r in pred_sorted[:5]]
-                if any(name in top5_pred_names for name in actual_best_names):
+                is_top5 = any(name in top5_pred_names for name in actual_best_names)
+                if is_top5:
                     top5_hits += 1
                 
                 # 3) Score gap
                 gap = actual_best_score - pred_best_actual_score
                 score_gaps.append(max(0, gap))
 
-            res_df = pd.DataFrame(detailed_results)
+                scenario_summary_data.append({
+                    "m_count": model_count,
+                    "is_top1": is_top1,
+                    "is_top5": is_top5,
+                    "oracle_T": actual_best_row["actual_T_norm"],
+                    "oracle_D": actual_best_row["actual_D_norm"],
+                    "oracle_S": actual_best_row["actual_score"],
+                    "pred_T": pred_best_row["actual_T_norm"],
+                    "pred_D": pred_best_row["actual_D_norm"],
+                    "pred_S": pred_best_row["actual_score"]
+                })
+
             csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.csv"
+
+            # Write Summary to CSV file
+            with open(csv_out_path, "w", encoding="utf-8") as f:
+                f.write(f"Alpha,{alpha}\n")
+                
+                top1_acc = top1_hits / total_scenarios if total_scenarios > 0 else 0
+                top5_acc = top5_hits / total_scenarios if total_scenarios > 0 else 0
+                f.write(f"Top-1 Accuracy,{top1_acc:.4f}\n")
+                f.write(f"Top-5 Accuracy,{top5_acc:.4f}\n")
+                
+                # Top-k Accuracy (>= 3 models)
+                ge3_scenarios = [d for d in scenario_summary_data if d["m_count"] >= 3]
+                if ge3_scenarios:
+                    top1_ge3 = sum(1 for d in ge3_scenarios if d["is_top1"]) / len(ge3_scenarios)
+                    top5_ge3 = sum(1 for d in ge3_scenarios if d["is_top5"]) / len(ge3_scenarios)
+                    f.write(f"Top-1 Accuracy (>= 3 models),{top1_ge3:.4f}\n")
+                    f.write(f"Top-5 Accuracy (>= 3 models),{top5_ge3:.4f}\n")
+                
+                # Actual Best Average
+                avg_oracle_T = np.mean([d["oracle_T"] for d in scenario_summary_data])
+                avg_oracle_D = np.mean([d["oracle_D"] for d in scenario_summary_data])
+                avg_oracle_S = np.mean([d["oracle_S"] for d in scenario_summary_data])
+                f.write(f"Actual Best Average,,{avg_oracle_T:.2f},{avg_oracle_D:.2f},{avg_oracle_S:.2f}\n")
+                
+                # Averages by model count
+                max_m = max(d["m_count"] for d in scenario_summary_data) if scenario_summary_data else 0
+                for n in range(max_m, 2, -1):
+                    subset = [d for d in scenario_summary_data if d["m_count"] >= n]
+                    if not subset:
+                        continue
+                    
+                    o_T = np.mean([d["oracle_T"] for d in subset])
+                    o_D = np.mean([d["oracle_D"] for d in subset])
+                    o_S = np.mean([d["oracle_S"] for d in subset])
+                    f.write(f"Actual Best Average (>= {n} models),,{o_T:.2f},{o_D:.2f},{o_S:.2f}\n")
+                    
+                    p_T = np.mean([d["pred_T"] for d in subset])
+                    p_D = np.mean([d["pred_D"] for d in subset])
+                    p_S = np.mean([d["pred_S"] for d in subset])
+                    f.write(f"Average (>= {n} models),,{p_T:.2f},{p_D:.2f},{p_S:.2f}\n")
+                
+                # Overall Average
+                avg_pred_T = np.mean([d["pred_T"] for d in scenario_summary_data])
+                avg_pred_D = np.mean([d["pred_D"] for d in scenario_summary_data])
+                avg_pred_S = np.mean([d["pred_S"] for d in scenario_summary_data])
+                f.write(f"Average,,{avg_pred_T:.2f},{avg_pred_D:.2f},{avg_pred_S:.2f}\n")
             
-            res_df.to_csv(csv_out_path, index=False)
+            # [Modified] Prepare summary rows for each scenario (best predicted)
+            summary_rows = []
+            for group_id, windows in scenario_data.items():
+                scenario_results = []
+                for w in windows:
+                    s_name = w.get("schedule_file") or w.get("schedule file")
+                    s_doc = _find_schedule(sched_index, s_name)
+                    if not s_doc: continue
+                    c_name = w.get("combination")
+                    infps_map = _build_infps_lookup(s_doc, c_name)
+                    
+                    y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
+                    y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
+                    actual_score = y1_actual - alpha * y2_actual
+
+                    X_dict, _, _ = featurize_window(w, infps_map)
+                    df_X = pd.DataFrame([X_dict]).reindex(columns=feats, fill_value=0.0)
+                    
+                    if mode == "score": pred_score = float(b1.predict(df_X)[0])
+                    elif mode == "rank": pred_score = float(b1.predict(df_X)[0])
+                    else: pred_score = float(b1.predict(df_X)[0]) - alpha * float(b2.predict(df_X)[0])
+                    
+                    if args.clip_pred_score and mode != "rank":
+                        pred_score = max(0.0, min(1.0, pred_score))
+                    
+                    scenario_results.append({
+                        "combination": c_name,
+                        "actual_T_norm": y1_actual,
+                        "actual_D_norm": y2_actual,
+                        "actual_score": actual_score,
+                        "pred_score": pred_score,
+                        "schedule_file": s_name
+                    })
+                
+                if not scenario_results: continue
+                
+                # Best predicted
+                pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score"], reverse=True)
+                pred_best = pred_sorted[0]
+                
+                # Actual bests
+                actual_sorted = sorted(scenario_results, key=lambda x: x["actual_score"], reverse=True)
+                max_actual = actual_sorted[0]["actual_score"]
+                actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score"], max_actual, rel_tol=1e-7)]
+                
+                c_name = pred_best["combination"]
+                is_actual_best = c_name in actual_best_names
+                
+                if is_actual_best:
+                    best_comb_str = f"<font color='purple'>{c_name}</font>"
+                else:
+                    actual_hint = ", ".join([f"<font color='blue'>{n}</font>" for n in actual_best_names])
+                    best_comb_str = f"<font color='red'>{c_name}</font> (Actual: {actual_hint})"
+                
+                summary_rows.append({
+                    "schedule_file": pred_best["schedule_file"],
+                    "best_combination": best_comb_str,
+                    "normalized_throughput": round(pred_best["actual_T_norm"], 2),
+                    "drop_rate": round(pred_best["actual_D_norm"], 2),
+                    "score": round(pred_best["actual_score"], 2)
+                })
+
+            # Append summary results (one row per scenario)
+            res_df = pd.DataFrame(summary_rows)
+            res_df.to_csv(csv_out_path, mode="a", index=False)
             
-            # [Added] Score scatter plot for score mode
+            # [Added] PDF plots (using detailed data if needed, but here we just need to pass something)
+            # Actually, the scatter plots need detailed data for all combinations.
+            # So we should still keep a version of detailed results for plotting, but not for the CSV.
+            plot_df = pd.DataFrame(detailed_results)
             if mode == "score":
                 pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.pdf"
-                plot_score_scatter(res_df, pdf_out_path, f"Score Prediction: Actual vs Predicted (alpha={alpha})")
+                plot_score_scatter(plot_df, pdf_out_path, f"Score Prediction: Actual vs Predicted (alpha={alpha})")
             elif mode in ("two_target", "double"):
                 pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.pdf"
-                plot_multi_scatter(res_df, pdf_out_path, f"Multi-Model Prediction: {mode} (alpha={alpha})", alpha)
+                plot_multi_scatter(plot_df, pdf_out_path, f"Multi-Model Prediction: {mode} (alpha={alpha})", alpha)
 
             top1_ratio = top1_hits / total_scenarios if total_scenarios > 0 else 0
             top5_ratio = top5_hits / total_scenarios if total_scenarios > 0 else 0
