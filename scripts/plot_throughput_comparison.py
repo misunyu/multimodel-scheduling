@@ -103,7 +103,7 @@ def plot_throughput_fraction(input_file):
                     f'{drop_fractions[i]:.2f}', 
                     ha='center', va='center', fontsize=7, fontfamily='serif')
 
-    ax.set_ylabel('Fraction of Requests', fontsize=8)
+    ax.set_ylabel('Normalized Drop Rate', fontsize=8)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=6)
     ax.tick_params(axis='y', labelsize=5)
@@ -113,7 +113,7 @@ def plot_throughput_fraction(input_file):
     ax.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=6, frameon=False)
 
     plt.tight_layout()
-    output_pdf = "throughput_fraction_comparison.pdf"
+    output_pdf = "drop_rate_comparison.pdf"
     plt.savefig(output_pdf)
     print(f"Graph saved to {output_pdf}")
 

@@ -230,7 +230,7 @@ def main():
     bar1 = plt.bar(x - width/2, oracle_vals, width, label='Oracle Placement', color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
     bar2 = plt.bar(x + width / 2, latency_vals, width, label='Latency-based Heuristic', color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
     
-    plt.ylabel('Total System Throughput')
+    plt.ylabel('Normalized System Throughput')
     plt.xlabel('Number of Applications')
     plt.xticks(x, processed_labels, rotation=0, fontsize=8)
     leg = plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=8, frameon=False)
