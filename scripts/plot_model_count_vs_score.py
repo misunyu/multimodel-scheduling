@@ -54,7 +54,7 @@ def main():
     
     plt.figure(figsize=(3.2, 2.5))
     
-    model_counts = sorted([3, 4, 5, 6, 7, 8, 9])
+    model_counts = sorted([3, 4, 5, 6, 7, 8])
     markers = ['o', 's', '^', 'D']
     # 진한 색상 설정
     colors = ['tab:red', 'tab:blue', 'forestgreen', 'black'] 

@@ -6,11 +6,11 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-def get_performance_index(results_dir):
+def get_performance_index(results_dir, pattern="*_x3.json"):
     perf_index = {} # schedule_file_name -> { combination_name -> performance_data }
     results_path = Path(results_dir)
     
-    for p_file in results_path.glob("*.json"):
+    for p_file in results_path.glob(pattern):
         try:
             with open(p_file, 'r', encoding='utf-8') as f:
                 content = json.load(f)
@@ -68,16 +68,18 @@ def main():
     parser.add_argument("--test_csv", default="xgboost_model/dataset/gpu/test_schedules_x3.csv", help="Test schedules CSV")
     parser.add_argument("--results_recompute_dir", default="results_recompute")
     parser.add_argument("--output_csv", default="random_search_best_results.csv")
+    parser.add_argument("--pattern", default="*_x3.json", help="Pattern to match performance json files")
     args = parser.parse_args()
     
     num_samples = args.k
     test_schedules_csv = args.test_csv
     output_csv = args.output_csv
     results_recompute_dir = args.results_recompute_dir
+    pattern = args.pattern
     
     print(f"Random Search with k={num_samples}")
     print("Indexing performance data from results_recompute...")
-    perf_index = get_performance_index(results_recompute_dir)
+    perf_index = get_performance_index(results_recompute_dir, pattern)
     print(f"Indexed performance data for {len(perf_index)} schedules.")
     
     print("Loading test schedules...")
@@ -101,16 +103,22 @@ def main():
         sched_perf = perf_index.get(pure_sched_name, {})
         
         best_comb_name = None
+        sampled_best_names = []
         if sched_perf:
             available_combs = list(sched_perf.keys())
             sampled_combs = random.sample(available_combs, min(len(available_combs), num_samples))
             
-            max_score = -1.0
+            max_sampled_score = -1.0
             for comb_name in sampled_combs:
                 score = sched_perf[comb_name].get("score", 0.0)
-                if score > max_score:
-                    max_score = score
-                    best_comb_name = comb_name
+                if np.isclose(score, max_sampled_score, atol=1e-7):
+                    sampled_best_names.append(comb_name)
+                elif score > max_sampled_score:
+                    max_sampled_score = score
+                    sampled_best_names = [comb_name]
+            
+            if sampled_best_names:
+                best_comb_name = sampled_best_names[0]
         
         if not best_comb_name:
             print(f"  [LOG] No performance data found for {sched_name}")
@@ -143,8 +151,9 @@ def main():
         perf_item = sched_perf.get(best_comb_name)
         
         total_valid_schedules += 1
-        # Top-1 Accuracy: If selected best is in actual best list
-        if best_comb_name in best_actual_combs:
+        # Top-1 Accuracy: If any of sampled best is in actual best list
+        is_top1 = any(name in best_actual_combs for name in sampled_best_names)
+        if is_top1:
             top1_hits += 1
 
         # Top-5 Accuracy: Check if any actual best is in top-5 group of random samples
@@ -180,7 +189,7 @@ def main():
 
         if models_count >= 3:
             total_valid_schedules_ge3 += 1
-            if best_comb_name in best_actual_combs:
+            if is_top1:
                 top1_hits_ge3 += 1
             if any(c in top5_sampled_combs for c in best_actual_combs):
                 top5_hits_ge3 += 1

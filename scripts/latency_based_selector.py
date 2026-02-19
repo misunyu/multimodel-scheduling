@@ -5,12 +5,12 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-def get_single_model_scores(results_dir):
+def get_single_model_scores(results_dir, pattern="*_x3.json"):
     scores = {} # (model_name, execution) -> score
     
     results_path = Path(results_dir)
     # results_dir 내의 모든 json 파일을 탐색하여 단일 모델 결과를 수집
-    for p_file in results_path.glob("*.json"):
+    for p_file in results_path.glob(pattern):
         try:
             with open(p_file, 'r', encoding='utf-8') as f:
                 content = json.load(f)
@@ -40,24 +40,13 @@ def get_single_model_scores(results_dir):
     return scores
 
 def find_best_combination(schedule_doc, model_scores):
-    best_comb = None
-    max_total_score = -1
-    
-    # schedule_doc은 yaml 로드된 딕셔너리
-    # 각 combination에 대해 Latency-based score 계산
-    # 하지만 문제에서 "1) 배치 대상이 되는 각 모델의 cpu/gpu에서 실행될 때의 score를 찾아서 score가 큰 프로세싱 유닛을 배칭해" 라고 함.
-    # 즉, 각 모델별로 독립적으로 CPU/GPU 중 나은 것을 고른 후, 그 결과와 일치하는 combination을 찾는 것임.
-    
     # 1단계: 각 모델(view)별 최적 PU 결정
-    # 스케줄 파일의 첫 번째 combination을 보고 모델 목록을 추출 (모든 combination은 같은 모델 셋을 가짐)
     first_comb_name = list(schedule_doc.keys())[0]
     while first_comb_name in ["schedule file", "best deployment"] and len(schedule_doc) > 1:
-         # 혹시 메타데이터가 섞여있을 경우를 대비 (보통 yaml 파일엔 combination만 있음)
-         # 하지만 위에서 본 yaml은 combination_1 부터 시작함.
          break
     
     models_in_schedule = schedule_doc[first_comb_name]
-    target_pu_map = {} # 모델별 식별자(예: view1) -> 'CPU' or 'GPU'
+    target_pu_map = {} 
     
     for view_id, info in models_in_schedule.items():
         m_name = info.get("model")
@@ -78,17 +67,13 @@ def find_best_combination(schedule_doc, model_scores):
         scores_map = {'CPU': cpu_score, 'GPU': gpu_score, 'NPU': npu_score}
         target_pu_map[view_id] = max(scores_map, key=scores_map.get)
             
-    # 2단계: 위 target_pu_map과 일치하는 combination 찾기
+    # 2단계: 위 target_pu_map과 일치하는 모든 combination 찾기
     print(f"  [LOG] Target PU mapping: {target_pu_map}")
+    matching_combs = []
     for comb_name, comb_data in schedule_doc.items():
         if not isinstance(comb_data, dict): continue
         
         match = True
-        # comb_data의 각 모델 항목에 대해 target_pu와 일치하는지 확인
-        # target_pu_map의 키는 view1, gpt2_cpu 등 다양할 수 있음.
-        # 스케줄 파일의 키(gpt2_cpu 등)가 target_pu_map의 키(view1 등)에 대응되는지 확인 필요
-        
-        # 모델명으로 매칭 시도
         for model_id, info in comb_data.items():
             m_name = info.get("model")
             execution = info.get("execution", "").upper()
@@ -98,11 +83,9 @@ def find_best_combination(schedule_doc, model_scores):
             gpu_score = model_scores.get((m_name, 'GPU'), 0)
             npu_score = model_scores.get((m_name, 'NPU'), 0)
             
-            # CPU, GPU, NPU 중 가장 높은 점수를 가진 PU 선택
             scores_map = {'CPU': cpu_score, 'GPU': gpu_score, 'NPU': npu_score}
             target_pu = max(scores_map, key=scores_map.get)
             
-            # combination의 execution이 NPU0, NPU1 등일 수 있으므로 처리
             norm_execution = execution
             if execution.startswith("NPU"):
                 norm_execution = "NPU"
@@ -112,15 +95,15 @@ def find_best_combination(schedule_doc, model_scores):
                 break
         
         if match:
-            return comb_name, None
+            matching_combs.append(comb_name)
             
-    return None, target_pu_map
+    return matching_combs, target_pu_map
 
-def get_performance_index(results_dir):
+def get_performance_index(results_dir, pattern="*_x3.json"):
     perf_index = {} # schedule_file_name -> { combination_name -> performance_data }
     results_path = Path(results_dir)
     
-    for p_file in results_path.glob("*.json"):
+    for p_file in results_path.glob(pattern):
         try:
             with open(p_file, 'r', encoding='utf-8') as f:
                 content = json.load(f)
@@ -152,18 +135,20 @@ def main():
     parser.add_argument("--results_recompute_dir", default="results_recompute")
     parser.add_argument("--test_schedules_csv", default="xgboost_model/dataset/gpu/test_schedules_x3.csv")
     parser.add_argument("--output_csv", default="latency_based_best_results.csv")
+    parser.add_argument("--pattern", default="*_x3.json", help="Pattern to match performance json files")
     args = parser.parse_args()
 
     results_recompute_dir = args.results_recompute_dir
     test_schedules_csv = args.test_schedules_csv
     output_csv = args.output_csv
+    pattern = args.pattern
     
     print("Collecting single model scores...")
-    model_scores = get_single_model_scores(results_recompute_dir)
+    model_scores = get_single_model_scores(results_recompute_dir, pattern)
     print(f"Collected {len(model_scores)} model-PU scores.")
     
     print("Indexing performance data from results_recompute...")
-    perf_index = get_performance_index(results_recompute_dir)
+    perf_index = get_performance_index(results_recompute_dir, pattern)
     print(f"Indexed performance data for {len(perf_index)} schedules.")
     
     print("Loading test schedules...")
@@ -192,9 +177,9 @@ def main():
     # test_schedules_random.csv에 명시된 모든 스케줄 파일에 대해
     for sched_name, sched_doc in sched_index.items():
         print(f"\nProcessing schedule: {sched_name}")
-        best_comb_name, pu_map = find_best_combination(sched_doc, model_scores)
+        matching_combs, pu_map = find_best_combination(sched_doc, model_scores)
         
-        if not best_comb_name:
+        if not matching_combs:
             print(f"  [LOG] Could not find matching combination for {sched_name} in its YAML. Target map was: {pu_map}")
             results.append({
                 'schedule_file': sched_name,
@@ -206,6 +191,8 @@ def main():
             })
             continue
             
+        best_comb_name = matching_combs[0]
+        
         # 해당 스케줄 파일과 combination 명칭으로 perf_index에서 데이터 찾기
         # sched_name은 보통 경로를 포함할 수 있으므로 파일명만 추출
         pure_sched_name = Path(sched_name).name
@@ -225,28 +212,35 @@ def main():
         perf_item = sched_perf.get(best_comb_name)
         
         total_valid_schedules += 1
-        # Top-1 Accuracy
-        if best_comb_name in best_actual_combs:
+        # Top-1 Accuracy: any(Predicted Best) in Actual Best
+        is_top1 = any(name in best_actual_combs for name in matching_combs)
+        if is_top1:
             top1_hits += 1
             
-        # For latency-based, "Top-5 Accuracy" is tricky because it doesn't rank all.
-        # But we can define it as: is the actual best among the top-5 combinations ranked by latency-based heuristic?
-        # Actually, latency-based only picks ONE "best".
-        # If we want a Top-5, we'd need to rank all combinations by the heuristic.
-        # Let's skip Top-5 for latency-based or just set it equal to Top-1 if we only have one selection.
-        # However, to be consistent with others, let's see if we can rank.
-        # In find_best_combination, it currently returns immediately.
-        # Let's just use Top-1 as Top-5 for now, or just leave it. 
-        # Actually, let's just use Top-1 for both if Top-5 is not well-defined for this heuristic.
+        # For latency-based, "Top-5 Accuracy"
         # Re-reading: "Top-5 accuracy는 추론한 상위 5개 그룹...에 속할 확률"
-        # Since latency-based currently only "infers" ONE best, the top-5 group only has that one combination.
-        if best_comb_name in best_actual_combs:
+        # If we have multiple matching combinations, they are all in the top-1 group.
+        if is_top1:
             top5_hits += 1
 
         display_comb = best_comb_name
         # Apply coloring: Purple for match, Red for chosen, Blue for actual
-        if best_comb_name in best_actual_combs:
-            display_comb = f"<font color='purple'>{best_comb_name}</font>"
+        if is_top1:
+            # If multiple matching, show the first one but use purple if it's correct
+            # Wait, if ANY matching is in best_actual, we mark it purple?
+            # Let's see if best_comb_name itself is in best_actual_combs
+            if best_comb_name in best_actual_combs:
+                display_comb = f"<font color='purple'>{best_comb_name}</font>"
+            else:
+                # Find which matching one is actual best
+                correct_match = next((name for name in matching_combs if name in best_actual_combs), None)
+                if correct_match:
+                     display_comb = f"<font color='purple'>{correct_match}</font>"
+                else:
+                     display_comb = f"<font color='red'>{best_comb_name}</font>"
+                     if best_actual_combs:
+                         actual_str = ", ".join([f"<font color='blue'>{c}</font>" for c in best_actual_combs])
+                         display_comb += f" (Actual: {actual_str})"
         else:
             display_comb = f"<font color='red'>{best_comb_name}</font>"
             if best_actual_combs:
@@ -278,9 +272,9 @@ def main():
         
         if models_count >= 3:
             total_valid_schedules_ge3 += 1
-            if best_comb_name in best_actual_combs:
+            if is_top1:
                 top1_hits_ge3 += 1
-            if best_comb_name in best_actual_combs:
+            if is_top1:
                 top5_hits_ge3 += 1
 
         results.append({
@@ -307,9 +301,9 @@ def main():
         numeric_drop_rate = pd.to_numeric(output_df['drop_rate'], errors='coerce')
         numeric_score = pd.to_numeric(output_df['score'], errors='coerce')
         
-        avg_throughput = round(numeric_throughput.sum() / 24.3, 2)
-        avg_drop_rate = round(numeric_drop_rate.sum() / 24.3, 2)
-        avg_score = round(numeric_score.sum() / 24.3, 2)
+        avg_throughput = round(numeric_throughput.mean(), 2) if not numeric_throughput.isna().all() else 0.0
+        avg_drop_rate = round(numeric_drop_rate.mean(), 2) if not numeric_drop_rate.isna().all() else 0.0
+        avg_score = round(numeric_score.mean(), 2) if not numeric_score.isna().all() else 0.0
 
         # 모델 개수별 누적 평균값 계산 (>= 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
         avg_rows = []
