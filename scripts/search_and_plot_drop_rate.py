@@ -1,8 +1,8 @@
-# python3 scripts/search_and_plot_drop_rate.py results_recompute/recompute_performance_20260127_112106_model_schedules_m_r_t_y_x2.json
-# combination_7 combination_6
-# JSON file: results_recompute/recompute_performance_20260127_112106_model_schedules_m_r_t_y_x2.json
-# Left combination: combination_7
-# Right combination: combination_6
+# python3 scripts/search_and_plot_drop_rate.py results_additional_recompute/recompute_performance_20260210_131814_model_schedules_g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v_x3-5.json
+# combination_216 combination_9
+# JSON file: results_additional_recompute/recompute_performance_20260210_131814_model_schedules_g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v_x3-5.json
+# Left combination: combination_216
+# Right combination: combination_9
 import json
 import os
 import argparse
@@ -69,20 +69,21 @@ def main():
     x = np.arange(len(labels))
     width = 0.25 
 
-    plt.figure(figsize=(4.0, 3.0))
+    plt.figure(figsize=(3.375, 3.0))
     
     # Using width exactly as spacing between centers to make them touch
-    bar1 = plt.bar(x - width/2, tp_vals, width, label='Throughput', 
+    bar1 = plt.bar(x - width/2, tp_vals, width, label='Normalized Throughput',
                    color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
-    bar2 = plt.bar(x + width/2, drop_vals, width, label='Drop Rate', 
+    bar2 = plt.bar(x + width/2, drop_vals, width, label='Normalized Drop Rate',
                    color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
 
-    plt.ylabel('Normalized Value')
+    plt.ylabel('Normalized Throughput and Drop rate')
     plt.xticks(x, labels, fontsize=8)
     plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=8, frameon=False)
     
     max_val = max(max(tp_vals), max(drop_vals))
-    plt.ylim(0, max_val * 1.3)
+    plt.ylim(0, 1.2)
+    plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
     
     def autolabel(rects):
         for rect in rects:

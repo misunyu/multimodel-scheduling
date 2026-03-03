@@ -1,4 +1,4 @@
-#%python3 scripts/compare_latency_vs_best.py results/performance_20260127_075226_model_schedules_g_m_x3.json results/performance_20260127_113858_model_schedules_r_t_v_y_x2.json results/performance_20260127_090404_model_schedules_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v.json
+#python3 scripts/compare_latency_vs_best.py results/performance_20260127_075226_model_schedules_g_m_x3.json results/performance_20260127_113858_model_schedules_r_t_v_y_x2.json results/performance_20260127_090404_model_schedules_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v.json
 ### 확인 방법
 #`scripts/get_latency_based_comb.py`
 
@@ -227,16 +227,17 @@ def main():
     edge_color1 = '#8888FF' # Lighter blue
     edge_color2 = '#FF8888' # Lighter red
 
-    bar1 = plt.bar(x - width/2, oracle_vals, width, label='Oracle Placement', color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
+    bar1 = plt.bar(x - width/2, oracle_vals, width, label='Throughput-optimal Placemen', color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
     bar2 = plt.bar(x + width / 2, latency_vals, width, label='Latency-based Heuristic', color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
     
-    plt.ylabel('Normalized System Throughput')
+    plt.ylabel('Normalized Throughput')
     plt.xlabel('Number of Applications')
     plt.xticks(x, processed_labels, rotation=0, fontsize=8)
     leg = plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=8, frameon=False)
     
     all_vals = oracle_vals + latency_vals
-    plt.ylim(0, max(all_vals) * 1.2 if all_vals else 1.2)
+    plt.ylim(0, 1.2)
+    plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
     
     def autolabel(rects):
         for rect in rects:
