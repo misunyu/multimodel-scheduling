@@ -1438,10 +1438,13 @@ class ONNXProfilerApp(QMainWindow):
                                 pass
                 return dst
 
-            # New naming and scaling: _x2.yaml (infps/intps x2), _x3.yaml (infps/intps x3), _x4.yaml (infps/intps x4)
+            # New naming and scaling: _x1.5, _x2, _x2.5, _x3, _x3.5, _x4
             variants = [
+                (f"model_schedules{initials_suffix}_x1-5.yaml", 1.5, "# This variant sets input FPS/Tokens to 1.5x (infps/intps x1.5)\n"),
                 (f"model_schedules{initials_suffix}_x2.yaml", 2.0, "# This variant doubles input FPS/Tokens (infps/intps x2)\n"),
+                (f"model_schedules{initials_suffix}_x2-5.yaml", 2.5, "# This variant sets input FPS/Tokens to 2.5x (infps/intps x2.5)\n"),
                 (f"model_schedules{initials_suffix}_x3.yaml", 3.0, "# This variant triples input FPS/Tokens (infps/intps x3)\n"),
+                (f"model_schedules{initials_suffix}_x3-5.yaml", 3.5, "# This variant sets input FPS/Tokens to 3.5x (infps/intps x3.5)\n"),
                 (f"model_schedules{initials_suffix}_x4.yaml", 4.0, "# This variant quadruples input FPS/Tokens (infps/intps x4)\n"),
             ]
 
