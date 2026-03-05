@@ -654,9 +654,8 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
 
 def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=None, model_name="yolov3_small"):
     """
-    Process for running YOLO model on Apple GPU via ONNX Runtime CoreML EP.
-
-    Falls back to CPU EP automatically if CoreML EP is not available.
+    Process for running YOLO model on GPU via ONNX Runtime CUDA EP.
+    CPU fallback is NOT allowed if execution:gpu is requested.
     """
     try:
         print(f"[YOLO GPU] Loading model ({model_name})...")
@@ -666,18 +665,25 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
             so.log_severity_level = 3
         except Exception:
             pass
-        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        
+        # We only use CUDAExecutionProvider and do NOT allow CPU fallback
+        providers = ["CUDAExecutionProvider"]
+        
         try:
             session = ort.InferenceSession(
                 "models/yolov3_small/model/yolov3_small.onnx" if model_name == "yolov3_small" else "models/yolov3_big/model/yolov3_big.onnx",
                 sess_options=so,
                 providers=providers,
             )
-        except TypeError:
-            session = ort.InferenceSession(
-                "models/yolov3_small/model/yolov3_small.onnx" if model_name == "yolov3_small" else "models/yolov3_big/model/yolov3_big.onnx",
-                sess_options=so,
-            )
+            # Strict check: if CUDA is not in active providers, it's a failure
+            if "CUDAExecutionProvider" not in session.get_providers():
+                raise RuntimeError(f"CUDAExecutionProvider not available for {model_name} in {view_name}")
+        except Exception as e:
+            print(f"\n[CRITICAL ERROR] Failed to load YOLO GPU model with CUDAExecutionProvider: {e}")
+            print("Terminating program as CPU fallback is disabled for GPU execution mode.\n")
+            # Signal shutdown and exit
+            shutdown_event.set()
+            os._exit(1) # Force exit the whole application
         # Provider diagnostics
         try:
             avail = ort.get_available_providers()
@@ -792,29 +798,36 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
 
 def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=None):
     """
-    Process for running ResNet model on Apple GPU via ONNX Runtime CoreML EP.
-
-    Falls back to CPU EP automatically if CoreML EP is not available.
+    Process for running ResNet model on GPU via ONNX Runtime CUDA EP.
+    CPU fallback is NOT allowed if execution:gpu is requested.
     """
     try:
+        print(f"[ResNet GPU] Loading model...")
         load_start = time.time()
         so = ort.SessionOptions()
         try:
             so.log_severity_level = 3
         except Exception:
             pass
-        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+            
+        # We only use CUDAExecutionProvider and do NOT allow CPU fallback
+        providers = ["CUDAExecutionProvider"]
+        
         try:
             session = ort.InferenceSession(
                 "models/resnet50_big/model/resnet50_big.onnx",
                 sess_options=so,
                 providers=providers,
             )
-        except TypeError:
-            session = ort.InferenceSession(
-                "models/resnet50_big/model/resnet50_big.onnx",
-                sess_options=so,
-            )
+            # Strict check: if CUDA is not in active providers, it's a failure
+            if "CUDAExecutionProvider" not in session.get_providers():
+                raise RuntimeError(f"CUDAExecutionProvider not available for ResNet in {view_name}")
+        except Exception as e:
+            print(f"\n[CRITICAL ERROR] Failed to load ResNet GPU model with CUDAExecutionProvider: {e}")
+            print("Terminating program as CPU fallback is disabled for GPU execution mode.\n")
+            # Signal shutdown and exit
+            shutdown_event.set()
+            os._exit(1) # Force exit the whole application
         # Provider diagnostics
         try:
             avail = ort.get_available_providers()

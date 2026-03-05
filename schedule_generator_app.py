@@ -815,7 +815,7 @@ class ONNXProfilerApp(QMainWindow):
         return valid_model_onnx
 
     def _profile_onnx_models_gpu(self, onnx_files, root_folder):
-        """Profile ONNX models on Apple GPU (CoreML EP) and update GPU table."""
+        """Profile ONNX models on GPU (NVIDIA or CoreML) and update GPU table."""
         for path in onnx_files:
             try:
                 rel_path = os.path.relpath(path, root_folder)

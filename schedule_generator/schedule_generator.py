@@ -263,8 +263,8 @@ class ModelProfiler:
 
     def profile_model_gpu(self, model_path: str) -> Tuple[float, float, Dict[str, Any]]:
         """
-        Apple GPU profiling using ONNX Runtime CoreML Execution Provider.
-        Falls back to CPU if CoreML EP is not available.
+        NVIDIA (TRT/CUDA) or Apple (CoreML) GPU profiling.
+        Prefers NVIDIA providers on Linux, falling back to CPU.
         
         Args:
             model_path: Path to the ONNX model file
@@ -278,17 +278,54 @@ class ModelProfiler:
         _ = onnx.load(model_path)
         load_time = (time.time() - start_time) * 1000.0
 
-        # Determine providers
+        # Build requested providers list in priority order
         available = ort.get_available_providers()
-        providers = []
-        if 'CoreMLExecutionProvider' in available:
-            providers.append('CoreMLExecutionProvider')
-        # Always include CPU as fallback
-        providers.append('CPUExecutionProvider')
+        requested_providers = []
+        
+        if "CUDAExecutionProvider" in available:
+            requested_providers.append("CUDAExecutionProvider")
+        
+        # Add CoreML only if no NVIDIA provider was added
+        if not requested_providers:
+            if "CoreMLExecutionProvider" in available:
+                requested_providers.append("CoreMLExecutionProvider")
+        
+        # Always append CPUExecutionProvider as fallback for profiling purposes
+        # but we should note if it actually fell back.
+        requested_providers.append("CPUExecutionProvider")
 
-        # Create session
+        # Try to create session with providers one by one to avoid noisy ORT internal fallbacks
+        session = None
         sess_options = ort.SessionOptions()
-        session = ort.InferenceSession(model_path, sess_options, providers=providers)
+        
+        for provider in requested_providers:
+            try:
+                # Try only the current provider.
+                # Note: ORT still prints some error messages to stderr even if we catch exceptions here
+                # because some errors happen deep inside the shared library loading code.
+                session = ort.InferenceSession(model_path, sess_options, providers=[provider])
+                active_providers = session.get_providers()
+                if provider in active_providers:
+                    break
+                if provider == "CPUExecutionProvider":
+                    break
+            except Exception:
+                # Silently try next provider in priority list
+                continue
+
+        if session is None:
+            # Last resort fallback if everything failed (should not happen as CPU is in list)
+            session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
+        
+        # Log ORT info
+        active_providers = session.get_providers()
+        self.log(f"[ORT] {os.path.basename(model_path)} available={available} requested={requested_providers} active={active_providers}")
+
+        # Store active providers in model_info
+        try:
+            model_info["ort_active_providers"] = active_providers
+        except Exception:
+            pass
 
         # Prepare inputs
         input_tensors = {}
