@@ -11,8 +11,12 @@ def recompute_scores(input_dir, output_dir):
     
     for file_path in json_files:
         print(f"Processing {file_path}...")
-        with open(file_path, 'r') as f:
-            data_content = json.load(f)
+        try:
+            with open(file_path, 'r') as f:
+                data_content = json.load(f)
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"Error processing {file_path}: {e}. Skipping.")
+            continue
             
         if 'data' not in data_content or not data_content['data']:
             print(f"Skipping {file_path}: No data found.")
