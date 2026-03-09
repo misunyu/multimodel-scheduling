@@ -14,15 +14,21 @@ def main():
             print(f"Warning: {d} directory not found.")
 
     # 1. gen_schedules 폴더의 파일명 (확장자 제외)
-    gen_files = set()
-    for f in os.listdir(gen_schedules_dir):
-        if f.endswith('.yaml'):
-            gen_files.add(f[:-5]) # .yaml 제거
+    # 이미 _x2, _x3, _x4가 붙은 파일들이 있으므로 베이스 이름을 추출합니다.
+    all_gen_files = sorted([f[:-5] for f in os.listdir(gen_schedules_dir) if f.endswith('.yaml')])
+    base_gen_files = set()
+    suffix_pattern = re.compile(r'(.+)_x[234]$')
+    for f in all_gen_files:
+        match = suffix_pattern.match(f)
+        if match:
+            base_gen_files.add(match.group(1))
+        else:
+            base_gen_files.add(f)
+    
+    base_gen_files = sorted(list(base_gen_files))
 
-    # 2. results_recompute 폴더의 파일명에서 스케줄 파일명 추출
-    # 예: recompute_performance_20260307_045901_model_schedules_vgg19.json -> model_schedules_vgg19
+    # 2. results 폴더들에서 이미 처리된 파일명 추출
     recomputed_files = set()
-    # 패턴: recompute_performance_YYYYMMDD_HHMMSS_
     pattern = re.compile(r'^recompute_performance_\d{8}_\d{6}_(.+)\.json$')
     
     for results_dir in results_dirs:
@@ -30,22 +36,32 @@ def main():
             for f in os.listdir(results_dir):
                 match = pattern.match(f)
                 if match:
-                    schedule_name = match.group(1)
-                    recomputed_files.add(schedule_name)
+                    recomputed_files.add(match.group(1))
 
-    # 3. gen_schedules에는 있지만 results_recompute에는 없는 파일 찾기
-    missing_files = sorted(list(gen_files - recomputed_files))
-
-    print(f"Total files in gen_schedules: {len(gen_files)}")
-    print(f"Total recomputed files found: {len(recomputed_files)}")
-    print(f"Number of missing files: {len(missing_files)}")
+    # 3. 필요한 접미사들
+    # 사용자 명시: _x2, _x3, _x4, x1-5, x2-5, x3-5
+    # 실제 파일명 관찰 결과: _x2, _x3, _x4, _x1-5, _x2-5, _x3-5
+    required_suffixes = ['_x2', '_x3', '_x4', '_x1-5', '_x2-5', '_x3-5']
     
-    if missing_files:
-        print("\nMissing schedule files:")
-        for f in missing_files:
-            print(f"- {f}.yaml")
+    missing_variants = []
+    for base_name in base_gen_files:
+        for suffix in required_suffixes:
+            target_name = f"{base_name}{suffix}"
+            if target_name not in recomputed_files:
+                missing_variants.append(f"{target_name}.json")
+
+    print(f"Total base schedules (deduplicated): {len(base_gen_files)}")
+    print(f"Total recomputed files found: {len(recomputed_files)}")
+    print(f"Number of missing performance variants: {len(missing_variants)}")
+    
+    if missing_variants:
+        print("\nMissing performance result files (some examples):")
+        for f in missing_variants[:20]: # 상위 20개만 출력
+            print(f"- {f}")
+        if len(missing_variants) > 20:
+            print(f"... and {len(missing_variants) - 20} more.")
     else:
-        print(f"\nAll files are present in {', '.join(results_dirs)}.")
+        print(f"\nAll required performance variants for each base schedule are present.")
 
 if __name__ == "__main__":
     main()

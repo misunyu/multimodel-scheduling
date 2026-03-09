@@ -80,9 +80,9 @@ def main():
         plt.plot(model_counts, y_values, marker=marker, 
                  label=label, color=color, linewidth=0.5, markersize=2)
 
-    plt.xlabel('Number of Models (>= N)', fontsize=6)
+    plt.xlabel('Number of Application Instances (>= N)', fontsize=6)
     plt.ylabel('Average Score', fontsize=6)
-    plt.title('Score vs. Number of Models', fontsize=7)
+    plt.title('Score vs. Number of Application Instances', fontsize=7)
     plt.xticks(model_counts, fontsize=6)
     plt.yticks(fontsize=6)
     plt.grid(True, linestyle='--', alpha=0.7, linewidth=0.1)

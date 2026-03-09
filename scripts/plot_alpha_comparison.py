@@ -67,12 +67,10 @@ def main():
             spine.set_linewidth(0.15)
         
         # Y limit adjustment
-        if i == 0:
-            ax.set_ylim(0, 1.0)
-        elif i == 1:
-            ax.set_ylim(0, 0.6)
-        elif i == 2:
-            ax.set_ylim(0, 1.0)
+        ax.set_ylim(0, 1.1)
+        # Ensure 1.1 doesn't show in ticks
+        ticks = [t for t in ax.get_yticks() if t <= 1.0]
+        ax.set_yticks(ticks)
 
     # Global legend at the bottom
     handles, labels = axes[0].get_legend_handles_labels()

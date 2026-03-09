@@ -1,3 +1,4 @@
+#python3 scripts/compare_latency_vs_best.py results/performance_20260306_212912_model_schedules_g_m_x3-5.json results/performance_20260306_203301_model_schedules_g_m_resnet50_resnext50.json results/performance_20260306_192733_model_schedules_g_m_resnet50_resnext50_s_t.json
 #python3 scripts/compare_latency_vs_best.py results/performance_20260127_075226_model_schedules_g_m_x3.json results/performance_20260127_113858_model_schedules_r_t_v_y_x2.json results/performance_20260127_090404_model_schedules_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v.json
 ### 확인 방법
 #`scripts/get_latency_based_comb.py`
@@ -231,7 +232,7 @@ def main():
     bar2 = plt.bar(x + width / 2, latency_vals, width, label='Latency-based Heuristic', color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
     
     plt.ylabel('Normalized Throughput')
-    plt.xlabel('Number of Applications')
+    plt.xlabel('Number of Application Instances')
     plt.xticks(x, processed_labels, rotation=0, fontsize=8)
     leg = plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=8, frameon=False)
     
