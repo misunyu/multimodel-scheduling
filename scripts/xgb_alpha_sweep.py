@@ -89,6 +89,10 @@ def calculate_metrics_for_alpha(alpha, model_prefix, sched_index, perf_index, cl
 
             if models_count == 0:
                 models_count = len(perf_item.get('models', {}))
+            
+            # Skip if less than 3 models
+            if models_count < 3:
+                break
 
             try:
                 df_X = featurize_from_combo(combo_blob)
@@ -106,11 +110,11 @@ def calculate_metrics_for_alpha(alpha, model_prefix, sched_index, perf_index, cl
                 if clip_pred_score and mode != "rank":
                     pred_score = max(0.0, min(1.0, pred_score))
                 
-                pred_score = round(pred_score, 2)
+                # pred_score = round(pred_score, 2)
                 
                 actual_T = float(perf_item.get('derived', {}).get('throughput_norm', 0))
                 actual_D = float(perf_item.get('derived', {}).get('drop_rate_norm', 0))
-                actual_score = round(actual_T - alpha * actual_D, 2)
+                actual_score = actual_T - alpha * actual_D
 
                 scenario_results.append({
                     'combination': comb_name,
@@ -120,7 +124,7 @@ def calculate_metrics_for_alpha(alpha, model_prefix, sched_index, perf_index, cl
             except:
                 continue
 
-        if not scenario_results:
+        if not scenario_results or models_count < 3:
             continue
         
         # Sort by actual score to find actual best(s)
@@ -133,35 +137,34 @@ def calculate_metrics_for_alpha(alpha, model_prefix, sched_index, perf_index, cl
         max_pred_score = pred_sorted[0]['pred_score']
         pred_best_names = [r['combination'] for r in pred_sorted if math.isclose(r['pred_score'], max_pred_score, rel_tol=1e-7)]
 
-        if models_count >= 3:
-            total_valid_schedules_ge3 += 1
-            # Top-1 Accuracy: any(Predicted Top-1) in Actual Top-1
-            is_top1 = any(name in actual_top1_names for name in pred_best_names)
-            if is_top1:
-                top1_hits_ge3 += 1
-            
-            # Top-5 Accuracy: any(Predicted Top-1) in Actual Top-5 groups
-            unique_actual_scores = sorted(list(set([r['actual_score'] for r in scenario_results])), reverse=True)
-            top5_actual_threshold = unique_actual_scores[min(4, len(unique_actual_scores)-1)]
-            actual_top5_names = [r['combination'] for r in scenario_results if r['actual_score'] >= (top5_actual_threshold - 1e-7)]
-            
-            is_top5 = any(name in actual_top5_names for name in pred_best_names)
-            if is_top5:
-                top5_hits_ge3 += 1
-            
-            # Score of first predicted best
-            pred_best_name_first = pred_best_names[0]
-            pred_best_actual_score = next(r['actual_score'] for r in scenario_results if r['combination'] == pred_best_name_first)
-            scores_ge3.append(pred_best_actual_score)
+        total_valid_schedules_ge3 += 1
+        # Top-1 Accuracy: any(Predicted Top-1) in Actual Top-1
+        is_top1 = any(name in actual_top1_names for name in pred_best_names)
+        if is_top1:
+            top1_hits_ge3 += 1
+        
+        # Top-5 Accuracy: any(Predicted Top-1) in Actual Top-5 groups
+        unique_actual_scores = sorted(list(set([r['actual_score'] for r in scenario_results])), reverse=True)
+        top5_actual_threshold = unique_actual_scores[min(4, len(unique_actual_scores)-1)]
+        actual_top5_names = [r['combination'] for r in scenario_results if r['actual_score'] >= (top5_actual_threshold - 1e-7)]
+        
+        is_top5 = any(name in actual_top5_names for name in pred_best_names)
+        if is_top5:
+            top5_hits_ge3 += 1
+        
+        # Score of first predicted best
+        pred_best_name_first = pred_best_names[0]
+        pred_best_actual_score = next(r['actual_score'] for r in scenario_results if r['combination'] == pred_best_name_first)
+        scores_ge3.append(pred_best_actual_score)
 
     if total_valid_schedules_ge3 == 0:
         return None
 
     return {
         'alpha': alpha,
-        'avg_score_ge3': round(np.mean(scores_ge3), 4),
-        'top1_acc_ge3': round(top1_hits_ge3 / total_valid_schedules_ge3, 4),
-        'top5_acc_ge3': round(top5_hits_ge3 / total_valid_schedules_ge3, 4)
+        'avg_score_ge3': np.mean(scores_ge3),
+        'top1_acc_ge3': top1_hits_ge3 / total_valid_schedules_ge3,
+        'top5_acc_ge3': top5_hits_ge3 / total_valid_schedules_ge3
     }
 
 def main():

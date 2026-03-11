@@ -18,6 +18,8 @@
     python ./xgboost_model/deploy_selector_xgb_suite.py train --train_mode rank --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_rank --alpha 0.2
 
 [Predict / Validate]
+  python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv ./xgboost_model/dataset/gpu/test_x3.csv --schedule_csv ./xgboost_model/dataset/gpu/test_schedules_x3.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_x3_double --alpha 0.2
+
  1) Predict for new schedules (Top-K output):
     python ./xgboost_model/deploy_selector_xgb_suite.py predict --schedule_dir ./gen_schedules --model_in ./xgboost_model/artifacts/gpu/xgb_model_random --topk 5 --alpha 0.2
 
@@ -1104,7 +1106,8 @@ def main():
                     # Ground Truth
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score = y1_actual - alpha * y2_actual
+                    actual_score_raw = y1_actual - alpha * y2_actual
+                    actual_score_display = round(actual_score_raw, 2)
 
                     # Prediction
                     X_dict, _, _ = featurize_window(w, infps_map)
@@ -1115,23 +1118,25 @@ def main():
                         y1_pred = np.nan
                         y2_pred = np.nan
                         # [Modified] Use raw prediction from model b1 without clipping
-                        pred_score = float(b1.predict(df_X)[0])
+                        pred_score_raw = float(b1.predict(df_X)[0])
                     elif mode == "rank":
                         y1_pred = np.nan
                         y2_pred = np.nan
                         # XGBRanker predict returns scores that represent relative ranking
-                        pred_score = float(b1.predict(df_X)[0])
+                        pred_score_raw = float(b1.predict(df_X)[0])
                     else:
                         y1_pred = float(b1.predict(df_X)[0])
                         y2_pred = float(b2.predict(df_X)[0])
                         # [Modified] Calculate combined score
-                        pred_score = y1_pred - alpha * y2_pred
+                        pred_score_raw = y1_pred - alpha * y2_pred
                     
                     # [Modified] Apply clipping only if enabled via --clip_pred_score
                     # For rank mode, clipping might not make sense as it's relative, 
                     # but we'll follow the same logic. Usually, Ranker outputs are not in [0,1].
                     if args.clip_pred_score and mode != "rank":
-                        pred_score = max(0.0, min(1.0, pred_score))
+                        pred_score_raw = max(0.0, min(1.0, pred_score_raw))
+
+                    pred_score_display = round(pred_score_raw, 2)
 
                     detailed_results.append({
                         "schedule_file": s_name,
@@ -1139,11 +1144,11 @@ def main():
                         "combination": c_name,
                         "actual_T_norm": round(y1_actual, 4),
                         "actual_D_norm": round(y2_actual, 4),
-                        "actual_score": round(actual_score, 2),
+                        "actual_score": actual_score_display,
                         "pred_T_norm": round(y1_pred, 4) if not np.isnan(y1_pred) else "",
                         "pred_D_norm": round(y2_pred, 4) if not np.isnan(y2_pred) else "",
-                        "pred_score": round(pred_score, 2),
-                        "diff_score": round(abs(round(actual_score, 2) - round(pred_score, 2)), 4)
+                        "pred_score": pred_score_display,
+                        "diff_score": round(abs(actual_score_display - pred_score_display), 4)
                     })
                     
                 except Exception as e:
@@ -1185,7 +1190,7 @@ def main():
                     # Ground Truth
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score = round(y1_actual - alpha * y2_actual, 2)
+                    actual_score_raw = y1_actual - alpha * y2_actual
 
                     # Prediction
                     X_dict, _, _ = featurize_window(w, infps_map)
@@ -1195,21 +1200,19 @@ def main():
                     if mode == "score":
                         y1_pred = np.nan
                         y2_pred = np.nan
-                        pred_score = float(b1.predict(df_X)[0])
+                        pred_score_raw = float(b1.predict(df_X)[0])
                     elif mode == "rank":
                         y1_pred = np.nan
                         y2_pred = np.nan
-                        pred_score = float(b1.predict(df_X)[0])
+                        pred_score_raw = float(b1.predict(df_X)[0])
                     else:
                         y1_pred = float(b1.predict(df_X)[0])
                         y2_pred = float(b2.predict(df_X)[0])
-                        pred_score = y1_pred - alpha * y2_pred
+                        pred_score_raw = y1_pred - alpha * y2_pred
                     
                     if args.clip_pred_score and mode != "rank":
-                        pred_score = max(0.0, min(1.0, pred_score))
+                        pred_score_raw = max(0.0, min(1.0, pred_score_raw))
                     
-                    pred_score = round(pred_score, 2)
-
                     if not np.isnan(y1_pred):
                         y1_errs.append(abs(y1_actual - y1_pred))
                     if not np.isnan(y2_pred):
@@ -1219,8 +1222,8 @@ def main():
                         "combination": c_name,
                         "actual_T_norm": y1_actual,
                         "actual_D_norm": y2_actual,
-                        "actual_score": actual_score,
-                        "pred_score": pred_score,
+                        "actual_score": actual_score_raw,
+                        "pred_score": pred_score_raw,
                         "schedule_file": s_name,
                         "timestamp": w.get("timestamp")
                     })
@@ -1270,23 +1273,22 @@ def main():
                 if is_top1:
                     top1_hits += 1
 
-                # 2) Top-5 Accuracy: any(Predicted Top-1) in Actual Top-5 groups
-                # (Predicted Top-1 combinations: pred_best_names)
-                unique_actual_scores = sorted(list(set([r["actual_score"] for r in scenario_results])), reverse=True)
-                if len(unique_actual_scores) > 0:
-                    top5_actual_threshold = unique_actual_scores[min(4, len(unique_actual_scores)-1)]
-                    actual_top5_names = [r["combination"] for r in scenario_results if r["actual_score"] >= (top5_actual_threshold - 1e-7)]
+                # 2) Top-5 Accuracy: any(Actual Best) in Predicted Top-5 groups
+                # (Predicted Top-5 groups: pred_score_raw >= threshold of 5th pred score group)
+                unique_pred_scores = sorted(list(set([r["pred_score"] for r in scenario_results])), reverse=True)
+                if len(unique_pred_scores) > 0:
+                    top5_pred_threshold = unique_pred_scores[min(4, len(unique_pred_scores)-1)]
+                    predicted_top5_names = [r["combination"] for r in scenario_results if r["pred_score"] >= (top5_pred_threshold - 1e-7)]
                 else:
-                    actual_top5_names = []
+                    predicted_top5_names = []
                 
-                is_top5 = any(name in actual_top5_names for name in pred_best_names)
+                is_top5 = any(name in predicted_top5_names for name in actual_best_names)
                 if is_top5:
                     top5_hits += 1
                 
                 # [Note] Keep top5_group_scores as predicted scores for the report as per previous instructions
-                unique_pred_scores = sorted(list(set([r["pred_score"] for r in scenario_results])), reverse=True)
                 if len(unique_pred_scores) > 0:
-                    top5_pred_threshold = unique_pred_scores[min(4, len(unique_pred_scores)-1)]
+                    # Use unique_pred_scores instead of raw pred_score for display in report
                     top5_group_scores = sorted(list(set([round(r["pred_score"], 2) for r in scenario_results if r["pred_score"] >= (top5_pred_threshold - 1e-7)])), reverse=True)
                 else:
                     top5_group_scores = []
@@ -1308,7 +1310,8 @@ def main():
                     "pred_S": pred_best_row["actual_score"]
                 })
 
-            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.csv"
+            # [Added] Also include alpha in the filename
+            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}_alpha_{alpha}.csv"
 
             # Write Summary to CSV file
             with open(csv_out_path, "w", encoding="utf-8") as f:
@@ -1378,49 +1381,52 @@ def main():
                     
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score = round(y1_actual - alpha * y2_actual, 2)
+                    actual_score_raw = y1_actual - alpha * y2_actual
 
                     X_dict, _, _ = featurize_window(w, infps_map)
                     df_X = pd.DataFrame([X_dict]).reindex(columns=feats, fill_value=0.0)
                     
-                    if mode == "score": pred_score = float(b1.predict(df_X)[0])
-                    elif mode == "rank": pred_score = float(b1.predict(df_X)[0])
-                    else: pred_score = float(b1.predict(df_X)[0]) - alpha * float(b2.predict(df_X)[0])
+                    if mode == "score": pred_score_raw = float(b1.predict(df_X)[0])
+                    elif mode == "rank": pred_score_raw = float(b1.predict(df_X)[0])
+                    else: pred_score_raw = float(b1.predict(df_X)[0]) - alpha * float(b2.predict(df_X)[0])
                     
                     if args.clip_pred_score and mode != "rank":
-                        pred_score = max(0.0, min(1.0, pred_score))
-                    
-                    pred_score = round(pred_score, 2)
+                        pred_score_raw = max(0.0, min(1.0, pred_score_raw))
                     
                     scenario_results.append({
                         "combination": c_name,
                         "actual_T_norm": y1_actual,
                         "actual_D_norm": y2_actual,
-                        "actual_score": actual_score,
-                        "pred_score": pred_score,
+                        "actual_score_raw": actual_score_raw,
+                        "pred_score_raw": pred_score_raw,
                         "schedule_file": s_name
                     })
                 
                 if not scenario_results: continue
                 
                 # Best predicted (Multiple if tied)
-                pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score"], reverse=True)
-                max_pred = pred_sorted[0]["pred_score"]
-                pred_best_all = [r for r in pred_sorted if math.isclose(r["pred_score"], max_pred, rel_tol=1e-7)]
+                pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score_raw"], reverse=True)
+                max_pred_raw = pred_sorted[0]["pred_score_raw"]
+                # Use math.isclose for tie判断 with raw float
+                pred_best_all = [r for r in pred_sorted if math.isclose(r["pred_score_raw"], max_pred_raw, rel_tol=1e-7)]
                 
                 # Use the first one for numerical metrics
                 pred_best = pred_best_all[0]
                 
                 # Actual bests
-                actual_sorted = sorted(scenario_results, key=lambda x: x["actual_score"], reverse=True)
-                max_actual = actual_sorted[0]["actual_score"]
-                actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score"], max_actual, rel_tol=1e-7)]
+                actual_sorted = sorted(scenario_results, key=lambda x: x["actual_score_raw"], reverse=True)
+                max_actual_raw = actual_sorted[0]["actual_score_raw"]
+                actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score_raw"], max_actual_raw, rel_tol=1e-7)]
                 
                 # Construct best_combination string with multiple names if tied
                 comb_parts = []
+                seen_combs = set()
                 all_pred_best_are_actual_best = True
                 for pb in pred_best_all:
                     c_name = pb["combination"]
+                    if c_name in seen_combs: continue
+                    seen_combs.add(c_name)
+
                     is_actual_best = c_name in actual_best_names
                     if is_actual_best:
                         comb_parts.append(f"<font color='purple'>{c_name}</font>")
@@ -1439,7 +1445,7 @@ def main():
                     "best_combination": best_comb_str,
                     "normalized_throughput": round(pred_best["actual_T_norm"], 2),
                     "drop_rate": round(pred_best["actual_D_norm"], 2),
-                    "score": round(pred_best["actual_score"], 2)
+                    "score": round(pred_best["actual_score_raw"], 2)
                 })
 
                 # [Added] Save detailed scores for all combinations in this scenario (JSON format)
@@ -1461,7 +1467,7 @@ def main():
                         "combination": r["combination"],
                         "throughput_norm": round(r["actual_T_norm"], 4),
                         "drop_rate_norm": round(r["actual_D_norm"], 4),
-                        "score": round(r["pred_score"], 2)
+                        "score": round(r["pred_score_raw"], 2)
                     })
                 
                 with open(score_out_path, "w", encoding="utf-8") as sf:
@@ -1476,10 +1482,10 @@ def main():
             # So we should still keep a version of detailed results for plotting, but not for the CSV.
             plot_df = pd.DataFrame(detailed_results)
             if mode == "score":
-                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.pdf"
+                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}_alpha_{alpha}.pdf"
                 plot_score_scatter(plot_df, pdf_out_path, f"Score Prediction: Actual vs Predicted (alpha={alpha})")
             elif mode in ("two_target", "double"):
-                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.pdf"
+                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}_alpha_{alpha}.pdf"
                 plot_multi_scatter(plot_df, pdf_out_path, f"Multi-Model Prediction: {mode} (alpha={alpha})", alpha)
 
             top1_ratio = top1_hits / total_scenarios if total_scenarios > 0 else 0
@@ -1575,7 +1581,8 @@ def main():
                 # 결과 파일 저장 (기존 형식 유지)
                 out_dir = Path(args.out_dir)
                 out_dir.mkdir(parents=True, exist_ok=True)
-                out_path = out_dir / f"predict_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{p.stem}.json"
+                # [Modified] Include alpha in the filename
+                out_path = out_dir / f"predict_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{p.stem}_alpha_{alpha}.json"
 
                 payload = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1651,6 +1658,6 @@ if __name__ == "__main__":
 (b) predict 실행:
     python xgboost_model/deploy_selector_xgb_suite.py predict --model_in xgb_sanity --perf_csv xgboost_model/dataset/gpu/test_x3.csv --schedule_csv xgboost_model/dataset/gpu/test_schedules_x3.csv --alpha 0.2
 (c) 결과 확인:
-    - out_dir (기본 xgboost_model/prediction_result)에 prediction_result_test_x3.csv 생성 확인
+    - out_dir (기본 xgboost_model/prediction_result)에 prediction_result_{perf_csv_name}_{mode}_alpha_{alpha}.csv 생성 확인
     - 터미널에 "Total Scenarios", "Top-1 Hit Ratio", "Avg Score Gap" 출력 확인
 """

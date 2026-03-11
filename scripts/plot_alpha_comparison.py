@@ -4,19 +4,72 @@ import numpy as np
 from pathlib import Path
 from matplotlib import rcParams
 
+def load_metrics_from_csv(csv_path: Path):
+    if not csv_path.exists():
+        print(f"Warning: {csv_path} not found.")
+        return None
+    
+    # Custom parsing because the CSV has non-standard rows
+    lines = csv_path.read_text(encoding="utf-8").splitlines()
+    metrics = {
+        'top1_acc_ge3': None,
+        'top5_acc_ge3': None,
+        'avg_score_ge3': None
+    }
+    
+    for line in lines:
+        parts = line.split(',')
+        if parts[0] == "Top-1 Accuracy (>= 3 models)":
+            metrics['top1_acc_ge3'] = float(parts[1])
+        elif parts[0] == "Top-5 Accuracy (>= 3 models)":
+            metrics['top5_acc_ge3'] = float(parts[1])
+        elif parts[0] == "Average (>= 3 models)":
+            # Average (>= 3 models),,0.96,0.06,0.95 -> index 4 is the score
+            if len(parts) >= 5 and parts[4]:
+                metrics['avg_score_ge3'] = float(parts[4])
+            
+    return metrics
+
 def main():
-    # 파일 경로 설정
-    sweep_fixed_path = Path("experimental_results/xgb_alpha_sweep_ge3.csv")
-    sweep_trained_path = Path("experimental_results/xgb_alpha_trained_sweep_ge3.csv")
+    # alpha 범위 설정 (0.1부터 1.0까지 0.1씩)
+    alphas = [round(x * 0.1, 1) for x in range(1, 11)]
+    
+    prediction_dir = Path("xgboost_model/prediction_result")
     output_path = Path("experimental_results/alpha_comparison_plots.pdf")
 
-    if not sweep_fixed_path.exists() or not sweep_trained_path.exists():
-        print("Required CSV files not found.")
+    fixed_data = []
+    trained_data = []
+
+    for alpha in alphas:
+        # Fixed model: xgb_model_x3_double
+        fixed_csv = prediction_dir / f"prediction_result_test_x3_double_alpha_{alpha}.csv"
+        f_metrics = load_metrics_from_csv(fixed_csv)
+        if f_metrics:
+            fixed_data.append({
+                'alpha': alpha,
+                'avg_score_ge3': f_metrics['avg_score_ge3'],
+                'top1_acc_ge3': f_metrics['top1_acc_ge3'],
+                'top5_acc_ge3': f_metrics['top5_acc_ge3']
+            })
+            
+        # Trained model: xgb_model_x3_score_alphaXX
+        trained_csv = prediction_dir / f"prediction_result_test_x3_score_alpha_{alpha}.csv"
+        t_metrics = load_metrics_from_csv(trained_csv)
+        if t_metrics:
+            trained_data.append({
+                'alpha': alpha,
+                'avg_score_ge3': t_metrics['avg_score_ge3'],
+                'top1_acc_ge3': t_metrics['top1_acc_ge3'],
+                'top5_acc_ge3': t_metrics['top5_acc_ge3']
+            })
+
+    if not fixed_data or not trained_data:
+        print("Required metrics data not found.")
         return
 
     # 데이터 로드
-    df_fixed = pd.read_csv(sweep_fixed_path)
-    df_trained = pd.read_csv(sweep_trained_path)
+    df_fixed = pd.DataFrame(fixed_data)
+    df_trained = pd.DataFrame(trained_data)
 
     # 데이터 병합 (alpha 기준)
     df = pd.merge(df_fixed, df_trained, on='alpha', suffixes=('_fixed', '_trained'))

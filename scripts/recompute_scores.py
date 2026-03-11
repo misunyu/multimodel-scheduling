@@ -50,8 +50,8 @@ def recompute_scores(input_dir, output_dir):
             drop_rate = entry.get('derived', {}).get('drop_rate_fps', 0.0)
             
             # Calculate normalized values
-            throughput_norm = round(total_throughput / fmax, 2)
-            drop_rate_norm = round(drop_rate / dmax, 2)
+            throughput_norm = total_throughput / fmax
+            drop_rate_norm = drop_rate / dmax
             
             # Add to derived field
             if 'derived' not in entry:
@@ -60,12 +60,12 @@ def recompute_scores(input_dir, output_dir):
             entry['derived']['drop_rate_norm'] = drop_rate_norm
             
             # Current behavior: score = throughput_norm - 0.2 * drop_rate_norm
-            score_02 = round(throughput_norm - 0.2 * drop_rate_norm, 2)
+            score_02 = throughput_norm - 0.2 * drop_rate_norm
             entry['score'] = score_02
             
             # Calculate scores for all alphas and track best
             for alpha in alphas:
-                s = round(throughput_norm - alpha * drop_rate_norm, 2)
+                s = throughput_norm - alpha * drop_rate_norm
                 if s > best_deployments[alpha]['score']:
                     best_deployments[alpha]['score'] = s
                     best_deployments[alpha]['comb'] = entry.get('combination')

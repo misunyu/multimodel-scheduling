@@ -33,7 +33,8 @@ def extract_scores(file_path, actual=False):
 def main():
     # 파일 경로 설정
     files = {
-        'Ours': 'experimental_results/xgb_best_results_x3_double.csv',
+        # 'Ours': 'experimental_results/xgb_best_results_x3_double.csv',
+        'Ours': 'xgboost_model/prediction_result/gpu_x3_double/prediction_result_test_x3_double.csv',
         'Latency-based': 'experimental_results/latency_based_best_results_x3.csv',
         'Best-of-5': 'experimental_results/random_search_base_results_x3.csv'
     }
@@ -54,7 +55,7 @@ def main():
     
     plt.figure(figsize=(3.2, 2.5))
     
-    model_counts = sorted([3, 4, 5, 6, 7, 8])
+    model_counts = sorted([3, 4, 5, 6, 7])
     markers = ['o', 's', '^', 'D']
     # 진한 색상 설정
     colors = ['tab:red', 'tab:blue', 'forestgreen', 'black'] 
