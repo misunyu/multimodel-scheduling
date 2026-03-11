@@ -228,7 +228,7 @@ def main():
     edge_color1 = '#8888FF' # Lighter blue
     edge_color2 = '#FF8888' # Lighter red
 
-    bar1 = plt.bar(x - width/2, oracle_vals, width, label='Throughput-optimal Placemen', color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
+    bar1 = plt.bar(x - width/2, oracle_vals, width, label='Throughput-optimal Placement', color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
     bar2 = plt.bar(x + width / 2, latency_vals, width, label='Latency-based Heuristic', color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
     
     plt.ylabel('Normalized Throughput')
