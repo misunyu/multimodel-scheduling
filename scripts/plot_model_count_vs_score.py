@@ -34,7 +34,7 @@ def main():
     # 파일 경로 설정
     files = {
         # 'Ours': 'experimental_results/xgb_best_results_x3_double.csv',
-        'Ours': 'xgboost_model/prediction_result/gpu_x3_double/prediction_result_test_x3_double.csv',
+        'Ours': 'xgboost_model/prediction_result/gpu_x3_double/prediction_result_test_x3_double_alpha_0.3.csv',
         'Latency-based': 'experimental_results/latency_based_best_results_x3.csv',
         'Best-of-5': 'experimental_results/random_search_base_results_x3.csv'
     }

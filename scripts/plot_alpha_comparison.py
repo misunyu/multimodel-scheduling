@@ -42,7 +42,7 @@ def main():
 
     for alpha in alphas:
         # Fixed model: xgb_model_x3_double
-        fixed_csv = prediction_dir / f"prediction_result_test_x3_double_alpha_{alpha}.csv"
+        fixed_csv = prediction_dir / f"gpu_x3_double/prediction_result_test_x3_double_alpha_{alpha}.csv"
         f_metrics = load_metrics_from_csv(fixed_csv)
         if f_metrics:
             fixed_data.append({
@@ -53,7 +53,7 @@ def main():
             })
             
         # Trained model: xgb_model_x3_score_alphaXX
-        trained_csv = prediction_dir / f"prediction_result_test_x3_score_alpha_{alpha}.csv"
+        trained_csv = prediction_dir / f"gpu_x3_score/prediction_result_test_x3_score_alpha_{alpha}.csv"
         t_metrics = load_metrics_from_csv(trained_csv)
         if t_metrics:
             trained_data.append({
