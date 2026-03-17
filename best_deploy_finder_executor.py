@@ -14,8 +14,74 @@ import sys
 import argparse
 from PyQt5 import uic
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem
+import yaml
+from pathlib import Path
 from schedule_generator.file_manager import FileManager
+
+
+class ChangeDeployDialog(QDialog):
+    """Modeless dialog to show and select generated combinations from model_schedules.yaml."""
+
+    def __init__(self, parent, schedule_path):
+        super().__init__(parent)
+        self.setWindowTitle("Change Deployment")
+        self.setModal(False)  # Modeless
+        self.schedule_path = schedule_path
+        self.parent_app = parent
+
+        layout = QVBoxLayout(self)
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+
+        self.execute_button = QPushButton("Execute Selected")
+        self.execute_button.clicked.connect(self.on_execute_clicked)
+        layout.addWidget(self.execute_button)
+
+        self.load_combinations()
+
+    def load_combinations(self):
+        self.list_widget.clear()
+        if not os.path.exists(self.schedule_path):
+            self.list_widget.addItem("No schedule file found.")
+            self.execute_button.setEnabled(False)
+            return
+
+        try:
+            with open(self.schedule_path, 'r') as f:
+                data = yaml.safe_load(f)
+
+            if not data:
+                self.list_widget.addItem("Schedule file is empty.")
+                self.execute_button.setEnabled(False)
+                return
+
+            combos = [key for key in data.keys() if key.startswith('combination_')]
+            # Sort naturally if possible
+            try:
+                combos.sort(key=lambda x: int(x.split('_')[1]))
+            except:
+                combos.sort()
+
+            for combo in combos:
+                self.list_widget.addItem(combo)
+
+            if not combos:
+                self.list_widget.addItem("No combinations found in file.")
+                self.execute_button.setEnabled(False)
+        except Exception as e:
+            self.list_widget.addItem(f"Error loading YAML: {e}")
+            self.execute_button.setEnabled(False)
+
+    def on_execute_clicked(self):
+        selected_item = self.list_widget.currentItem()
+        if selected_item:
+            combo_name = selected_item.text()
+            if combo_name.startswith('combination_'):
+                self.parent_app.log(f"[Action] Manually selected {combo_name} for execution.")
+                self.parent_app._kill_existing_executor()
+                self.parent_app._launch_executor_subprocess(self.schedule_path, combo_name=combo_name, duration=60)
+                # self.close() # Keep it open as it's modeless, or close if user prefers. Requirement didn't specify.
 
 
 class CheckableFileSystemModel(QFileSystemModel):
@@ -36,18 +102,30 @@ class CheckableFileSystemModel(QFileSystemModel):
 
     def flags(self, index):
         base = super().flags(index)
-        if index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
+        is_top = self.is_top_level_child(index)
+        is_dir = self.isDir(index)
+        is_onnx = self.filePath(index).lower().endswith('.onnx')
+
+        if index.column() == 0 and is_top and (is_dir or is_onnx):
             return base | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable | Qt.ItemIsEnabled
         return base
 
     def data(self, index, role=Qt.DisplayRole):
-        if role == Qt.CheckStateRole and index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
+        is_top = self.is_top_level_child(index)
+        is_dir = self.isDir(index)
+        is_onnx = self.filePath(index).lower().endswith('.onnx')
+
+        if role == Qt.CheckStateRole and index.column() == 0 and is_top and (is_dir or is_onnx):
             path = self.filePath(index)
             return self._check_states.get(path, Qt.Unchecked)
         return super().data(index, role)
 
     def setData(self, index, value, role=Qt.EditRole):
-        if role == Qt.CheckStateRole and index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
+        is_top = self.is_top_level_child(index)
+        is_dir = self.isDir(index)
+        is_onnx = self.filePath(index).lower().endswith('.onnx')
+
+        if role == Qt.CheckStateRole and index.column() == 0 and is_top and (is_dir or is_onnx):
             path = self.filePath(index)
             self._check_states[path] = Qt.Checked if value == Qt.Checked else Qt.Unchecked
             self.dataChanged.emit(index, index, [Qt.CheckStateRole])
@@ -65,7 +143,13 @@ class BestDeployFinderApp(QMainWindow):
         uic.loadUi(os.path.join(os.path.dirname(__file__), 'best_deploy_finder_executor.ui'), self)
 
         # Default models root to ./models
-        self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models')
+        self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'deploy_models')
+
+        # Default prediction model settings
+        self.default_gpu_pred_model_dir = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'gpu')
+        self.default_gpu_pred_model_prefix = 'xgb_model_x3_double'
+        self.default_npu_pred_model_dir = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'npu')
+        self.default_npu_pred_model_prefix = 'xgb_model_npu_double'
 
         # Setup file system model and tree view
         self.fs_model = CheckableFileSystemModel(self)
@@ -96,12 +180,18 @@ class BestDeployFinderApp(QMainWindow):
             self.predict_best_button.clicked.connect(self.on_predict_best_clicked)
         if hasattr(self, 'load_execute_best_button'):
             self.load_execute_best_button.clicked.connect(self.on_load_execute_best_clicked)
-        if hasattr(self, 'stop_execution'):
-            self.stop_execution.clicked.connect(self.on_stop_execution_clicked)
+        if hasattr(self, 'change_deploy_button'):
+            self.change_deploy_button.clicked.connect(self.on_change_deploy_clicked)
+
+        if hasattr(self, 'device_type_combo'):
+            self.device_type_combo.currentTextChanged.connect(self.on_device_type_changed)
 
         # Initialize line edits if present
         if hasattr(self, 'deployment_model_input'):
             self.deployment_model_input.setText(self.models_root)
+
+        # Initial prediction model setup
+        self.on_device_type_changed()
 
         # Initialize log window if present
         if hasattr(self, 'log_text_edit'):
@@ -135,12 +225,17 @@ class BestDeployFinderApp(QMainWindow):
             print(message)
 
     def _get_selected_model_names(self):
-        # Prefer checked top-level directories (checkbox state) as the source of truth
+        # Prefer checked top-level directories or .onnx files as the source of truth
         if hasattr(self.fs_model, 'get_checked_top_level_dirs'):
-            checked_dirs = self.fs_model.get_checked_top_level_dirs()
-            if checked_dirs:
-                # Map to folder basenames (model names)
-                models = [os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]
+            checked = self.get_checked_top_level_dirs()
+            if checked:
+                # Map to folder basenames or .onnx file stems (model names)
+                models = []
+                for p in checked:
+                    if os.path.isdir(p):
+                        models.append(os.path.basename(p))
+                    elif p.lower().endswith('.onnx'):
+                        models.append(os.path.splitext(os.path.basename(p))[0])
                 models = sorted([m for m in models if m])
                 if models:
                     self._log(f"[Info] Using checked models: {', '.join(models)}")
@@ -234,6 +329,25 @@ class BestDeployFinderApp(QMainWindow):
             pairs = ", ".join([f"{m}: {int(v)}" for m, v in sorted(self.input_fps_by_model.items())])
             self._log(f"[Info] Updated input rates: {pairs}")
 
+    def on_device_type_changed(self):
+        if not hasattr(self, 'device_type_combo'):
+            return
+
+        device_type = self.device_type_combo.currentText().lower() # 'gpu' or 'npus'
+        if device_type == 'npus':
+            base_dir = self.default_npu_pred_model_dir
+            prefix = self.default_npu_pred_model_prefix
+        else:
+            base_dir = self.default_gpu_pred_model_dir
+            prefix = self.default_gpu_pred_model_prefix
+
+        if hasattr(self, 'prediction_model_input'):
+            # Check if default files exist
+            y1_path = os.path.join(base_dir, f"{prefix}_y1.json")
+            y2_path = os.path.join(base_dir, f"{prefix}_y2.json")
+            if os.path.exists(y1_path) and os.path.exists(y2_path):
+                self.prediction_model_input.setText(base_dir)
+
     def select_models_folder(self):
         folder = QFileDialog.getExistingDirectory(self, 'Select Models Folder', self.models_root)
         if folder:
@@ -249,7 +363,11 @@ class BestDeployFinderApp(QMainWindow):
 
     def select_prediction_model(self):
         # Expect a folder that contains <prefix>_y1.json and <prefix>_y2.json
-        path = QFileDialog.getExistingDirectory(self, 'Select Prediction Model Folder', os.getcwd())
+        device_type = self.device_type_combo.currentText().lower() if hasattr(self, 'device_type_combo') else 'gpu'
+        default_dir = self.default_npu_pred_model_dir if device_type == 'npus' else self.default_gpu_pred_model_dir
+
+        start_dir = default_dir if os.path.exists(default_dir) else os.getcwd()
+        path = QFileDialog.getExistingDirectory(self, 'Select Prediction Model Folder', start_dir)
         if path and hasattr(self, 'prediction_model_input'):
             self.prediction_model_input.setText(path)
 
@@ -279,63 +397,79 @@ class BestDeployFinderApp(QMainWindow):
             self.log_text_edit.appendPlainText(text)
         print(text)
 
-    def build_schedule_from_selection(self, models_root: str, checked_dirs, device_conf_path: str, out_path: str) -> str:
-        """Generate a schedule YAML (model_schedules.yaml) from selected top-level model folders and device config.
-        Returns the output path. Mirrors the approach from backup.schedule_generator_app.generate_all_combinations.
+    def build_schedule_from_selection(self, models_root: str, checked_paths, device_conf_path: str, out_path: str) -> str:
+        """Generate a schedule YAML (model_schedules.yaml) from selected top-level model folders/.onnx files and device config.
+        Always builds CPU/GPU combinations.
         """
+        return self._build_schedule_cpu_gpu(models_root, checked_paths, device_conf_path, out_path)
+
+    def _build_schedule_cpu_gpu(self, models_root: str, checked_paths, device_conf_path: str, out_path: str) -> str:
+        """CPU/GPU mode: each model -> cpu or gpu (2^N combinations)."""
         import yaml
-        # Derive model names from checked directories (top-level under models_root)
-        models = [os.path.basename(d) for d in checked_dirs if os.path.isdir(d)]
+        models = []
+        for p in checked_paths:
+            if os.path.isdir(p):
+                models.append(os.path.basename(p))
+            elif p.lower().endswith('.onnx'):
+                models.append(os.path.splitext(os.path.basename(p))[0])
         models = [m for m in models if m]
+
         if not models:
-            raise ValueError("No models selected. Please check at least one top-level model folder.")
+            raise ValueError("No models selected (folder or .onnx file).")
         if len(models) > 4:
             self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
             models = models[:4]
 
         # Load device info
         try:
-            import yaml as _yaml
             with open(device_conf_path, 'r') as f:
-                device_config = _yaml.safe_load(f) or {}
-            cpu_count = device_config.get("devices", {}).get("cpu", {}).get("count", 1)
-            npu_cfg = device_config.get("devices", {}).get("npu", {})
-            npu_count = npu_cfg.get("count", 0)
-            npu_ids = list(npu_cfg.get("ids", []))
-            self.log(f"[Info] Device config: CPU={cpu_count}, NPU={npu_count}, NPU IDs={npu_ids}")
+                device_config = yaml.safe_load(f) or {}
+            cpu_cfg = device_config.get("devices", {}).get("cpu", {})
+            cpu_count = cpu_cfg.get("count", 1)
+            gpu_cfg = device_config.get("devices", {}).get("gpu", {})
+            gpu_count = gpu_cfg.get("count", 1)  # Default 1
+            gpu_ids = list(gpu_cfg.get("ids", [0] if gpu_count > 0 else []))
+            self.log(f"[Predict] Mode: CPU/GPU, Config: {device_conf_path}")
+            self.log(f"[Predict] Detected: CPU count={cpu_count}, GPU count={gpu_count}, GPU IDs={gpu_ids}")
         except Exception as e:
             raise RuntimeError(f"Failed to load device config '{device_conf_path}': {e}")
 
-        # Generate all combinations (CPU multi-assign allowed; NPU unique per model)
-        combinations = []
+        if gpu_count <= 0:
+            self.log("[Predict] GPU is disabled by device config (count <= 0). Generating CPU-only schedules.")
 
-        def rec(idx, assign, available_npus: set):
+        # Generate 2^N combinations
+        combinations = []
+        def rec(idx, assign):
             if idx >= len(models):
                 combinations.append(assign.copy())
                 return
             model = models[idx]
             # Option 1: CPU
             assign[model] = "cpu"
-            rec(idx + 1, assign, available_npus)
-            # Option 2: each available NPU
-            for nid in list(available_npus):
-                assign[model] = f"npu{nid}"
-                new_avail = set(available_npus)
-                new_avail.remove(nid)
-                rec(idx + 1, assign, new_avail)
+            rec(idx + 1, assign)
+            # Option 2: GPU (only if enabled)
+            if gpu_count > 0:
+                assign[model] = "gpu"
+                rec(idx + 1, assign)
 
-        rec(0, {}, set(npu_ids))
+        rec(0, {})
+        self.log(f"[Predict] Generated {len(combinations)} combinations (CPU/GPU only)")
+        return self._write_schedule_yaml(models, combinations, out_path)
 
-        # Build schedules dict
+    def _build_schedule_cpu_npus(self, models_root: str, checked_paths, device_conf_path: str, out_path: str) -> str:
+        """Deprecated: NPUs mode is no longer used for schedule creation."""
+        self.log("[Warn] _build_schedule_cpu_npus is deprecated. Using _build_schedule_cpu_gpu instead.")
+        return self._build_schedule_cpu_gpu(models_root, checked_paths, device_conf_path, out_path)
+
+    def _write_schedule_yaml(self, models, combinations, out_path: str) -> str:
+        import yaml
         schedules = {}
         for i, combo in enumerate(combinations):
             combo_name = f"combination_{i+1}"
             schedules[combo_name] = {}
             for j, (model, device) in enumerate(combo.items()):
                 model_id = f"{model}_{device}"
-                # Determine default infps
                 infps = None
-                # Prefer explicit input rates if provided by the dialog
                 if isinstance(getattr(self, 'input_fps_by_model', None), dict):
                     v = self.input_fps_by_model.get(model)
                     try:
@@ -343,15 +477,11 @@ class BestDeployFinderApp(QMainWindow):
                             infps = int(v)
                     except Exception:
                         infps = None
-                # Fallback heuristics if not provided
                 if infps is None:
                     lname = model.lower()
-                    if "resnet50" in lname:
-                        infps = 2
-                    elif "yolov3" in lname:
-                        infps = 30
-                    else:
-                        infps = 10
+                    if "resnet50" in lname: infps = 2
+                    elif "yolov3" in lname: infps = 30
+                    else: infps = 10
                 entry = {
                     "model": model,
                     "execution": device,
@@ -360,11 +490,9 @@ class BestDeployFinderApp(QMainWindow):
                 if infps is not None:
                     entry["infps"] = int(infps)
                 schedules[combo_name][model_id] = entry
-        # Write YAML
         try:
             with open(out_path, 'w', encoding='utf-8') as f:
-                f.write("# model_schedules.yaml\n")
-                f.write("# Auto-generated\n\n")
+                f.write("# model_schedules.yaml\n# Auto-generated\n\n")
                 f.write(yaml.dump(schedules, default_flow_style=False))
         except Exception as e:
             raise RuntimeError(f"Failed to write schedule YAML '{out_path}': {e}")
@@ -372,22 +500,22 @@ class BestDeployFinderApp(QMainWindow):
 
     def generate_all_combinations(self) -> str:
         """Generate all possible model-to-device combinations into model_schedules.yaml using:
-        - Checked top-level model folders in the tree.
+        - Checked top-level model folders/.onnx files in the tree.
         - Device config path from self.device_config_input.
         - Per-model input rates from input_rate_dialog (self.input_fps_by_model).
         Returns the output YAML path.
         """
         # Resolve selections
         models_root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
-        checked_dirs = self.get_checked_top_level_dirs()
-        if not checked_dirs:
-            raise ValueError("No model folders selected. Please check model folders in the tree.")
+        checked_paths = self.get_checked_top_level_dirs()
+        if not checked_paths:
+            raise ValueError("No models selected (folder or .onnx file). Please check model items in the tree.")
         device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
         if not device_conf or not os.path.exists(device_conf):
             raise FileNotFoundError(f"Device config not found: {device_conf}")
         out_path = self.generated_schedule_path
         # Delegate to existing builder (kept for compatibility)
-        return self.build_schedule_from_selection(models_root, checked_dirs, device_conf, out_path)
+        return self.build_schedule_from_selection(models_root, checked_paths, device_conf, out_path)
 
     def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.2):
         """Predict best combination using two-target XGBoost JSON models.
@@ -400,7 +528,6 @@ class BestDeployFinderApp(QMainWindow):
         import pandas as pd
         from pathlib import Path
         from xgboost_model.deploy_selector_xgb_suite import (
-            load_static_profiles,
             featurize_from_combo,
             predict_two_targets,
             _load_yaml_or_json,
@@ -437,12 +564,6 @@ class BestDeployFinderApp(QMainWindow):
             raise FileNotFoundError(f"Schedule YAML not found: {schedule_yaml_path}")
         model_prefix = _infer_model_prefix(Path(model_input_path))
 
-        # Use project root sample_profiling_data.json as required
-        static_json_path = Path(__file__).resolve().parent / "sample_profiling_data.json"
-        if not static_json_path.exists():
-            raise FileNotFoundError(f"Static profiling JSON not found: {static_json_path}")
-
-        S = load_static_profiles(static_json_path)
         schedule_doc = _load_yaml_or_json(sched_path)
         combos = _iter_combos_from_schedule(schedule_doc)
         if not combos:
@@ -450,10 +571,11 @@ class BestDeployFinderApp(QMainWindow):
 
         rows = []
         for name, combo_blob in combos:
-            X = featurize_from_combo(S, combo_blob)
+            X = featurize_from_combo(combo_blob)
             y1_pred, y2_pred = predict_two_targets(model_prefix, X)
             fps = float(y1_pred[0]); drop = float(y2_pred[0])
             score = fps - float(alpha) * drop
+            self.log(f"[Predict] Combination: {name} -> FPS: {fps:.2f}, Drop: {drop:.2f}, Score: {score:.2f}")
             rows.append({
                 "source": sched_path.name,
                 "combination": str(name),
@@ -473,17 +595,23 @@ class BestDeployFinderApp(QMainWindow):
         best_combo = str(df.iloc[0]["combination"]) if len(df) > 0 else None
         return best_combo, df
 
-    def _build_cpu_only_schedule(self, checked_dirs, out_path: str) -> str:
+    def _build_cpu_only_schedule(self, checked_paths, out_path: str) -> str:
         """Build a schedule with a single combination where all selected models run on CPU
         using the per-model input rates previously set by the user (input_rate_dialog).
         Returns the output YAML path.
         """
         import yaml
         # Derive model names
-        models = [os.path.basename(d) for d in checked_dirs if os.path.isdir(d)]
+        models = []
+        for p in checked_paths:
+            if os.path.isdir(p):
+                models.append(os.path.basename(p))
+            elif p.lower().endswith('.onnx'):
+                models.append(os.path.splitext(os.path.basename(p))[0])
         models = [m for m in models if m]
+
         if not models:
-            raise ValueError("No models selected. Please check model folders in the tree.")
+            raise ValueError("No models selected. Please check model folders/.onnx files in the tree.")
         # Limit to 4 views for viewer layout consistency (mirrors other code paths)
         if len(models) > 4:
             self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
@@ -651,6 +779,17 @@ class BestDeployFinderApp(QMainWindow):
             self.log(f"[Error] Failed to launch executor: {e}")
             return None
 
+    def on_change_deploy_clicked(self):
+        """Show Change Deployment Dialog (modeless)."""
+        if not hasattr(self, '_change_deploy_dialog') or self._change_deploy_dialog is None:
+            self._change_deploy_dialog = ChangeDeployDialog(self, self.generated_schedule_path)
+        else:
+            self._change_deploy_dialog.load_combinations()
+
+        self._change_deploy_dialog.show()
+        self._change_deploy_dialog.raise_()
+        self._change_deploy_dialog.activateWindow()
+
     def on_stop_execution_clicked(self):
         """Handler for the Stop Execution button.
         Mimics pressing Stop in the info window by terminating the running executor subprocess.
@@ -754,12 +893,12 @@ class BestDeployFinderApp(QMainWindow):
                 self.log(f"[Warn] Failed to parse predictions.csv: {e}")
         # If no predictions.csv best, create a CPU-only schedule for the selected models
         if not best_combo:
-            checked_dirs = self.get_checked_top_level_dirs()
-            if not checked_dirs:
-                self.log("[Error] No model folders selected. Please check model folders in the tree.")
+            checked_paths = self.get_checked_top_level_dirs()
+            if not checked_paths:
+                self.log("[Error] No models selected (folder or .onnx file). Please check model items in the tree.")
                 return
             try:
-                schedule_path = self._build_cpu_only_schedule(checked_dirs, schedule_path)
+                schedule_path = self._build_cpu_only_schedule(checked_paths, schedule_path)
                 best_combo = 'combination_1'
                 self.log(f"[Build] Created CPU-only schedule: {schedule_path}")
             except Exception as e:
@@ -784,8 +923,35 @@ class BestDeployFinderApp(QMainWindow):
         pred_model = self.prediction_model_input.text() if hasattr(self, 'prediction_model_input') else ''
         device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
 
-        # Collect selected (checked) top-level model folders
-        checked_dirs = self.get_checked_top_level_dirs()
+        # Fallback for prediction model if path is empty or does not exist
+        if not pred_model or not os.path.exists(pred_model):
+            # Try default path based on current device type selection
+            device_type = self.device_type_combo.currentText().lower() if hasattr(self, 'device_type_combo') else 'gpu'
+            if device_type == 'npus':
+                base_dir = self.default_npu_pred_model_dir
+                prefix = self.default_npu_pred_model_prefix
+            else:
+                base_dir = self.default_gpu_pred_model_dir
+                prefix = self.default_gpu_pred_model_prefix
+
+            if os.path.exists(base_dir):
+                y1_path = os.path.join(base_dir, f"{prefix}_y1.json")
+                y2_path = os.path.join(base_dir, f"{prefix}_y2.json")
+                if os.path.exists(y1_path) and os.path.exists(y2_path):
+                    pred_model = base_dir
+                    self.log(f"[Predict] Using default fallback prediction model ({device_type.upper()}): {pred_model}")
+                    if hasattr(self, 'prediction_model_input'):
+                        self.prediction_model_input.setText(pred_model)
+
+        # Final check of the used pred_model path
+        self.log(f"[Predict] final model_input_path: {pred_model}")
+
+        # Device Config path used for both generation and logging
+        self.log(f"[Predict] Device Type: {self.device_type_combo.currentText() if hasattr(self, 'device_type_combo') else 'GPU'}")
+        self.log(f"[Predict] Device Config Path: {device_conf}")
+
+        # Collect selected (checked) top-level model folders/.onnx files
+        checked_paths = self.get_checked_top_level_dirs()
 
         # Shift current->previous state before computing new prediction
         try:
@@ -799,14 +965,12 @@ class BestDeployFinderApp(QMainWindow):
 
         # Log inputs
         self.log(f"[Predict] models_root={models_root}")
-        self.log(f"[Predict] prediction_model={pred_model}")
-        self.log(f"[Predict] device_config={device_conf}")
-        self.log(f"[Predict] checked_top_level_dirs={checked_dirs}")
+        self.log(f"[Predict] checked_top_level_items={checked_paths}")
 
         # Validate
         try:
-            if not checked_dirs:
-                raise ValueError("No model folders selected. Please check model folders in the tree.")
+            if not checked_paths:
+                raise ValueError("No models selected (folder or .onnx file). Please check model items in the tree.")
             if not device_conf or not os.path.exists(device_conf):
                 raise FileNotFoundError(f"Device config not found: {device_conf}")
             if not pred_model or not os.path.exists(pred_model):
@@ -850,7 +1014,15 @@ class BestDeployFinderApp(QMainWindow):
                 new_score = float(df.iloc[0]['pred_score']) if len(df) > 0 else None
             except Exception:
                 new_score = None
-            same_selection = (set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)])) == (getattr(self, '_prev_selected_models', set()) or set()))
+            # same_selection 판정: 체크된 경로들의 basename/stem 목록이 이전과 같은지 확인
+            current_model_names = []
+            for p in checked_paths:
+                if os.path.isdir(p):
+                    current_model_names.append(os.path.basename(p))
+                elif p.lower().endswith('.onnx'):
+                    current_model_names.append(os.path.splitext(os.path.basename(p))[0])
+
+            same_selection = (set(sorted(current_model_names)) == (getattr(self, '_prev_selected_models', set()) or set()))
             prev_score = getattr(self, '_prev_score', None)
             prev_best = getattr(self, '_prev_best_combo', None)
             new_best = str(best_combo)
@@ -918,9 +1090,14 @@ class BestDeployFinderApp(QMainWindow):
                 pass
             # Update internal current-state tracking
             try:
-                # derive current selected model names from checked_dirs
-                current_models = set(sorted([os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]))
-                self._current_selected_models = current_models
+                # derive current selected model names from checked_paths
+                current_models = []
+                for p in checked_paths:
+                    if os.path.isdir(p):
+                        current_models.append(os.path.basename(p))
+                    elif p.lower().endswith('.onnx'):
+                        current_models.append(os.path.splitext(os.path.basename(p))[0])
+                self._current_selected_models = set(sorted(current_models))
                 self._current_best_combo = str(best_combo)
                 self._current_score = float(df.iloc[0]['pred_score']) if len(df) > 0 else None
                 self.log(f"[State] Updated current selection: {sorted(list(self._current_selected_models))}")
