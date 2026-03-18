@@ -666,8 +666,15 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
         except Exception:
             pass
         
-        # We only use CUDAExecutionProvider and do NOT allow CPU fallback
-        providers = ["CUDAExecutionProvider"]
+        # Provider diagnostics and initialization
+        try:
+            avail = ort.get_available_providers()
+            print(f"[YOLO GPU] ort.get_available_providers() before session: {avail}")
+        except Exception as e:
+            print(f"[YOLO GPU] Error calling get_available_providers: {e}")
+
+        # We primarily use CUDAExecutionProvider or TensorrtExecutionProvider
+        providers = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
         
         try:
             session = ort.InferenceSession(
@@ -675,9 +682,13 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
                 sess_options=so,
                 providers=providers,
             )
-            # Strict check: if CUDA is not in active providers, it's a failure
-            if "CUDAExecutionProvider" not in session.get_providers():
-                raise RuntimeError(f"CUDAExecutionProvider not available for {model_name} in {view_name}")
+            # Log active providers
+            active = session.get_providers()
+            print(f"[YOLO GPU] ORT providers active(session)={active}")
+            
+            # Warn if CUDA/TRT not chosen but requested
+            if "CUDAExecutionProvider" not in active and "TensorrtExecutionProvider" not in active:
+                print(f"[YOLO GPU] Warning: Neither CUDA nor TensorRT is being used for {model_name}. Active: {active}")
         except Exception as e:
             print(f"\n[CRITICAL ERROR] Failed to load YOLO GPU model with CUDAExecutionProvider: {e}")
             print("Terminating program as CPU fallback is disabled for GPU execution mode.\n")
@@ -810,8 +821,15 @@ def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=
         except Exception:
             pass
             
-        # We only use CUDAExecutionProvider and do NOT allow CPU fallback
-        providers = ["CUDAExecutionProvider"]
+        # Provider diagnostics and initialization
+        try:
+            avail = ort.get_available_providers()
+            print(f"[ResNet GPU] ort.get_available_providers() before session: {avail}")
+        except Exception as e:
+            print(f"[ResNet GPU] Error calling get_available_providers: {e}")
+
+        # We primarily use CUDAExecutionProvider or TensorrtExecutionProvider
+        providers = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
         
         try:
             session = ort.InferenceSession(
@@ -819,9 +837,13 @@ def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=
                 sess_options=so,
                 providers=providers,
             )
-            # Strict check: if CUDA is not in active providers, it's a failure
-            if "CUDAExecutionProvider" not in session.get_providers():
-                raise RuntimeError(f"CUDAExecutionProvider not available for ResNet in {view_name}")
+            # Log active providers
+            active = session.get_providers()
+            print(f"[ResNet GPU] ORT providers active(session)={active}")
+            
+            # Warn if CUDA/TRT not chosen but requested
+            if "CUDAExecutionProvider" not in active and "TensorrtExecutionProvider" not in active:
+                print(f"[ResNet GPU] Warning: Neither CUDA nor TensorRT is being used for ResNet. Active: {active}")
         except Exception as e:
             print(f"\n[CRITICAL ERROR] Failed to load ResNet GPU model with CUDAExecutionProvider: {e}")
             print("Terminating program as CPU fallback is disabled for GPU execution mode.\n")

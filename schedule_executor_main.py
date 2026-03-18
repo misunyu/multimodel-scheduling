@@ -42,11 +42,12 @@ class ScheduleExecutor:
                 self._combinations = [self._selected_combo]
             else:
                 print(f"[Executor] ERROR: requested combination '{self._selected_combo}' not found in {os.path.basename(schedule_file)}")
-                os._exit(2)
+                # Raised exception instead of os._exit(2)
+                raise ValueError(f"Combination '{self._selected_combo}' not found.")
 
         if not self._combinations:
-            print('[Executor] No combinations found in schedule file. Exiting.')
-            os._exit(1)
+            print('[Executor] No combinations found in schedule file.')
+            raise ValueError("No combinations found in schedule file.")
 
     # ------------------------------ Public API ------------------------------ #
 
@@ -432,7 +433,7 @@ def main():
 
     # No legacy pre-clean: results are now saved per-run under results/performance_*.json
 
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
 
     # Create the InfoWindow instance
     info = InfoWindow(parent=None)
@@ -474,7 +475,13 @@ def main():
             info.setWindowFlag(Qt.WindowStaysOnTopHint, False)
         except Exception:
             pass
-        executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
+        
+        try:
+            executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
+        except ValueError as e:
+            print(f"[Main] ERROR: {e}")
+            return 1
+
         # Link executor for shutdown handler
         try:
             setattr(_graceful_shutdown, '_executor', executor)
@@ -503,13 +510,18 @@ def main():
             print(f"[Main] QApplication error: {e}")
             exit_code = 1
         print('[Main] QApplication loop exited.')
-        os._exit(exit_code)
+        return exit_code
 
     # Otherwise, show InfoWindow and use full GUI mode
     info.show()
 
     # Default GUI mode with controller
-    executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info)
+    try:
+        executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info)
+    except ValueError as e:
+        print(f"[Main] ERROR: {e}")
+        return 1
+    
     controller = Controller(executor)
 
     # Assign controller as the parent so InfoWindow's built-in handlers call our methods
@@ -570,8 +582,7 @@ def main():
         exit_code = 1
 
     print('[Main] QApplication loop exited.')
-    os._exit(exit_code)
-
+    return exit_code
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

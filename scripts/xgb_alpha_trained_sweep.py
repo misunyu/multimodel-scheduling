@@ -53,7 +53,13 @@ def calculate_metrics_for_alpha(alpha, model_prefix_template, sched_index, perf_
     model_prefix = model_prefix_template.format(alpha=alpha)
     print(f"Loading model: {model_prefix}")
     try:
-        b1, b2, feats, mode, model_alpha = load_models(Path(model_prefix))
+        # Infer mode from model_prefix
+        inferred_mode = None
+        for m in ["rank", "score", "double", "two_target"]:
+            if m in str(model_prefix):
+                inferred_mode = m
+                break
+        b1, b2, feats, mode, model_alpha = load_models(inferred_mode, alpha, prefix=Path(model_prefix))
         # Note: model_alpha from meta might be different if it was trained with a specific alpha
     except Exception as e:
         print(f"Error loading models for alpha {alpha} from {model_prefix}: {e}")

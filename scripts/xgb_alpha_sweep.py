@@ -51,7 +51,13 @@ def get_performance_index(results_dir):
 
 def calculate_metrics_for_alpha(alpha, model_prefix, sched_index, perf_index, clip_pred_score=True):
     try:
-        b1, b2, feats, mode, _ = load_models(Path(model_prefix))
+        # Infer mode from model_prefix
+        inferred_mode = None
+        for m in ["rank", "score", "double", "two_target"]:
+            if m in str(model_prefix):
+                inferred_mode = m
+                break
+        b1, b2, feats, mode, _ = load_models(inferred_mode, alpha, prefix=Path(model_prefix))
     except Exception as e:
         print(f"Error loading models for alpha {alpha}: {e}")
         return None

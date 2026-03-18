@@ -225,7 +225,7 @@ def main():
     M = pd.DataFrame(M_all)
 
     # We also need pred_score
-    b1, b2, feats, mode, alpha = load_models(Path("xgboost_model/artifacts/gpu/xgb_model_x3_double"))
+    b1, b2, feats, mode, alpha = load_models("double", 0.2, prefix=Path("xgboost_model/artifacts/gpu/xgb_model_x3_double"))
     X = X.reindex(columns=feats, fill_value=0.0)
     pred_scores = b1.predict(X)
     

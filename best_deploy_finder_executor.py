@@ -17,7 +17,9 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem
 import yaml
 from pathlib import Path
+from typing import Tuple, Optional
 from schedule_generator.file_manager import FileManager
+from schedule_executor_main import ScheduleExecutor, InfoWindow
 
 
 class ChangeDeployDialog(QDialog):
@@ -143,7 +145,7 @@ class BestDeployFinderApp(QMainWindow):
         uic.loadUi(os.path.join(os.path.dirname(__file__), 'best_deploy_finder_executor.ui'), self)
 
         # Default models root to ./models
-        self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'deploy_models')
+        self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models_onnx')
 
         # Default prediction model settings
         self.default_gpu_pred_model_dir = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'gpu')
@@ -182,6 +184,8 @@ class BestDeployFinderApp(QMainWindow):
             self.load_execute_best_button.clicked.connect(self.on_load_execute_best_clicked)
         if hasattr(self, 'change_deploy_button'):
             self.change_deploy_button.clicked.connect(self.on_change_deploy_clicked)
+        if hasattr(self, 'default_input_rate_button'):
+            self.default_input_rate_button.clicked.connect(self.select_default_input_file)
 
         if hasattr(self, 'device_type_combo'):
             self.device_type_combo.currentTextChanged.connect(self.on_device_type_changed)
@@ -207,8 +211,10 @@ class BestDeployFinderApp(QMainWindow):
         self._current_selected_models = set()   # set[str]
         self._current_best_combo = None         # str | None
         self._current_score = None              # float | None
-        self._executor_proc = None              # subprocess.Popen | None
+        self._executor_proc = None              # subprocess.Popen | None (Legacy)
+        self._executor = None                   # ScheduleExecutor | None
         self._running_combo_name = None         # str | None - currently executing combination name
+        self._executor_info_window = None       # InfoWindow | None
 
         # Status bar (labels) gating (legacy signature fields retained for logs/backward-compat; not primary gating now)
         self._last_displayed_best_sig = None    # tuple | None — stable signature of last displayed best combo
@@ -249,6 +255,38 @@ class BestDeployFinderApp(QMainWindow):
         if not models:
             self._log("[Warning] No models selected. Please select folders in the model tree.")
             return
+
+        # Load default input rates from file if specified
+        if hasattr(self, 'lineEdit_default_input_file'):
+            default_file = self.lineEdit_default_input_file.text().strip()
+            if default_file and os.path.isfile(default_file):
+                try:
+                    fm = FileManager(log_callback=self._log)
+                    sample_data = fm.load_sample_data(filename=default_file)
+                    if sample_data and 'total_data' in sample_data:
+                        for item in sample_data['total_data']:
+                            model_name = item.get('model', '')
+                            # Normalize model name: it might be a path, take basename/stem
+                            if '/' in model_name or '\\' in model_name:
+                                model_name = os.path.basename(model_name)
+                            if model_name.lower().endswith('.onnx'):
+                                model_name = os.path.splitext(model_name)[0]
+                            
+                            # Determine FPS: prefer gpu_fps or npu1_fps, then cpu_fps, then derive from ms
+                            fps = item.get('gpu_fps') or item.get('npu1_fps') or item.get('cpu_fps')
+                            if not fps or fps <= 0:
+                                ms = item.get('gpu_infer') or item.get('npu1_infer') or item.get('cpu_infer')
+                                if ms and ms > 0:
+                                    fps = 1000.0 / ms
+                            
+                            if fps and fps > 0:
+                                # Update mapping only if NOT already present to preserve user modifications
+                                if model_name not in self.input_fps_by_model:
+                                    self.input_fps_by_model[model_name] = int(fps)
+                        self._log(f"[Info] Loaded default input rates from {default_file}")
+                except Exception as e:
+                    self._log(f"[Error] Failed to load default input rates: {e}")
+
         # Load the dialog UI
         dialog_ui_path = os.path.join(os.path.dirname(__file__), 'input_rate_dialog.ui')
         dlg = QDialog(self)
@@ -297,7 +335,7 @@ class BestDeployFinderApp(QMainWindow):
 
             spin = QSpinBox(container_widget)
             spin.setMinimum(0)
-            spin.setMaximum(1000)
+            spin.setMaximum(2147483647) # Max 32-bit int, allows 10 digits (up to 2,147,483,647)
             spin.setSingleStep(1)
             # Pre-fill from existing mapping or default 10
             try:
@@ -310,11 +348,92 @@ class BestDeployFinderApp(QMainWindow):
             container_layout.addWidget(spin, row, 1)
             spin_boxes[model] = spin
 
+        # Add multiplier UI below the list
+        from PyQt5.QtWidgets import QLineEdit, QDoubleSpinBox
+        multiplier_container = QWidget(dlg)
+        multiplier_layout = QHBoxLayout(multiplier_container)
+        multiplier_layout.setContentsMargins(0, 10, 0, 0)
+        
+        mult_label = QLabel("Multiplier:", multiplier_container)
+        mult_spin = QDoubleSpinBox(multiplier_container)
+        mult_spin.setRange(0.0, 1000.0)
+        mult_spin.setValue(1.0)
+        mult_spin.setSingleStep(0.1)
+        mult_spin.setDecimals(2)
+        
+        apply_btn = QPushButton("Apply", multiplier_container)
+        reset_btn = QPushButton("Reset", multiplier_container)
+        
+        multiplier_layout.addWidget(mult_label)
+        multiplier_layout.addWidget(mult_spin)
+        multiplier_layout.addWidget(apply_btn)
+        multiplier_layout.addWidget(reset_btn)
+        multiplier_layout.addStretch()
+        
+        def apply_multiplier():
+            factor = mult_spin.value()
+            for model_name, spin in spin_boxes.items():
+                new_val = int(spin.value() * factor)
+                spin.setValue(min(new_val, 2147483647))
+            self._log(f"[Info] Applied multiplier {factor} to all input rates.")
+
+        def reset_to_defaults():
+            # Force reload from file if specified
+            if hasattr(self, 'lineEdit_default_input_file'):
+                default_file = self.lineEdit_default_input_file.text().strip()
+                if default_file and os.path.isfile(default_file):
+                    try:
+                        fm = FileManager(log_callback=self._log)
+                        sample_data = fm.load_sample_data(filename=default_file)
+                        if sample_data and 'total_data' in sample_data:
+                            # Use a temporary mapping to store values from the file
+                            file_fps = {}
+                            for item in sample_data['total_data']:
+                                model_name = item.get('model', '')
+                                if '/' in model_name or '\\' in model_name:
+                                    model_name = os.path.basename(model_name)
+                                if model_name.lower().endswith('.onnx'):
+                                    model_name = os.path.splitext(model_name)[0]
+                                
+                                fps = item.get('gpu_fps') or item.get('npu1_fps') or item.get('cpu_fps')
+                                if not fps or fps <= 0:
+                                    ms = item.get('gpu_infer') or item.get('npu1_infer') or item.get('cpu_infer')
+                                    if ms and ms > 0:
+                                        fps = 1000.0 / ms
+                                
+                                if fps and fps > 0:
+                                    file_fps[model_name] = int(fps)
+                            
+                            # Update only the spin boxes for models present in the file
+                            count = 0
+                            for m_name, spin in spin_boxes.items():
+                                if m_name in file_fps:
+                                    spin.setValue(file_fps[m_name])
+                                    count += 1
+                                else:
+                                    # If not in file, reset to default 10?
+                                    spin.setValue(10)
+                            self._log(f"[Info] Reset {count} input rates to defaults from {default_file}")
+                    except Exception as e:
+                        self._log(f"[Error] Failed to reset to default input rates: {e}")
+                else:
+                    # If no file, just reset to 10
+                    for m_name, spin in spin_boxes.items():
+                        spin.setValue(10)
+                    self._log("[Info] No default input file found. Reset all input rates to 10.")
+
+        apply_btn.clicked.connect(apply_multiplier)
+        reset_btn.clicked.connect(reset_to_defaults)
+        
+        # Insert multiplier UI before the button box
+        dlg.layout().insertWidget(dlg.layout().indexOf(dlg.findChild(QWidget, 'buttonBox')), multiplier_container)
+
         # Attach spin boxes dict for retrieval on accept
         dlg._spin_boxes_by_model = spin_boxes
 
         # Resize dialog to fit its contents tightly (height varies with model count)
         try:
+            dlg.setMinimumWidth(800)
             dlg.adjustSize()
         except Exception:
             pass
@@ -375,6 +494,11 @@ class BestDeployFinderApp(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, 'Select Device Configuration', os.getcwd(), 'YAML Files (*.yaml *.yml);;All Files (*)')
         if path and hasattr(self, 'device_config_input'):
             self.device_config_input.setText(path)
+
+    def select_default_input_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, 'Select Default Input File', os.getcwd(), 'All Files (*)')
+        if path and hasattr(self, 'lineEdit_default_input_file'):
+            self.lineEdit_default_input_file.setText(path)
 
     def get_checked_top_level_dirs(self):
         """Return a list of absolute paths for checked top-level directories under models_root."""
@@ -517,11 +641,11 @@ class BestDeployFinderApp(QMainWindow):
         # Delegate to existing builder (kept for compatibility)
         return self.build_schedule_from_selection(models_root, checked_paths, device_conf, out_path)
 
-    def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.2):
-        """Predict best combination using two-target XGBoost JSON models.
+    def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.3):
+        """Predict best combination using XGBoost models.
         - model_input_path can be either:
-          - A directory containing two files: <prefix>_y1.json and <prefix>_y2.json
-          - One of the two JSON files (we'll infer the prefix and the counterpart)
+          - A directory containing model files
+          - One of the model JSON files
         Returns (best_combination_name, df) where df contains columns:
           [source, combination, pred_total_throughput_fps, pred_drop_rate_fps, pred_score].
         """
@@ -529,13 +653,18 @@ class BestDeployFinderApp(QMainWindow):
         from pathlib import Path
         from xgboost_model.deploy_selector_xgb_suite import (
             featurize_from_combo,
-            predict_two_targets,
+            load_models,
             _load_yaml_or_json,
             _iter_combos_from_schedule,
         )
 
-        def _infer_model_prefix(p: Path) -> Path:
+        def _infer_model_info(p: Path) -> Tuple[Path, Optional[str]]:
             if p.is_dir():
+                # Try to infer mode from directory name or content
+                for m in ["rank", "score", "double", "two_target"]:
+                    if m in p.name:
+                        return p, m
+                
                 y1_files = sorted(p.glob("*_y1.json"))
                 for y1 in y1_files:
                     prefix = y1.with_suffix("")  # remove .json
@@ -543,26 +672,43 @@ class BestDeployFinderApp(QMainWindow):
                         prefix = prefix.with_name(prefix.name[:-3])
                     y2 = p / f"{prefix.name}_y2.json"
                     if y2.exists():
-                        return p / prefix.name
-                raise FileNotFoundError(f"No valid model prefix with _y1.json and _y2.json found in: {p}")
+                        return p / prefix.name, "double"
+                raise FileNotFoundError(f"No valid model prefix found in: {p}")
             else:
                 name = p.name
+                inferred_mode = None
+                for m in ["rank", "score", "double", "two_target"]:
+                    if m in name:
+                        inferred_mode = m
+                        break
+                
                 if name.endswith("_y1.json"):
                     prefix = name[:-len("_y1.json")]
                 elif name.endswith("_y2.json"):
                     prefix = name[:-len("_y2.json")]
+                elif name.endswith("_score.json"):
+                    prefix = name[:-len("_score.json")]
+                    inferred_mode = "score"
+                elif name.endswith("_rank.json"):
+                    prefix = name[:-len("_rank.json")]
+                    inferred_mode = "rank"
                 else:
-                    raise ValueError(f"Model file must end with _y1.json or _y2.json: {p}")
-                y1 = p.parent / f"{prefix}_y1.json"
-                y2 = p.parent / f"{prefix}_y2.json"
-                if not y1.exists() or not y2.exists():
-                    raise FileNotFoundError(f"Missing counterpart JSON next to {p}. Expected both {y1.name} and {y2.name}.")
-                return p.parent / prefix
+                    prefix = p.stem
+                
+                return p.parent / prefix, inferred_mode
 
         sched_path = Path(schedule_yaml_path)
         if not sched_path.exists():
             raise FileNotFoundError(f"Schedule YAML not found: {schedule_yaml_path}")
-        model_prefix = _infer_model_prefix(Path(model_input_path))
+        model_prefix, inferred_mode = _infer_model_info(Path(model_input_path))
+
+        b1, b2, feats, mode, model_alpha = load_models(inferred_mode, alpha, prefix=model_prefix)
+        self.log(f"[Predict] Using mode: {mode}")
+        if mode not in ["score", "double", "rank", "two_target"]:
+            raise ValueError(f"Unsupported model mode: {mode}.")
+
+        # Use model's alpha if available, otherwise use the passed alpha
+        effective_alpha = model_alpha if model_alpha is not None else alpha
 
         schedule_doc = _load_yaml_or_json(sched_path)
         combos = _iter_combos_from_schedule(schedule_doc)
@@ -572,9 +718,22 @@ class BestDeployFinderApp(QMainWindow):
         rows = []
         for name, combo_blob in combos:
             X = featurize_from_combo(combo_blob)
-            y1_pred, y2_pred = predict_two_targets(model_prefix, X)
-            fps = float(y1_pred[0]); drop = float(y2_pred[0])
-            score = fps - float(alpha) * drop
+            # Reindex to match features used during training
+            X = X.reindex(columns=feats, fill_value=0.0)
+
+            # Predict using underlying models
+            if mode == "rank":
+                y_pred = b1.predict(X)
+                # rank mode might not have y2/drop prediction easily available here if it's a single model
+                fps = 0.0; drop = 0.0; score = float(y_pred[0])
+            elif mode == "score":
+                y_pred = b1.predict(X)
+                fps = 0.0; drop = 0.0; score = float(y_pred[0])
+            else:
+                y1_pred = b1.predict(X)
+                y2_pred = b2.predict(X)
+                fps = float(y1_pred[0]); drop = float(y2_pred[0])
+                score = fps - float(effective_alpha) * drop
             self.log(f"[Predict] Combination: {name} -> FPS: {fps:.2f}, Drop: {drop:.2f}, Score: {score:.2f}")
             rows.append({
                 "source": sched_path.name,
@@ -688,96 +847,81 @@ class BestDeployFinderApp(QMainWindow):
             return None
 
     def _kill_existing_executor(self):
-        """Terminate previously launched executor subprocess if it's still running.
-        Try graceful group signal first (mimics pressing Stop), then escalate.
-        """
-        import os as _os
-        import signal as _signal
-        import platform as _platform
-        import subprocess as _subprocess
-        proc = getattr(self, '_executor_proc', None)
-        if proc is None:
-            return
-        try:
-            if proc.poll() is None:
-                self.log("[Exec] Terminating previous executor window (gracefully)...")
-                try:
-                    if _platform.system() == 'Windows':
-                        # Try CTRL_BREAK to the process group if possible
-                        try:
-                            proc.send_signal(_signal.CTRL_BREAK_EVENT)
-                        except Exception:
-                            proc.terminate()
-                    else:
-                        # POSIX: signal the whole process group that we created
-                        try:
-                            _os.killpg(proc.pid, _signal.SIGTERM)
-                        except Exception:
-                            proc.terminate()
-                except Exception:
-                    pass
-                # Wait a bit for clean shutdown
-                try:
-                    proc.wait(timeout=6)
-                except Exception:
-                    # Escalate to force-kill the group first, then the process
-                    self.log("[Exec] Forcing kill of previous executor window...")
-                    try:
-                        if _platform.system() != 'Windows':
-                            try:
-                                _os.killpg(proc.pid, _signal.SIGKILL)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-        finally:
-            self._executor_proc = None
-            self._running_combo_name = None
-
-    def _launch_executor_subprocess(self, schedule_path: str, combo_name: str = None, duration: int = None):
-        """Launch schedule_executor_main.py in a separate process to avoid nested QApps.
-        If combo_name is provided, run executor-only mode for that single combination.
-        Returns the subprocess handle and stores it as self._executor_proc.
-        """
-        import subprocess
-        import platform
-        py = sys.executable or 'python'
-        exec_path = os.path.join(os.path.dirname(__file__), 'schedule_executor_main.py')
-        args = [py, exec_path, '--schedule', schedule_path]
-        if duration is not None:
+        """Stop current execution by stopping the executor object directly."""
+        if hasattr(self, '_executor') and self._executor is not None:
+            self.log("[Exec] Stopping current executor...")
             try:
-                d = int(duration)
-                args += ['--duration', str(max(1, d))]
+                self._executor.stop()
+            except Exception as e:
+                self.log(f"[Exec] Warning: failed to stop executor: {e}")
+            self._executor = None
+        
+        if hasattr(self, '_executor_info_window') and self._executor_info_window is not None:
+            try:
+                self._executor_info_window.close()
             except Exception:
                 pass
-        if combo_name:
-            args += ['--schedule-name', combo_name]
-        self.log(f"[Exec] Launching executor: {' '.join(args)}")
-        try:
-            popen_kwargs = {}
-            if platform.system() == 'Windows':
+            self._executor_info_window = None
+
+        # Legacy subprocess cleanup (just in case)
+        proc = getattr(self, '_executor_proc', None)
+        if proc is not None:
+            self.log("[Exec] Terminating legacy executor subprocess...")
+            try:
+                if proc.poll() is None:
+                    import platform as _platform
+                    import signal as _signal
+                    import os as _os
+                    if _platform.system() != 'Windows':
+                        try:
+                            _os.killpg(proc.pid, _signal.SIGINT)
+                        except Exception:
+                            pass
+                    proc.terminate()
+                    proc.wait(timeout=2)
+            except Exception:
                 try:
-                    popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+                    proc.kill()
                 except Exception:
                     pass
-            else:
-                # POSIX: start a new session so we can signal the whole process group
-                popen_kwargs['start_new_session'] = True
-            proc = subprocess.Popen(args, **popen_kwargs)
-            self._executor_proc = proc
-            # Track which combination is running (if provided)
-            try:
-                self._running_combo_name = str(combo_name) if combo_name else None
-            except Exception:
-                self._running_combo_name = combo_name
-            return proc
+            self._executor_proc = None
+            
+        self._running_combo_name = None
+
+    def _launch_executor_direct(self, schedule_path: str, combo_name: str = None, duration: int = None):
+        """Launch ScheduleExecutor in the same process."""
+        self.log(f"[Exec] Launching executor direct for: {combo_name or 'All'}")
+        
+        try:
+            # Create a hidden InfoWindow for the executor state
+            if getattr(self, '_executor_info_window', None) is None:
+                self._executor_info_window = InfoWindow(parent=None)
+                self._executor_info_window.hide()
+
+            # Initialize Executor
+            duration = duration or 60
+            executor = ScheduleExecutor(
+                schedule_file=schedule_path,
+                duration=duration,
+                info_window=self._executor_info_window,
+                selected_combo=combo_name
+            )
+            
+            self._executor = executor
+            self._running_combo_name = combo_name
+            
+            # Start execution
+            executor.start(duration)
+            return True
         except Exception as e:
             self.log(f"[Error] Failed to launch executor: {e}")
-            return None
+            import traceback
+            self.log(traceback.format_exc())
+            return False
+
+    def _launch_executor_subprocess(self, schedule_path: str, combo_name: str = None, duration: int = None):
+        """Legacy method: now redirected to direct launch."""
+        return self._launch_executor_direct(schedule_path, combo_name, duration)
 
     def on_change_deploy_clicked(self):
         """Show Change Deployment Dialog (modeless)."""
@@ -838,9 +982,8 @@ class BestDeployFinderApp(QMainWindow):
                     else:
                         # If currently running the same combination, keep running regardless of score difference
                         try:
-                            proc = getattr(self, '_executor_proc', None)
                             running_name = getattr(self, '_running_combo_name', None)
-                            is_alive = (proc is not None and proc.poll() is None)
+                            is_alive = getattr(self, '_executor', None) is not None and getattr(self._executor, '_running', False)
                             if is_alive and running_name and str(running_name) == str(self._current_best_combo):
                                 self.log(f"[Decision] Same selection and same combination '{running_name}' is already running. Keeping current executor.")
                                 return

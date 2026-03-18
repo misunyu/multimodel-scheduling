@@ -98,8 +98,14 @@ def main():
     
     print(f"Loading XGBoost models (clip_pred_score={clip_pred_score})...")
     try:
+        # Infer mode from model_prefix
+        inferred_mode = None
+        for m in ["rank", "score", "double", "two_target"]:
+            if m in str(model_prefix):
+                inferred_mode = m
+                break
         # load_models handles both two_target and score modes
-        b1, b2, feats, mode, model_alpha = load_models(Path(model_prefix))
+        b1, b2, feats, mode, model_alpha = load_models(inferred_mode, alpha, prefix=Path(model_prefix))
         print(f"Loaded mode={mode}, model_prefix={model_prefix}, alpha={alpha}")
         alpha = model_alpha # Use alpha from model meta
     except Exception as e:

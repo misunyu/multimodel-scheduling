@@ -18,8 +18,6 @@
     python ./xgboost_model/deploy_selector_xgb_suite.py train --train_mode rank --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_rank --alpha 0.2
 
 [Predict / Validate]
-  python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv ./xgboost_model/dataset/gpu/test_x3.csv --schedule_csv ./xgboost_model/dataset/gpu/test_schedules_x3.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_x3_double --alpha 0.2
-
  1) Predict for new schedules (Top-K output):
     python ./xgboost_model/deploy_selector_xgb_suite.py predict --schedule_dir ./gen_schedules --model_in ./xgboost_model/artifacts/gpu/xgb_model_random --topk 5 --alpha 0.2
 
@@ -766,90 +764,36 @@ def train_double(X, Y, prefix, alpha=0.2):
     Path(str(prefix) + "_features.json").write_text(json.dumps(cols))
 
 
-def train_two_targets(X, Y, prefix, alpha=0.2):
-    xgb = _lazy_import_xgb()
-    from sklearn.model_selection import GridSearchCV
-
-    # 컬럼 순서 고정
-    cols = sorted(list(X.columns))
-    X = X[cols]
-
-    # Hyperparameters for GridSearchCV
-    param_grid = {
-        "n_estimators": [500, 1000],
-        "learning_rate": [0.01, 0.05],
-        "max_depth": [4, 6],
-    }
-
-    print(f"Starting 3-fold Cross-Validation with GridSearchCV for Two-Target Model (samples: {len(X)})...")
-
-    # 1. Train Throughput Model (y1)
-    print("Optimizing Throughput (y1) model...")
-    base_model_y1 = xgb.XGBRegressor(
-        objective="reg:squarederror",
-        random_state=42,
-        n_jobs=-1
-    )
-    grid_y1 = GridSearchCV(
-        estimator=base_model_y1,
-        param_grid=param_grid,
-        cv=3,
-        scoring="neg_mean_absolute_error",
-        verbose=1
-    )
-    grid_y1.fit(X, Y["y1"])
-    print(f"Best y1 params: {grid_y1.best_params_}, MAE: {-grid_y1.best_score_:.4f}")
-    model_y1 = grid_y1.best_estimator_
-    model_y1.save_model(str(prefix) + "_y1.json")
-
-    # 2. Train Drop Rate Model (y2) with Weights
-    print("Optimizing Drop Rate (y2) model...")
-    weights = Y["y2"].apply(lambda x: 10.0 if x > 0.01 else 1.0).values
-    
-    base_model_y2 = xgb.XGBRegressor(
-        objective="reg:squarederror",
-        random_state=42,
-        n_jobs=-1
-    )
-    grid_y2 = GridSearchCV(
-        estimator=base_model_y2,
-        param_grid=param_grid,
-        cv=3,
-        scoring="neg_mean_absolute_error",
-        verbose=1
-    )
-    grid_y2.fit(X, Y["y2"], sample_weight=weights)
-    print(f"Best y2 params: {grid_y2.best_params_}, MAE: {-grid_y2.best_score_:.4f}")
-    model_y2 = grid_y2.best_estimator_
-    model_y2.save_model(str(prefix) + "_y2.json")
-
-    # Meta info
-    meta = {
-        "mode": "two_target",
-        "alpha": alpha,
-        "features": cols,
-        "best_params_y1": grid_y1.best_params_,
-        "best_params_y2": grid_y2.best_params_
-    }
-    Path(str(prefix) + "_meta.json").write_text(json.dumps(meta, indent=2))
-    # For backward compatibility
-    Path(str(prefix) + "_features.json").write_text(json.dumps(cols))
 
 
-def load_models(prefix):
+def load_models(mode, alpha, prefix=None):
     xgb = _lazy_import_xgb()
     
+    if mode is None:
+        mode = "double"
+    
+    if prefix is None:
+        # 모델 경로가 주어지지 않은 경우, 기본 경로 형식을 사용
+        # 예: xgboost_model/artifacts/gpu/xgb_model_x3_rank
+        prefix = Path(f"xgboost_model/artifacts/gpu/xgb_model_x3_{mode}")
+
     meta_path = Path(str(prefix) + "_meta.json")
     if meta_path.exists():
         meta = json.loads(meta_path.read_text())
-        mode = meta.get("mode", "two_target")
-        alpha = meta.get("alpha", 0.2)
         cols = meta.get("features")
+        # 입력받은 alpha와 mode가 있으면 그것을 우선 사용
+        # (단, function argument로 들어온 mode가 None이면 위에서 "double"로 설정됨)
+        # 만약 meta에 있는 값을 쓰고 싶다면 인자를 명시적으로 None으로 주었을 때의 처리가 필요하지만
+        # 현재 요구사항은 double을 디폴트로 사용하는 것임.
+        if alpha is None:
+            alpha = meta.get("alpha", 0.2)
     else:
         # Legacy mode
-        mode = "two_target"
-        alpha = 0.2
+        if alpha is None:
+            alpha = 0.2
         cols = json.loads(Path(str(prefix) + "_features.json").read_text())
+
+    print(f"--- [load_models] Active Mode: {mode} (alpha: {alpha}) ---")
 
     if mode == "score":
         m_score = xgb.XGBRegressor()
@@ -1037,12 +981,22 @@ def main():
         elif args.train_mode == "double":
             train_double(X, Y, model_out_path, alpha=args.alpha)
         else:
-            train_two_targets(X, Y, model_out_path, alpha=args.alpha)
+            # "two_target" mode internally reuses the double trainer for better consistency
+            print(f"Using double trainer for {args.train_mode} mode.")
+            train_double(X, Y, model_out_path, alpha=args.alpha)
         print(f"Training Done. Model saved with prefix: {model_out_path}")
 
     elif args.cmd == "predict":
         is_constrained = "xgb_model_x3" in str(args.model_in) or "xgb_model_random" in str(args.model_in)
-        b1, b2, feats, mode, model_alpha = load_models(Path(args.model_in))
+        # model_in에서 mode 추출 시도 (예: ..._rank -> rank)
+        model_in_path = Path(args.model_in)
+        inferred_mode = None
+        for m in ["score", "rank", "double", "two_target"]:
+            if m in model_in_path.name:
+                inferred_mode = m
+                break
+        
+        b1, b2, feats, mode, model_alpha = load_models(inferred_mode, args.alpha, prefix=model_in_path)
         
         # Override alpha if provided in CLI
         alpha = args.alpha if args.alpha is not None else model_alpha
@@ -1106,8 +1060,7 @@ def main():
                     # Ground Truth
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score_raw = y1_actual - alpha * y2_actual
-                    actual_score_display = round(actual_score_raw, 2)
+                    actual_score = y1_actual - alpha * y2_actual
 
                     # Prediction
                     X_dict, _, _ = featurize_window(w, infps_map)
@@ -1118,25 +1071,23 @@ def main():
                         y1_pred = np.nan
                         y2_pred = np.nan
                         # [Modified] Use raw prediction from model b1 without clipping
-                        pred_score_raw = float(b1.predict(df_X)[0])
+                        pred_score = float(b1.predict(df_X)[0])
                     elif mode == "rank":
                         y1_pred = np.nan
                         y2_pred = np.nan
                         # XGBRanker predict returns scores that represent relative ranking
-                        pred_score_raw = float(b1.predict(df_X)[0])
+                        pred_score = float(b1.predict(df_X)[0])
                     else:
                         y1_pred = float(b1.predict(df_X)[0])
                         y2_pred = float(b2.predict(df_X)[0])
                         # [Modified] Calculate combined score
-                        pred_score_raw = y1_pred - alpha * y2_pred
+                        pred_score = y1_pred - alpha * y2_pred
                     
                     # [Modified] Apply clipping only if enabled via --clip_pred_score
                     # For rank mode, clipping might not make sense as it's relative, 
                     # but we'll follow the same logic. Usually, Ranker outputs are not in [0,1].
                     if args.clip_pred_score and mode != "rank":
-                        pred_score_raw = max(0.0, min(1.0, pred_score_raw))
-
-                    pred_score_display = round(pred_score_raw, 2)
+                        pred_score = max(0.0, min(1.0, pred_score))
 
                     detailed_results.append({
                         "schedule_file": s_name,
@@ -1144,11 +1095,11 @@ def main():
                         "combination": c_name,
                         "actual_T_norm": round(y1_actual, 4),
                         "actual_D_norm": round(y2_actual, 4),
-                        "actual_score": actual_score_display,
+                        "actual_score": round(actual_score, 2),
                         "pred_T_norm": round(y1_pred, 4) if not np.isnan(y1_pred) else "",
                         "pred_D_norm": round(y2_pred, 4) if not np.isnan(y2_pred) else "",
-                        "pred_score": pred_score_display,
-                        "diff_score": round(abs(actual_score_display - pred_score_display), 4)
+                        "pred_score": round(pred_score, 2),
+                        "diff_score": round(abs(round(actual_score, 2) - round(pred_score, 2)), 4)
                     })
                     
                 except Exception as e:
@@ -1190,7 +1141,7 @@ def main():
                     # Ground Truth
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score_raw = y1_actual - alpha * y2_actual
+                    actual_score = round(y1_actual - alpha * y2_actual, 2)
 
                     # Prediction
                     X_dict, _, _ = featurize_window(w, infps_map)
@@ -1200,19 +1151,21 @@ def main():
                     if mode == "score":
                         y1_pred = np.nan
                         y2_pred = np.nan
-                        pred_score_raw = float(b1.predict(df_X)[0])
+                        pred_score = float(b1.predict(df_X)[0])
                     elif mode == "rank":
                         y1_pred = np.nan
                         y2_pred = np.nan
-                        pred_score_raw = float(b1.predict(df_X)[0])
+                        pred_score = float(b1.predict(df_X)[0])
                     else:
                         y1_pred = float(b1.predict(df_X)[0])
                         y2_pred = float(b2.predict(df_X)[0])
-                        pred_score_raw = y1_pred - alpha * y2_pred
+                        pred_score = y1_pred - alpha * y2_pred
                     
                     if args.clip_pred_score and mode != "rank":
-                        pred_score_raw = max(0.0, min(1.0, pred_score_raw))
+                        pred_score = max(0.0, min(1.0, pred_score))
                     
+                    pred_score = round(pred_score, 2)
+
                     if not np.isnan(y1_pred):
                         y1_errs.append(abs(y1_actual - y1_pred))
                     if not np.isnan(y2_pred):
@@ -1222,8 +1175,8 @@ def main():
                         "combination": c_name,
                         "actual_T_norm": y1_actual,
                         "actual_D_norm": y2_actual,
-                        "actual_score": actual_score_raw,
-                        "pred_score": pred_score_raw,
+                        "actual_score": actual_score,
+                        "pred_score": pred_score,
                         "schedule_file": s_name,
                         "timestamp": w.get("timestamp")
                     })
@@ -1273,22 +1226,23 @@ def main():
                 if is_top1:
                     top1_hits += 1
 
-                # 2) Top-5 Accuracy: any(Actual Best) in Predicted Top-5 groups
-                # (Predicted Top-5 groups: pred_score_raw >= threshold of 5th pred score group)
-                unique_pred_scores = sorted(list(set([r["pred_score"] for r in scenario_results])), reverse=True)
-                if len(unique_pred_scores) > 0:
-                    top5_pred_threshold = unique_pred_scores[min(4, len(unique_pred_scores)-1)]
-                    predicted_top5_names = [r["combination"] for r in scenario_results if r["pred_score"] >= (top5_pred_threshold - 1e-7)]
+                # 2) Top-5 Accuracy: any(Predicted Top-1) in Actual Top-5 groups
+                # (Predicted Top-1 combinations: pred_best_names)
+                unique_actual_scores = sorted(list(set([r["actual_score"] for r in scenario_results])), reverse=True)
+                if len(unique_actual_scores) > 0:
+                    top5_actual_threshold = unique_actual_scores[min(4, len(unique_actual_scores)-1)]
+                    actual_top5_names = [r["combination"] for r in scenario_results if r["actual_score"] >= (top5_actual_threshold - 1e-7)]
                 else:
-                    predicted_top5_names = []
+                    actual_top5_names = []
                 
-                is_top5 = any(name in predicted_top5_names for name in actual_best_names)
+                is_top5 = any(name in actual_top5_names for name in pred_best_names)
                 if is_top5:
                     top5_hits += 1
                 
                 # [Note] Keep top5_group_scores as predicted scores for the report as per previous instructions
+                unique_pred_scores = sorted(list(set([r["pred_score"] for r in scenario_results])), reverse=True)
                 if len(unique_pred_scores) > 0:
-                    # Use unique_pred_scores instead of raw pred_score for display in report
+                    top5_pred_threshold = unique_pred_scores[min(4, len(unique_pred_scores)-1)]
                     top5_group_scores = sorted(list(set([round(r["pred_score"], 2) for r in scenario_results if r["pred_score"] >= (top5_pred_threshold - 1e-7)])), reverse=True)
                 else:
                     top5_group_scores = []
@@ -1310,8 +1264,7 @@ def main():
                     "pred_S": pred_best_row["actual_score"]
                 })
 
-            # [Added] Also include alpha in the filename
-            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}_alpha_{alpha}.csv"
+            csv_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.csv"
 
             # Write Summary to CSV file
             with open(csv_out_path, "w", encoding="utf-8") as f:
@@ -1381,52 +1334,49 @@ def main():
                     
                     y1_actual = float(w.get("derived", {}).get("throughput_norm", np.nan))
                     y2_actual = float(w.get("derived", {}).get("drop_rate_norm", np.nan))
-                    actual_score_raw = y1_actual - alpha * y2_actual
+                    actual_score = round(y1_actual - alpha * y2_actual, 2)
 
                     X_dict, _, _ = featurize_window(w, infps_map)
                     df_X = pd.DataFrame([X_dict]).reindex(columns=feats, fill_value=0.0)
                     
-                    if mode == "score": pred_score_raw = float(b1.predict(df_X)[0])
-                    elif mode == "rank": pred_score_raw = float(b1.predict(df_X)[0])
-                    else: pred_score_raw = float(b1.predict(df_X)[0]) - alpha * float(b2.predict(df_X)[0])
+                    if mode == "score": pred_score = float(b1.predict(df_X)[0])
+                    elif mode == "rank": pred_score = float(b1.predict(df_X)[0])
+                    else: pred_score = float(b1.predict(df_X)[0]) - alpha * float(b2.predict(df_X)[0])
                     
                     if args.clip_pred_score and mode != "rank":
-                        pred_score_raw = max(0.0, min(1.0, pred_score_raw))
+                        pred_score = max(0.0, min(1.0, pred_score))
+
+                    pred_score = round(pred_score, 2)
                     
                     scenario_results.append({
                         "combination": c_name,
                         "actual_T_norm": y1_actual,
                         "actual_D_norm": y2_actual,
-                        "actual_score_raw": actual_score_raw,
-                        "pred_score_raw": pred_score_raw,
+                        "actual_score": actual_score,
+                        "pred_score": pred_score,
                         "schedule_file": s_name
                     })
                 
                 if not scenario_results: continue
                 
                 # Best predicted (Multiple if tied)
-                pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score_raw"], reverse=True)
-                max_pred_raw = pred_sorted[0]["pred_score_raw"]
-                # Use math.isclose for tie判断 with raw float
-                pred_best_all = [r for r in pred_sorted if math.isclose(r["pred_score_raw"], max_pred_raw, rel_tol=1e-7)]
+                pred_sorted = sorted(scenario_results, key=lambda x: x["pred_score"], reverse=True)
+                max_pred = pred_sorted[0]["pred_score"]
+                pred_best_all = [r for r in pred_sorted if math.isclose(r["pred_score"], max_pred, rel_tol=1e-7)]
                 
                 # Use the first one for numerical metrics
                 pred_best = pred_best_all[0]
                 
                 # Actual bests
-                actual_sorted = sorted(scenario_results, key=lambda x: x["actual_score_raw"], reverse=True)
-                max_actual_raw = actual_sorted[0]["actual_score_raw"]
-                actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score_raw"], max_actual_raw, rel_tol=1e-7)]
+                actual_sorted = sorted(scenario_results, key=lambda x: x["actual_score"], reverse=True)
+                max_actual = actual_sorted[0]["actual_score"]
+                actual_best_names = [r["combination"] for r in actual_sorted if math.isclose(r["actual_score"], max_actual, rel_tol=1e-7)]
                 
                 # Construct best_combination string with multiple names if tied
                 comb_parts = []
-                seen_combs = set()
                 all_pred_best_are_actual_best = True
                 for pb in pred_best_all:
                     c_name = pb["combination"]
-                    if c_name in seen_combs: continue
-                    seen_combs.add(c_name)
-
                     is_actual_best = c_name in actual_best_names
                     if is_actual_best:
                         comb_parts.append(f"<font color='purple'>{c_name}</font>")
@@ -1445,7 +1395,7 @@ def main():
                     "best_combination": best_comb_str,
                     "normalized_throughput": round(pred_best["actual_T_norm"], 2),
                     "drop_rate": round(pred_best["actual_D_norm"], 2),
-                    "score": round(pred_best["actual_score_raw"], 2)
+                    "score": round(pred_best["actual_score"], 2)
                 })
 
                 # [Added] Save detailed scores for all combinations in this scenario (JSON format)
@@ -1467,7 +1417,7 @@ def main():
                         "combination": r["combination"],
                         "throughput_norm": round(r["actual_T_norm"], 4),
                         "drop_rate_norm": round(r["actual_D_norm"], 4),
-                        "score": round(r["pred_score_raw"], 2)
+                        "score": round(r["pred_score"], 2)
                     })
                 
                 with open(score_out_path, "w", encoding="utf-8") as sf:
@@ -1482,10 +1432,10 @@ def main():
             # So we should still keep a version of detailed results for plotting, but not for the CSV.
             plot_df = pd.DataFrame(detailed_results)
             if mode == "score":
-                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}_alpha_{alpha}.pdf"
+                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.pdf"
                 plot_score_scatter(plot_df, pdf_out_path, f"Score Prediction: Actual vs Predicted (alpha={alpha})")
             elif mode in ("two_target", "double"):
-                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}_alpha_{alpha}.pdf"
+                pdf_out_path = out_dir / f"prediction_result_{p_csv_path.stem}_{mode}.pdf"
                 plot_multi_scatter(plot_df, pdf_out_path, f"Multi-Model Prediction: {mode} (alpha={alpha})", alpha)
 
             top1_ratio = top1_hits / total_scenarios if total_scenarios > 0 else 0
@@ -1581,8 +1531,7 @@ def main():
                 # 결과 파일 저장 (기존 형식 유지)
                 out_dir = Path(args.out_dir)
                 out_dir.mkdir(parents=True, exist_ok=True)
-                # [Modified] Include alpha in the filename
-                out_path = out_dir / f"predict_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{p.stem}_alpha_{alpha}.json"
+                out_path = out_dir / f"predict_performance_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{p.stem}.json"
 
                 payload = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1658,6 +1607,6 @@ if __name__ == "__main__":
 (b) predict 실행:
     python xgboost_model/deploy_selector_xgb_suite.py predict --model_in xgb_sanity --perf_csv xgboost_model/dataset/gpu/test_x3.csv --schedule_csv xgboost_model/dataset/gpu/test_schedules_x3.csv --alpha 0.2
 (c) 결과 확인:
-    - out_dir (기본 xgboost_model/prediction_result)에 prediction_result_{perf_csv_name}_{mode}_alpha_{alpha}.csv 생성 확인
+    - out_dir (기본 xgboost_model/prediction_result)에 prediction_result_test_x3.csv 생성 확인
     - 터미널에 "Total Scenarios", "Top-1 Hit Ratio", "Avg Score Gap" 출력 확인
 """
