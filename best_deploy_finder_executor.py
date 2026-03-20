@@ -617,18 +617,39 @@ class BestDeployFinderApp(QMainWindow):
         self.log(f"[Exec] Launching viewer direct for: {combo_name or 'All'}")
         
         try:
-            # Initialize UnifiedViewer directly
+            # Initialize or reuse UnifiedViewer directly
             duration = duration or 60
-            viewer = UnifiedViewer(
-                schedule_file=schedule_path,
-                combination_name=combo_name,
-                info_window=None,
-                hide_info_window=True
-            )
             
-            # Show viewer
-            viewer.show()
-            self._viewer = viewer
+            if self._viewer:
+                self.log("[Exec] Reusing existing viewer instance.")
+                # Update viewer state for the new combination using the new update_combination method
+                self._viewer.update_combination(schedule_path, combo_name)
+                
+                # Bring to front without repositioning
+                try:
+                    if self._viewer.isVisible():
+                        self._viewer.raise_()
+                        self._viewer.activateWindow()
+                    else:
+                        self._viewer.show()
+                except Exception:
+                    pass
+            else:
+                viewer = UnifiedViewer(
+                    schedule_file=schedule_path,
+                    combination_name=combo_name,
+                    info_window=None,
+                    hide_info_window=True
+                )
+                # Ensure viewer is marked for reuse logic in stop_execution()
+                try:
+                    viewer.executor_only = True
+                except Exception:
+                    pass
+                # Show viewer
+                viewer.show()
+                self._viewer = viewer
+            
             self._running_combo_name = combo_name
             
             # Start execution directly using parent.start_execution logic flow
@@ -655,7 +676,6 @@ class BestDeployFinderApp(QMainWindow):
         if self._viewer:
             self.log("[Exec] Stopping execution...")
             self._viewer.stop_execution()
-            self._viewer = None
 
     def stop_execution_async(self):
         """Stop execution asynchronously on the current viewer."""
@@ -664,7 +684,6 @@ class BestDeployFinderApp(QMainWindow):
         if self._viewer:
             self.log("[Exec] Stopping execution (async)...")
             self._viewer.stop_execution_async()
-            self._viewer = None
 
     def _update_live_metrics(self):
         """Update live throughput and drop rate metrics from the active viewer."""

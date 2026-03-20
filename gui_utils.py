@@ -60,7 +60,8 @@ class ChangeDeployDialog(QDialog):
             combo_name = selected_item.data(Qt.UserRole)
             if combo_name and combo_name.startswith('combination_'):
                 self.parent_app.log(f"[Action] Manually selected {combo_name} for execution.")
-                self.parent_app._kill_existing_executor()
+                # Removed _kill_existing_executor() call to reuse UnifiedViewer instance
+                # self.parent_app._kill_existing_executor()
                 self.parent_app._launch_executor_direct(self.schedule_path, combo_name=combo_name, duration=60)
 
 

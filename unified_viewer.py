@@ -197,12 +197,8 @@ class InfoWindow(QWidget):
         
     def closeEvent(self, event):
         """Handle window close event - terminate the application (non-blocking)."""
-        print("[InfoWindow] Close event triggered - terminating application (async)")
-        event.accept()
-        try:
-            self.hide()
-        except Exception:
-            pass
+        print("[InfoWindow] Close event triggered - ignoring hide/close")
+        event.ignore()
         # If we have a parent (UnifiedViewer), call its async shutdown method if available
         if self.parent and hasattr(self.parent, 'shutdown_all_async'):
             try:
@@ -317,8 +313,13 @@ class UnifiedViewer(QMainWindow):
         self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
         self.cpu_timer.start(1000)
     
-    def initialize_model_settings(self):
+    def initialize_model_settings(self, schedule_file=None, combination_name=None):
         """Initialize model settings from YAML configuration."""
+        if schedule_file is not None:
+            self.schedule_file = schedule_file
+        if combination_name is not None:
+            self.requested_combination = combination_name
+
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
         # Headless models: run without occupying any of view1..view4
@@ -1036,43 +1037,37 @@ class UnifiedViewer(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event.
-        - In normal GUI mode: hide immediately and keep app running.
-        - In executor-only mode (--schedule_name): hide and shutdown asynchronously.
+        - In normal GUI mode: ignore close and keep app running.
+        - In executor-only mode (--schedule_name): shutdown asynchronously.
         """
-        event.accept()
-        # Hide the window immediately to keep UI responsive
-        try:
-            self.hide()
-        except Exception:
-            pass
-        # Immediately signal threads/processes to stop without blocking
-        try:
-            if hasattr(self, 'shutdown_flag') and self.shutdown_flag:
-                self.shutdown_flag.set()
-        except Exception:
-            pass
-        self.global_exit_flag = True
-        for name in ['view1_shutdown_event', 'view2_shutdown_event',
-                     'view3_shutdown_event', 'view4_shutdown_event',
-                     'video_shutdown_event']:
-            try:
-                ev = getattr(self, name, None)
-                if ev:
-                    ev.set()
-            except Exception:
-                pass
-        # Defer heavy stopping/cleanup to background to avoid freezing GUI
-        try:
-            self.stop_execution_async()
-        except Exception:
-            # Fallback to synchronous stop if async path unavailable
-            try:
-                self.stop_execution()
-            except Exception:
-                pass
-        # If running in executor-only mode, shut down everything asynchronously; otherwise just return
+        # If running in executor-only mode, shut down everything asynchronously; otherwise ignore close
         if getattr(self, 'executor_only', False):
+            event.accept()
             print("[UnifiedViewer] Close event in executor-only mode - terminating application (async)")
+            try:
+                if hasattr(self, 'shutdown_flag') and self.shutdown_flag:
+                    self.shutdown_flag.set()
+            except Exception:
+                pass
+            self.global_exit_flag = True
+            for name in ['view1_shutdown_event', 'view2_shutdown_event',
+                         'view3_shutdown_event', 'view4_shutdown_event',
+                         'video_shutdown_event']:
+                try:
+                    ev = getattr(self, name, None)
+                    if ev:
+                        ev.set()
+                except Exception:
+                    pass
+            # Defer heavy stopping/cleanup to background to avoid freezing GUI
+            try:
+                self.stop_execution_async()
+            except Exception:
+                # Fallback to synchronous stop if async path unavailable
+                try:
+                    self.stop_execution()
+                except Exception:
+                    pass
             try:
                 if self.info_window:
                     self.info_window.hide()
@@ -1084,7 +1079,8 @@ class UnifiedViewer(QMainWindow):
                 # Fallback to sync
                 self.shutdown_all()
         else:
-            print("[UnifiedViewer] Close event handled - window hidden; Info window remains open")
+            event.ignore()
+            print("[UnifiedViewer] Close event ignored - window remains open; Use Info window buttons to stop")
     
     def shutdown_all(self):
         """Clean up resources and shut down the application gracefully."""
@@ -1103,6 +1099,39 @@ class UnifiedViewer(QMainWindow):
         except Exception as e:
             pass
     
+    def update_combination(self, schedule_file, combination_name):
+        """Update the viewer with a new schedule file and combination name for reuse.
+        
+        Args:
+            schedule_file (str): Path to the new model scheduling information file.
+            combination_name (str): New combination key to use from the YAML.
+        """
+        print(f"[UnifiedViewer] Updating combination to: {combination_name} (File: {schedule_file})")
+        self.schedule_file = schedule_file
+        self.requested_combination = combination_name
+        
+        # Stop any active run before updating settings
+        try:
+            self.stop_execution()
+        except Exception:
+            pass
+            
+        # Re-initialize with new combination settings
+        self.initialize_model_settings(schedule_file, combination_name)
+        # Note: UI components (placeholders) are typically static once created,
+        # but we re-initialize state variables for the new run.
+        self.initialize_state_variables()
+        
+        # Bring window to front if needed, but maintain position/geometry
+        try:
+            if not self.isVisible():
+                self.show()
+            else:
+                self.raise_()
+                self.activateWindow()
+        except Exception:
+            pass
+
     # Monitoring and statistics methods
     def start_execution(self, duration):
         """
@@ -1129,7 +1158,8 @@ class UnifiedViewer(QMainWindow):
             pass
         # Ensure the model result display window is visible when starting a run
         try:
-            self.show()
+            self.raise_()
+            self.activateWindow()
         except Exception:
             pass
         # We treat the first 5 seconds as warmup; only measure after that.
@@ -1352,9 +1382,13 @@ class UnifiedViewer(QMainWindow):
             
         try:
             # Hide the model result display window after stopping, per requirement
-            # Must execute on the Qt main thread to avoid macOS SIGTRAP from cross-thread UI calls
-            from PyQt5.QtCore import QTimer as _QtTimer
-            _QtTimer.singleShot(0, lambda: (self.hide(), print("[Stop Execution] Model execution stopped, display window hidden; Info window remains open")))
+            # BUT: in executor-only mode (reused window), we keep it visible as requested
+            if getattr(self, 'executor_only', False):
+                print("[Stop Execution] Model execution stopped, display window kept visible for reuse")
+            else:
+                # Must execute on the Qt main thread to avoid macOS SIGTRAP from cross-thread UI calls
+                from PyQt5.QtCore import QTimer as _QtTimer
+                _QtTimer.singleShot(0, lambda: (self.hide(), print("[Stop Execution] Model execution stopped, display window hidden; Info window remains open")))
         except Exception:
             print("[Stop Execution] Model execution stopped (could not schedule hide)")
         

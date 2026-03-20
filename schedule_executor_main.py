@@ -111,19 +111,10 @@ class ScheduleExecutor:
 
     def _cleanup_viewer(self):
         viewer = self._viewer
-        self._viewer = None
         if viewer is None:
             return
         try:
             viewer.stop_execution()
-        except Exception:
-            pass
-        try:
-            viewer.hide()
-        except Exception:
-            pass
-        try:
-            viewer.deleteLater()
         except Exception:
             pass
 
@@ -149,23 +140,32 @@ class ScheduleExecutor:
             self._set_start_button_enabled(True)
             return
 
-        # Clean previous viewer if exists
-        self._cleanup_viewer()
-
         combo = self._combinations[self._index]
         print(f"[Executor] Starting schedule: {combo}")
 
-        # Create and show viewer
-        self._viewer = UnifiedViewer(
-            schedule_file=self.schedule_file,
-            combination_name=combo,
-            info_window=self.info_window,
-        )
-        # Mark viewer as executor-only if running a specific selected combo
-        try:
-            self._viewer.executor_only = bool(getattr(self, '_selected_combo', None))
-        except Exception:
-            pass
+        # Reuse existing viewer if it exists
+        if self._viewer is not None:
+            print(f"[Executor] Reusing existing viewer for schedule: {combo}")
+            try:
+                self._viewer.update_combination(self.schedule_file, combo)
+            except Exception as e:
+                print(f"[Executor] Error updating combination: {e}")
+                self._cleanup_viewer()
+                self._viewer = None
+
+        if self._viewer is None:
+            # Create and show viewer
+            self._viewer = UnifiedViewer(
+                schedule_file=self.schedule_file,
+                combination_name=combo,
+                info_window=self.info_window,
+            )
+            # Mark viewer as executor-only if running a specific selected combo
+            try:
+                self._viewer.executor_only = bool(getattr(self, '_selected_combo', None))
+            except Exception:
+                pass
+
         # Pass shared results path to the viewer so all combinations append to the same run file
         try:
             self._viewer.results_path = self._results_path
@@ -190,7 +190,15 @@ class ScheduleExecutor:
         except Exception:
             pass
 
-        self._viewer.show()
+        # Bring window to front but avoid repositioning if it was already visible
+        try:
+            if not self._viewer.isVisible():
+                self._viewer.show()
+            else:
+                self._viewer.raise_()
+                self._viewer.activateWindow()
+        except Exception:
+            pass
 
         # Apply 1-second warmup: run for duration+1, but measurement starts after 1s inside viewer
         measured_duration = self.default_duration
