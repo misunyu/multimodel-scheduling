@@ -16,11 +16,12 @@ import yaml
 from pathlib import Path
 from typing import Tuple, Optional
 from PyQt5 import uic
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem, QLineEdit
 
 from schedule_generator.file_manager import FileManager
 from schedule_executor_main import ScheduleExecutor, InfoWindow
+from unified_viewer import UnifiedViewer
 
 # Local modules
 from gui_utils import ChangeDeployDialog, CheckableFileSystemModel
@@ -105,6 +106,11 @@ class BestDeployFinderApp(QMainWindow):
         self._input_rate_dialog = None
 
         # Prediction/execution state tracking
+        self._viewer = None
+        self._metrics_timer = QTimer(self)
+        self._metrics_timer.setInterval(1000)  # 1 second
+        self._metrics_timer.timeout.connect(self._update_live_metrics)
+
         self._prev_selected_models = set()      # set[str]
         self._prev_score = None                 # float | None
         self._prev_best_combo = None            # str | None
@@ -548,7 +554,18 @@ class BestDeployFinderApp(QMainWindow):
             return None
 
     def _kill_existing_executor(self):
-        """Stop current execution by stopping the executor object directly."""
+        """Stop current execution by stopping the executor or viewer directly."""
+        if hasattr(self, '_metrics_timer'):
+            self._metrics_timer.stop()
+
+        if hasattr(self, '_viewer') and self._viewer is not None:
+            self.log("[Exec] Stopping current viewer...")
+            try:
+                self._viewer.stop_execution()
+            except Exception as e:
+                self.log(f"[Exec] Warning: failed to stop viewer: {e}")
+            self._viewer = None
+
         if hasattr(self, '_executor') and self._executor is not None:
             self.log("[Exec] Stopping current executor...")
             try:
@@ -563,6 +580,12 @@ class BestDeployFinderApp(QMainWindow):
             except Exception:
                 pass
             self._executor_info_window = None
+
+        # Reset UI metrics
+        if hasattr(self, 'throughput_value'):
+            self.throughput_value.setText("0.00 FPS")
+        if hasattr(self, 'drop_value'):
+            self.drop_value.setText("0.00%")
 
         # Legacy subprocess cleanup (just in case)
         proc = getattr(self, '_executor_proc', None)
@@ -590,36 +613,119 @@ class BestDeployFinderApp(QMainWindow):
         self._running_combo_name = None
 
     def _launch_executor_direct(self, schedule_path: str, combo_name: str = None, duration: int = None):
-        """Launch ScheduleExecutor in the same process."""
-        self.log(f"[Exec] Launching executor direct for: {combo_name or 'All'}")
+        """Launch UnifiedViewer direct (controller-less mode)."""
+        self.log(f"[Exec] Launching viewer direct for: {combo_name or 'All'}")
         
         try:
-            # Create a hidden InfoWindow for the executor state
-            if getattr(self, '_executor_info_window', None) is None:
-                self._executor_info_window = InfoWindow(parent=None)
-                self._executor_info_window.hide()
-
-            # Initialize Executor
+            # Initialize UnifiedViewer directly
             duration = duration or 60
-            executor = ScheduleExecutor(
+            viewer = UnifiedViewer(
                 schedule_file=schedule_path,
-                duration=duration,
-                info_window=self._executor_info_window,
-                selected_combo=combo_name
+                combination_name=combo_name,
+                info_window=None,
+                hide_info_window=True
             )
             
-            self._executor = executor
+            # Show viewer
+            viewer.show()
+            self._viewer = viewer
             self._running_combo_name = combo_name
             
-            # Start execution
-            executor.start(duration)
+            # Start execution directly using parent.start_execution logic flow
+            self.start_execution(duration)
+
+            # Start metrics timer
+            self._metrics_timer.start()
+
             return True
         except Exception as e:
-            self.log(f"[Error] Failed to launch executor: {e}")
+            self.log(f"[Error] Failed to launch viewer: {e}")
             import traceback
             self.log(traceback.format_exc())
             return False
 
+    def start_execution(self, duration: int):
+        """Start execution on the current viewer."""
+        if self._viewer:
+            self.log(f"[Exec] Starting execution for {duration} seconds...")
+            self._viewer.start_execution(duration)
+
+    def stop_execution(self):
+        """Stop execution on the current viewer."""
+        if self._viewer:
+            self.log("[Exec] Stopping execution...")
+            self._viewer.stop_execution()
+            self._viewer = None
+
+    def stop_execution_async(self):
+        """Stop execution asynchronously on the current viewer."""
+        if hasattr(self, '_metrics_timer'):
+            self._metrics_timer.stop()
+        if self._viewer:
+            self.log("[Exec] Stopping execution (async)...")
+            self._viewer.stop_execution_async()
+            self._viewer = None
+
+    def _update_live_metrics(self):
+        """Update live throughput and drop rate metrics from the active viewer."""
+        if not self._viewer:
+            self._metrics_timer.stop()
+            return
+
+        try:
+            # 1. Throughput calculation
+            total_fps = 0.0
+            scheduled_count = 0
+            
+            # Determine scheduled views
+            views_without_model = getattr(self._viewer, 'views_without_model', set())
+            scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in views_without_model]
+            
+            for v_name in scheduled_views:
+                handler = getattr(self._viewer, f"{v_name}_handler", None)
+                if handler:
+                    avg_fps = float(getattr(handler, 'avg_fps', 0.0) or 0.0)
+                    total_fps += avg_fps
+                    scheduled_count += 1
+            
+            avg_throughput = total_fps / scheduled_count if scheduled_count > 0 else 0.0
+            
+            # 2. Drop rate percentage calculation
+            total_drops = 0
+            total_inferences = 0
+            
+            # Check video_feeder (YOLO)
+            v_feeder = getattr(self._viewer, 'video_feeder', None)
+            if v_feeder:
+                drop_counts = getattr(v_feeder, 'drop_counts', {})
+                for count in drop_counts.values():
+                    total_drops += count
+            # Check resnet_feeder (ResNet)
+            r_feeder = getattr(self._viewer, 'resnet_feeder', None)
+            if r_feeder:
+                drop_counts = getattr(r_feeder, 'drop_counts', {})
+                for count in drop_counts.values():
+                    total_drops += count
+
+            # Calculate total inferences across all scheduled views
+            for v_name in scheduled_views:
+                handler = getattr(self._viewer, f"{v_name}_handler", None)
+                if handler:
+                    total_inferences += int(getattr(handler, 'infer_count', 0) or 0)
+            
+            # Drop rate = (drops / (inferences + drops)) * 100
+            total_frames = total_inferences + total_drops
+            drop_rate_pct = (total_drops / total_frames * 100.0) if total_frames > 0 else 0.0
+            
+            # Update UI
+            if hasattr(self, 'throughput_value'):
+                self.throughput_value.setText(f"{avg_throughput:.2f} FPS")
+            if hasattr(self, 'drop_value'):
+                self.drop_value.setText(f"{drop_rate_pct:.2f}%")
+                
+        except Exception as e:
+            # Silently ignore errors during live update to avoid flickering/crashes
+            pass
 
     def on_change_deploy_clicked(self):
         """Show Change Deployment Dialog (modeless)."""
@@ -685,7 +791,9 @@ class BestDeployFinderApp(QMainWindow):
                         # If currently running the same combination, keep running regardless of score difference
                         try:
                             running_name = getattr(self, '_running_combo_name', None)
-                            is_alive = getattr(self, '_executor', None) is not None and getattr(self._executor, '_running', False)
+                            is_viewer_alive = self._viewer is not None and self._viewer.isVisible()
+                            is_executor_alive = self._executor is not None and getattr(self._executor, '_running', False)
+                            is_alive = is_viewer_alive or is_executor_alive
                             if is_alive and running_name and str(running_name) == str(self._current_best_combo):
                                 self.log(f"[Decision] Same selection and same combination '{running_name}' is already running. Keeping current executor.")
                                 return
@@ -827,10 +935,15 @@ class BestDeployFinderApp(QMainWindow):
             self.log(f"[Error] {e}")
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
-            for _name in ('throughput_value', 'drop_value', 'score_value'):
+            for _name in ('throughput_value', 'drop_value'):
                 if hasattr(self, _name):
                     try:
-                        getattr(self, _name).setText('-')
+                        if _name == 'throughput_value':
+                            getattr(self, _name).setText('0.00 FPS')
+                        elif _name == 'drop_value':
+                            getattr(self, _name).setText('0.00%')
+                        else:
+                            getattr(self, _name).setText('-')
                     except Exception:
                         pass
             return
@@ -843,10 +956,15 @@ class BestDeployFinderApp(QMainWindow):
             self.log(f"[Error][Step1] {e}")
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
-            for _name in ('throughput_value', 'drop_value', 'score_value'):
+            for _name in ('throughput_value', 'drop_value'):
                 if hasattr(self, _name):
                     try:
-                        getattr(self, _name).setText('-')
+                        if _name == 'throughput_value':
+                            getattr(self, _name).setText('0.00 FPS')
+                        elif _name == 'drop_value':
+                            getattr(self, _name).setText('0.00%')
+                        else:
+                            getattr(self, _name).setText('-')
                     except Exception:
                         pass
             return
@@ -901,19 +1019,14 @@ class BestDeployFinderApp(QMainWindow):
                     top_score = float(df.iloc[0]['pred_score'])
                     if hasattr(self, 'throughput_value'):
                         try:
-                            self.throughput_value.setText(f"{top_fps:.3f}")
+                            self.throughput_value.setText(f"{top_fps:.2f} FPS")
                         except Exception:
-                            self.throughput_value.setText(str(top_fps))
+                            self.throughput_value.setText(f"{top_fps} FPS")
                     if hasattr(self, 'drop_value'):
                         try:
                             self.drop_value.setText(f"{top_drop:.3f}")
                         except Exception:
                             self.drop_value.setText(str(top_drop))
-                    if hasattr(self, 'score_value'):
-                        try:
-                            self.score_value.setText(f"{top_score:.3f}")
-                        except Exception:
-                            self.score_value.setText(str(top_score))
                 except Exception:
                     pass
                 # Also record legacy signature fields for possible future diagnostics (optional)

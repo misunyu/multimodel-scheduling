@@ -230,12 +230,14 @@ class InfoWindow(QWidget):
 class UnifiedViewer(QMainWindow):
     """Main viewer class for the multimodel scheduling application."""
     
-    def __init__(self, schedule_file='model_schedules.yaml', combination_name=None, info_window=None):
+    def __init__(self, schedule_file='model_schedules.yaml', combination_name=None, info_window=None, hide_info_window=False):
         """Initialize the UnifiedViewer.
         
         Args:
             schedule_file (str): Path to the model scheduling information file.
             combination_name (str|None): Specific combination key to use from the YAML. If None, default logic applies.
+            info_window (InfoWindow|None): Pre-created InfoWindow instance to use.
+            hide_info_window (bool): If True, the InfoWindow will be hidden even if created/passed.
         """
         super().__init__()
         uic.loadUi("schedule_executor_display.ui", self)
@@ -259,16 +261,44 @@ class UnifiedViewer(QMainWindow):
                 self.info_window.parent = self
             except Exception:
                 pass
+            
+            # If hide_info_window is True, force-set the hidden_headless flag
+            if hide_info_window:
+                try:
+                    self.info_window.hidden_headless = True
+                    self.info_window.hide()
+                except Exception:
+                    pass
+            
+            # Show the info window only when not marked as headless/hidden
+            try:
+                if not getattr(self.info_window, 'hidden_headless', False):
+                    self.info_window.show()
+                else:
+                    self.info_window.hide()
+            except Exception:
+                # Fallback to show to preserve legacy behavior if attribute missing
+                try:
+                    if not hide_info_window:
+                        self.info_window.show()
+                    else:
+                        self.info_window.hide()
+                except Exception:
+                    pass
         else:
             self.info_window = InfoWindow(parent=self)
-        # Show the info window only when not marked as headless/hidden
-        try:
-            if not getattr(self.info_window, 'hidden_headless', False):
-                self.info_window.show()
-        except Exception:
-            # Fallback to show to preserve legacy behavior if attribute missing
+            # When created internally, if hide_info_window is requested, mark it.
+            if hide_info_window:
+                try:
+                    self.info_window.hidden_headless = True
+                except Exception:
+                    pass
+            
+            # When created internally, we don't show it by default to avoid unexpected InfoWindows
+            # especially for direct execution modes like best_deploy_finder_executor.
+            # If the user wants to see it, they should pass an InfoWindow instance.
             try:
-                self.info_window.show()
+                self.info_window.hide()
             except Exception:
                 pass
         
