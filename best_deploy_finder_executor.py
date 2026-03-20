@@ -81,6 +81,8 @@ class BestDeployFinderApp(QMainWindow):
             self.load_execute_best_button.clicked.connect(self.on_load_execute_best_clicked)
         if hasattr(self, 'change_deploy_button'):
             self.change_deploy_button.clicked.connect(self.on_change_deploy_clicked)
+        if hasattr(self, 'stop_best_button'):
+            self.stop_best_button.clicked.connect(self.on_stop_execution_clicked)
         if hasattr(self, 'default_input_rate_button'):
             self.default_input_rate_button.clicked.connect(self.select_default_input_file)
 
@@ -674,7 +676,7 @@ class BestDeployFinderApp(QMainWindow):
                     if cur_models != prev_models:
                         self.log("[Load] Current selection differs from previous. Running newly predicted best combination.")
                         self._kill_existing_executor()
-                        duration = 10
+                        duration = 30
                         # duration = 100000
                         self._launch_executor_direct(schedule_path, combo_name=self._current_best_combo, duration=duration)
                         return
