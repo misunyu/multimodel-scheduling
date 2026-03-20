@@ -268,28 +268,14 @@ class BestDeployFinderApp(QMainWindow):
             container_layout.addWidget(spin, row, 1)
             spin_boxes[model] = spin
 
-        # Add multiplier UI below the list
-        from PyQt5.QtWidgets import QLineEdit, QDoubleSpinBox
-        multiplier_container = QWidget(dlg)
-        multiplier_layout = QHBoxLayout(multiplier_container)
-        multiplier_layout.setContentsMargins(0, 10, 0, 0)
-        
-        mult_label = QLabel("Multiplier:", multiplier_container)
-        mult_spin = QDoubleSpinBox(multiplier_container)
-        mult_spin.setRange(0.0, 1000.0)
-        mult_spin.setValue(1.0)
-        mult_spin.setSingleStep(0.1)
-        mult_spin.setDecimals(2)
-        
-        mult_apply_btn = QPushButton("Multiply", multiplier_container)
-        reset_btn = QPushButton("Reset", multiplier_container)
-        
-        multiplier_layout.addWidget(mult_label)
-        multiplier_layout.addWidget(mult_spin)
-        multiplier_layout.addWidget(mult_apply_btn)
-        multiplier_layout.addWidget(reset_btn)
-        multiplier_layout.addStretch()
-        
+        # Get multiplier and other UI elements from the loaded UI
+        from PyQt5.QtWidgets import QDoubleSpinBox
+        mult_spin = dlg.findChild(QDoubleSpinBox, 'mult_spin')
+        mult_apply_btn = dlg.findChild(QPushButton, 'mult_apply_btn')
+        reset_btn = dlg.findChild(QPushButton, 'reset_btn')
+        apply_btn = dlg.findChild(QPushButton, 'apply_btn')
+        button_box = dlg.findChild(QWidget, 'buttonBox')
+
         def apply_multiplier():
             factor = mult_spin.value()
             for model_name, spin in spin_boxes.items():
@@ -344,24 +330,6 @@ class BestDeployFinderApp(QMainWindow):
 
         mult_apply_btn.clicked.connect(apply_multiplier)
         reset_btn.clicked.connect(reset_to_defaults)
-        
-        # Insert multiplier UI before the button box
-        button_box = dlg.findChild(QWidget, 'buttonBox')
-        dlg.layout().insertWidget(dlg.layout().indexOf(button_box), multiplier_container)
-
-        # Requirements: "좌측 하단에 Apply 버튼 만들어서 OK 버튼 누르지 않고 Apply만 눌어도 입력되어있는 input rate 들이 적용되게 해 줘. Apply 버튼은 OK 버튼과 다르게 창이 닫히지 않아야 돼."
-        
-        # We'll create a new layout for the bottom to place Apply on the left and ButtonBox on the right
-        bottom_layout = QHBoxLayout()
-        apply_btn = QPushButton("Apply")
-        bottom_layout.addWidget(apply_btn)
-        bottom_layout.addStretch()
-        
-        # Remove button_box from its current parent layout and add to our new bottom_layout
-        dlg.layout().removeWidget(button_box)
-        bottom_layout.addWidget(button_box)
-        
-        dlg.layout().addLayout(bottom_layout)
         
         def save_rates():
             for model, spin in spin_boxes.items():
