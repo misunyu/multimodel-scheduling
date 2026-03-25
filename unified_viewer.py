@@ -481,6 +481,7 @@ class UnifiedViewer(QMainWindow):
                 "view4": {"model": "resnet50_small", "model_path": "", "execution": "cpu"}
             }
             # No views are marked as without model in case of error
+        pass
     
     def initialize_ui_components(self):
         """Initialize UI components."""
@@ -1131,7 +1132,7 @@ class UnifiedViewer(QMainWindow):
                 self.activateWindow()
         except Exception:
             pass
-
+    
     # Monitoring and statistics methods
     def start_execution(self, duration):
         """
@@ -1397,21 +1398,19 @@ class UnifiedViewer(QMainWindow):
         This prevents residual items from a finished schedule affecting the next run
         and ensures background feeder/handler threads do not leak resources.
         """
-        def drain_queue(q):
+        def drain_queue(q, name="unknown"):
             if not q:
                 return
+            count = 0
             try:
                 # Non-blocking drain
                 while True:
                     try:
                         _ = q.get_nowait()
-                    except queue.Empty:
-                        break
-                    except (EOFError, BrokenPipeError, OSError):
-                        break
+                        count += 1
                     except Exception:
-                        # Keep draining on any unexpected item error
-                        continue
+                        break
+                print(f"[Queue Drain] {name}: {count} items drained")
             except Exception:
                 pass
         # Enumerate all queues used in the viewer
@@ -1424,13 +1423,13 @@ class UnifiedViewer(QMainWindow):
         ]
         for name in queue_names:
             q = getattr(self, name, None)
-            drain_queue(q)
+            drain_queue(q, name)
         # Drain headless queues
         try:
-            for q in (getattr(self, 'headless_frame_queues', {}) or {}).values():
-                drain_queue(q)
-            for q in (getattr(self, 'headless_output_queues', {}) or {}).values():
-                drain_queue(q)
+            for hname, q in (getattr(self, 'headless_frame_queues', {}) or {}).items():
+                drain_queue(q, f"headless_frame_{hname}")
+            for hname, q in (getattr(self, 'headless_output_queues', {}) or {}).items():
+                drain_queue(q, f"headless_output_{hname}")
         except Exception:
             pass
         

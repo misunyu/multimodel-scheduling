@@ -106,6 +106,7 @@ class YoloViewHandler(ViewHandler):
     def display_frames(self):
         """Display frames from the YOLO model."""
         global_exit_flag = False  # This should be passed from the main application
+        first_display = True
         
         # Check if this view has a specified model
         if self.view_name in self.views_without_model:
@@ -140,6 +141,8 @@ class YoloViewHandler(ViewHandler):
                 pixmap = convert_cv_to_qt(frame)
                 if not pixmap.isNull():
                     self.update_signal.emit(pixmap)
+                    if first_display:
+                        first_display = False
                     self.update_stats(self.model_type, infer_time)
                     # Update wait statistics if available
                     if wait_ms is not None:
@@ -157,6 +160,7 @@ class ResNetViewHandler(ViewHandler):
     def display_frames(self):
         """Display frames from the ResNet model."""
         global_exit_flag = False  # This should be passed from the main application
+        first_display = True
         
         # Check if this view has a specified model
         if self.view_name in self.views_without_model:
@@ -186,6 +190,8 @@ class ResNetViewHandler(ViewHandler):
                 pixmap = convert_cv_to_qt(frame)
                 if not pixmap.isNull():
                     self.update_signal.emit(pixmap)
+                    if first_display:
+                        first_display = False
                     self.update_stats(self.model_type, infer_time)
                 else:
                     print(f"[{self.view_name}] Pixmap is null")

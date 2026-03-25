@@ -673,8 +673,9 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
         except Exception as e:
             print(f"[YOLO GPU] Error calling get_available_providers: {e}")
 
-        # We primarily use CUDAExecutionProvider or TensorrtExecutionProvider
-        providers = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+        # We primarily use CUDAExecutionProvider or CPUExecutionProvider (TensorRT removed)
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        print(f"[YOLO GPU] TensorRT removed / CUDA only. Attempting session with providers: {providers}")
         
         try:
             session = ort.InferenceSession(
@@ -686,9 +687,13 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
             active = session.get_providers()
             print(f"[YOLO GPU] ORT providers active(session)={active}")
             
-            # Warn if CUDA/TRT not chosen but requested
-            if "CUDAExecutionProvider" not in active and "TensorrtExecutionProvider" not in active:
-                print(f"[YOLO GPU] Warning: Neither CUDA nor TensorRT is being used for {model_name}. Active: {active}")
+            # Warn if TensorRT is unexpectedly active
+            if "TensorrtExecutionProvider" in active:
+                print(f"[YOLO GPU] WARNING: TensorrtExecutionProvider is active even though it was removed from request! Active: {active}")
+            
+            # Warn if CUDA not chosen but requested
+            if "CUDAExecutionProvider" not in active:
+                print(f"[YOLO GPU] Warning: CUDA is NOT being used for {model_name}. Active: {active}")
         except Exception as e:
             print(f"\n[CRITICAL ERROR] Failed to load YOLO GPU model with CUDAExecutionProvider: {e}")
             print("Terminating program as CPU fallback is disabled for GPU execution mode.\n")
@@ -747,6 +752,7 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
             model_load_time_ms=load_time_ms,
         )
 
+        first_infer = True
         while not shutdown_event.is_set():
             try:
                 item = input_queue.get(timeout=1)
@@ -774,6 +780,8 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
                 infer_start = time.time()
                 output = session.run(None, feeds)
                 infer_end = time.time()
+                if first_infer:
+                    first_infer = False
 
                 infer_time_ms = (infer_end - infer_start) * 1000.0
 
@@ -828,8 +836,9 @@ def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=
         except Exception as e:
             print(f"[ResNet GPU] Error calling get_available_providers: {e}")
 
-        # We primarily use CUDAExecutionProvider or TensorrtExecutionProvider
-        providers = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+        # We primarily use CUDAExecutionProvider or CPUExecutionProvider (TensorRT removed)
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        print(f"[ResNet GPU] TensorRT removed / CUDA only. Attempting session with providers: {providers}")
         
         try:
             session = ort.InferenceSession(
@@ -841,9 +850,13 @@ def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=
             active = session.get_providers()
             print(f"[ResNet GPU] ORT providers active(session)={active}")
             
-            # Warn if CUDA/TRT not chosen but requested
-            if "CUDAExecutionProvider" not in active and "TensorrtExecutionProvider" not in active:
-                print(f"[ResNet GPU] Warning: Neither CUDA nor TensorRT is being used for ResNet. Active: {active}")
+            # Warn if TensorRT is unexpectedly active
+            if "TensorrtExecutionProvider" in active:
+                print(f"[ResNet GPU] WARNING: TensorrtExecutionProvider is active even though it was removed from request! Active: {active}")
+                
+            # Warn if CUDA not chosen but requested
+            if "CUDAExecutionProvider" not in active:
+                print(f"[ResNet GPU] Warning: CUDA is NOT being used for ResNet. Active: {active}")
         except Exception as e:
             print(f"\n[CRITICAL ERROR] Failed to load ResNet GPU model with CUDAExecutionProvider: {e}")
             print("Terminating program as CPU fallback is disabled for GPU execution mode.\n")
@@ -889,6 +902,7 @@ def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=
             model_load_time_ms=load_time_ms,
         )
 
+        first_infer = True
         while not shutdown_event.is_set():
             try:
                 item = input_queue.get(timeout=1)
@@ -914,6 +928,8 @@ def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=
                 infer_start = time.time()
                 outputs = session.run([output_name] if output_name else None, {input_name: input_tensor})
                 infer_end = time.time()
+                if first_infer:
+                    first_infer = False
 
                 infer_time_ms = (infer_end - infer_start) * 1000.0
 
