@@ -1150,10 +1150,13 @@ class UnifiedViewer(QMainWindow):
                 return
         except Exception:
             pass
-        # Prevent duplicate start within the same run (can be triggered by multiple signals)
+        # Reset current run if already active to allow restart with new duration
         try:
             if getattr(self, '_run_active', False):
-                print("[Start] Run already active; ignoring duplicate start request")
+                print("[Start] Run already active; stopping current to restart")
+                self.stop_execution()
+                # Use a small delay before restarting to ensure clean state
+                QTimer.singleShot(100, lambda d=duration: self.start_execution(d))
                 return
         except Exception:
             pass

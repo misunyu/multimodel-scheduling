@@ -1,5 +1,6 @@
 import os
 import yaml
+from typing import Optional, Dict, List, Any
 
 class ScheduleGenerator:
     def __init__(self, log_callback=None):
@@ -11,13 +12,13 @@ class ScheduleGenerator:
         else:
             print(msg)
 
-    def build_schedule_from_selection(self, checked_paths, device_conf_path: str, out_path: str, input_fps_by_model=None) -> str:
-        """Generate a schedule YAML (model_schedules.yaml) from selected top-level model folders/.onnx files and device config.
+    def build_schedule_from_selection(self, checked_paths, device_conf_path: str, out_path: Optional[str] = None, input_fps_by_model=None) -> dict:
+        """Generate a schedule dict (and optionally YAML) from selected top-level model folders/.onnx files and device config.
         Always builds CPU/GPU combinations.
         """
         return self._build_schedule_cpu_gpu(checked_paths, device_conf_path, out_path, input_fps_by_model)
 
-    def _build_schedule_cpu_gpu(self, checked_paths, device_conf_path: str, out_path: str, input_fps_by_model=None) -> str:
+    def _build_schedule_cpu_gpu(self, checked_paths, device_conf_path: str, out_path: Optional[str] = None, input_fps_by_model=None) -> dict:
         """CPU/GPU mode: each model -> cpu or gpu (2^N combinations)."""
         models = []
         for p in checked_paths:
@@ -69,7 +70,7 @@ class ScheduleGenerator:
         self.log(f"[Predict] Generated {len(combinations)} combinations (CPU/GPU only)")
         return self._write_schedule_yaml(models, combinations, out_path, input_fps_by_model)
 
-    def _write_schedule_yaml(self, models, combinations, out_path: str, input_fps_by_model=None) -> str:
+    def _write_schedule_yaml(self, models, combinations, out_path: Optional[str] = None, input_fps_by_model=None) -> dict:
         schedules = {}
         for i, combo in enumerate(combinations):
             combo_name = f"combination_{i+1}"
@@ -97,15 +98,17 @@ class ScheduleGenerator:
                 if infps is not None:
                     entry["infps"] = int(infps)
                 schedules[combo_name][model_id] = entry
-        try:
-            with open(out_path, 'w', encoding='utf-8') as f:
-                f.write("# model_schedules.yaml\n# Auto-generated\n\n")
-                f.write(yaml.dump(schedules, default_flow_style=False))
-        except Exception as e:
-            raise RuntimeError(f"Failed to write schedule YAML '{out_path}': {e}")
-        return out_path
+        if out_path:
+            try:
+                with open(out_path, 'w', encoding='utf-8') as f:
+                    f.write("# model_schedules.yaml\n# Auto-generated\n\n")
+                    f.write(yaml.dump(schedules, default_flow_style=False))
+                self.log(f"[Predict] Saved schedule to {out_path}")
+            except Exception as e:
+                self.log(f"[Warn] Failed to write schedule YAML '{out_path}': {e}")
+        return schedules
 
-    def build_cpu_only_schedule(self, checked_paths, out_path: str, input_fps_by_model=None) -> str:
+    def build_cpu_only_schedule(self, checked_paths, out_path: Optional[str] = None, input_fps_by_model=None) -> dict:
         """Create a schedule where all selected models run on CPU."""
         models = []
         for p in checked_paths:
@@ -140,10 +143,12 @@ class ScheduleGenerator:
                 "infps": infps
             }
 
-        try:
-            with open(out_path, 'w', encoding='utf-8') as f:
-                f.write("# model_schedules.yaml\n# Fallback CPU-only\n\n")
-                f.write(yaml.dump(schedules, default_flow_style=False))
-        except Exception as e:
-            raise RuntimeError(f"Failed to write CPU-only schedule: {e}")
-        return out_path
+        if out_path:
+            try:
+                with open(out_path, 'w', encoding='utf-8') as f:
+                    f.write("# model_schedules.yaml\n# Fallback CPU-only\n\n")
+                    f.write(yaml.dump(schedules, default_flow_style=False))
+                self.log(f"[Predict] Saved CPU-only schedule to {out_path}")
+            except Exception as e:
+                self.log(f"[Warn] Failed to write CPU-only schedule: {e}")
+        return schedules

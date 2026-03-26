@@ -14,7 +14,7 @@ import sys
 import argparse
 import yaml
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any, List
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem, QLineEdit
@@ -343,6 +343,15 @@ class BestDeployFinderApp(QMainWindow):
 
         # Connect Apply button
         apply_btn.clicked.connect(save_rates)
+
+        predict_start_btn = dlg.findChild(QPushButton, 'predict_start')
+        if predict_start_btn:
+            def on_predict_start():
+                save_rates()
+                self.on_predict_best_clicked()
+                self.on_load_execute_best_clicked()
+
+            predict_start_btn.clicked.connect(on_predict_start)
         
         # Connect OK button (accepted signal)
         def on_accepted():
@@ -438,8 +447,8 @@ class BestDeployFinderApp(QMainWindow):
             self.log_text_edit.appendPlainText(text)
         print(text)
 
-    def build_schedule_from_selection(self, models_root: str, checked_paths, device_conf_path: str, out_path: str) -> str:
-        """Generate a schedule YAML (model_schedules.yaml) from selected top-level model folders/.onnx files and device config.
+    def build_schedule_from_selection(self, models_root: str, checked_paths, device_conf_path: str, out_path: Optional[str] = None) -> dict:
+        """Generate a schedule dict (and optionally YAML) from selected top-level model folders/.onnx files and device config.
         Always builds CPU/GPU combinations.
         """
         return self.schedule_generator.build_schedule_from_selection(
@@ -450,12 +459,12 @@ class BestDeployFinderApp(QMainWindow):
         )
 
 
-    def generate_all_combinations(self) -> str:
-        """Generate all possible model-to-device combinations into model_schedules.yaml using:
+    def generate_all_combinations(self, out_path: Optional[str] = None) -> dict:
+        """Generate all possible model-to-device combinations using:
         - Checked top-level model folders/.onnx files in the tree.
         - Device config path from self.device_config_input.
         - Per-model input rates from input_rate_dialog (self.input_fps_by_model).
-        Returns the output YAML path.
+        Returns the schedule data dict.
         """
         # Resolve selections
         models_root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
@@ -465,19 +474,20 @@ class BestDeployFinderApp(QMainWindow):
         device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
         if not device_conf or not os.path.exists(device_conf):
             raise FileNotFoundError(f"Device config not found: {device_conf}")
-        out_path = self.generated_schedule_path
-        # Delegate to existing builder (kept for compatibility)
+        
+        # Delegate to existing builder
         return self.build_schedule_from_selection(models_root, checked_paths, device_conf, out_path)
 
-    def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.3):
+    def predict_best_combination(self, schedule_yaml_path: Optional[str] = None, model_input_path: str = "", alpha: float = 0.3, schedule_data: Optional[dict] = None):
         """Predict best combination using XGBoost models."""
         return self.deploy_predictor.predict_best_combination(
             schedule_yaml_path=schedule_yaml_path,
             model_input_path=model_input_path,
-            alpha=alpha
+            alpha=alpha,
+            schedule_data=schedule_data
         )
 
-    def _build_cpu_only_schedule(self, checked_paths, out_path: str) -> str:
+    def _build_cpu_only_schedule(self, checked_paths, out_path: Optional[str] = None) -> dict:
         """Build a schedule with a single combination where all selected models run on CPU."""
         return self.schedule_generator.build_cpu_only_schedule(
             checked_paths=checked_paths,
@@ -485,16 +495,22 @@ class BestDeployFinderApp(QMainWindow):
             input_fps_by_model=getattr(self, 'input_fps_by_model', None)
         )
 
-    def _compute_combo_signature(self, schedule_path: str, combo_name: str):
-        """Compute a stable signature for a combination from the schedule YAML so we can
+    def _compute_combo_signature(self, combo_name: str, schedule_path: Optional[str] = None, schedule_data: Optional[dict] = None):
+        """Compute a stable signature for a combination from the schedule YAML or dict so we can
         detect real changes regardless of combo naming or ordering.
         Signature contains a sorted tuple of entries (model, execution, infps, display).
         Returns None on error.
         """
         try:
-            import yaml as _yaml
-            with open(schedule_path, 'r', encoding='utf-8') as f:
-                doc = _yaml.safe_load(f) or {}
+            if schedule_data is not None:
+                doc = schedule_data
+            elif schedule_path is not None:
+                import yaml as _yaml
+                with open(schedule_path, 'r', encoding='utf-8') as f:
+                    doc = _yaml.safe_load(f) or {}
+            else:
+                return None
+
             combo = doc.get(str(combo_name)) if isinstance(doc, dict) else None
             if not isinstance(combo, dict):
                 return None
@@ -763,13 +779,22 @@ class BestDeployFinderApp(QMainWindow):
 
             if has_current and cur_models:
                 if not os.path.exists(schedule_path):
-                    self.log(f"[Warn] Expected schedule not found for current prediction: {schedule_path}. Falling back.")
+                    self.log(f"[Action] Schedule file not found for current prediction. Creating it at {schedule_path}...")
+                    try:
+                        # Re-generate the schedule YAML for the current selection
+                        self.generate_all_combinations(out_path=schedule_path)
+                    except Exception as e:
+                        self.log(f"[Error] Failed to create schedule file: {e}")
+                        return
+                
+                if not os.path.exists(schedule_path):
+                    self.log(f"[Error] Schedule file still not found. Cannot start execution.")
                 else:
                     # Case A: selection changed -> always restart with new best
                     if cur_models != prev_models:
                         self.log("[Load] Current selection differs from previous. Running newly predicted best combination.")
                         self._kill_existing_executor()
-                        duration = 30
+                        duration = 60
                         # duration = 100000
                         self._launch_executor_direct(schedule_path, combo_name=self._current_best_combo, duration=duration)
                         return
@@ -838,7 +863,8 @@ class BestDeployFinderApp(QMainWindow):
                 self.log("[Error] No models selected (folder or .onnx file). Please check model items in the tree.")
                 return
             try:
-                schedule_path = self._build_cpu_only_schedule(checked_paths, schedule_path)
+                # build_cpu_only_schedule now returns a dict, and optionally saves to file
+                self._build_cpu_only_schedule(checked_paths, out_path=schedule_path)
                 best_combo = 'combination_1'
                 self.log(f"[Build] Created CPU-only schedule: {schedule_path}")
             except Exception as e:
@@ -935,10 +961,14 @@ class BestDeployFinderApp(QMainWindow):
                         pass
             return
 
-        # Step 1: Generate schedule YAML (using generate_all_combinations)
+        # Step 1: Generate schedule data (memory based)
         try:
-            schedule_path = self.generate_all_combinations()
-            self.log(f"[Step1] Generated schedule YAML: {schedule_path}")
+            # We don't pass out_path to generate_all_combinations, so it won't save to file by default.
+            # If you want to debug save, you can pass self.generated_schedule_path.
+            debug_save = False # Or check some UI flag
+            out_path = self.generated_schedule_path if debug_save else None
+            schedule_data = self.generate_all_combinations(out_path=out_path)
+            self.log(f"[Step1] Generated schedule data in memory.")
         except Exception as e:
             self.log(f"[Error][Step1] {e}")
             if hasattr(self, 'label_best_deploy_value'):
@@ -958,7 +988,7 @@ class BestDeployFinderApp(QMainWindow):
 
         # Step 2: Run prediction using XGBoost model
         try:
-            best_combo, df = self.predict_best_combination(schedule_path, pred_model)
+            best_combo, df = self.predict_best_combination(model_input_path=pred_model, schedule_data=schedule_data)
             if not best_combo:
                 raise RuntimeError("Prediction produced no result.")
             # Decide whether to update status bar according to the new rule:
@@ -1018,7 +1048,7 @@ class BestDeployFinderApp(QMainWindow):
                     pass
                 # Also record legacy signature fields for possible future diagnostics (optional)
                 try:
-                    sig = self._compute_combo_signature(schedule_path, best_combo)
+                    sig = self._compute_combo_signature(combo_name=best_combo, schedule_data=schedule_data)
                     self._last_displayed_best_sig = sig
                 except Exception:
                     pass

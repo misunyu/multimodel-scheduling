@@ -58,11 +58,19 @@ class DeployPredictor:
             
             return p.parent / prefix, inferred_mode
 
-    def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.3):
+    def predict_best_combination(self, schedule_yaml_path: Optional[str] = None, model_input_path: str = "", alpha: float = 0.3, schedule_data: Optional[dict] = None):
         """Predict best combination using XGBoost models."""
-        sched_path = Path(schedule_yaml_path)
-        if not sched_path.exists():
-            raise FileNotFoundError(f"Schedule YAML not found: {schedule_yaml_path}")
+        if schedule_data is not None:
+            schedule_doc = schedule_data
+            sched_name = "memory_dict"
+        elif schedule_yaml_path is not None:
+            sched_path = Path(schedule_yaml_path)
+            if not sched_path.exists():
+                raise FileNotFoundError(f"Schedule YAML not found: {schedule_yaml_path}")
+            schedule_doc = _load_yaml_or_json(sched_path)
+            sched_name = sched_path.name
+        else:
+            raise ValueError("Either schedule_yaml_path or schedule_data must be provided.")
         
         model_prefix, inferred_mode = self._infer_model_info(Path(model_input_path))
 
@@ -74,10 +82,9 @@ class DeployPredictor:
         # Use model's alpha if available, otherwise use the passed alpha
         effective_alpha = model_alpha if model_alpha is not None else alpha
 
-        schedule_doc = _load_yaml_or_json(sched_path)
         combos = _iter_combos_from_schedule(schedule_doc)
         if not combos:
-            raise ValueError("No combinations found in schedule YAML.")
+            raise ValueError("No combinations found in schedule.")
 
         rows = []
         for name, combo_blob in combos:
@@ -100,7 +107,7 @@ class DeployPredictor:
             
             self.log(f"[Predict] Combination: {name} -> FPS: {fps:.2f}, Drop: {drop:.2f}, Score: {score:.2f}")
             rows.append({
-                "source": sched_path.name,
+                "source": sched_name,
                 "combination": str(name),
                 "pred_total_throughput_fps": fps,
                 "pred_drop_rate_fps": drop,
