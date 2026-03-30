@@ -55,7 +55,7 @@ Contains the main viewer class:
   - Initialization methods: `initialize_model_settings`, `initialize_ui_components`, etc.
   - View update methods: `update_view1_display`, etc.
   - Signal handling and shutdown methods: `signal_handler`, `closeEvent`, `shutdown_all`
-  - Monitoring and statistics methods: `update_cpu_npu_usage`, `save_throughput_data`
+  - Monitoring and statistics methods: `update_runtime_metrics`, `save_throughput_data`
 
 ## Benefits of Modularization
 

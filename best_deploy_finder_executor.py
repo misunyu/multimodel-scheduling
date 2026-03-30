@@ -121,6 +121,11 @@ class BestDeployFinderApp(QMainWindow):
         self._executor = None                   # ScheduleExecutor | None
         self._running_combo_name = None         # str | None - currently executing combination name
         self._executor_info_window = None       # InfoWindow | None
+        
+        # QoS violation score state
+        self._qos_window_T = 5
+        self._qos_alpha = 0.3
+        self._violation_history = []  # List of booleans (True if violation occurred in that second)
 
         # Status bar (labels) gating (legacy signature fields retained for logs/backward-compat; not primary gating now)
         self._last_displayed_best_sig = None    # tuple | None — stable signature of last displayed best combo
@@ -670,9 +675,10 @@ class BestDeployFinderApp(QMainWindow):
             self._viewer.stop_execution_async()
 
     def _update_live_metrics(self):
-        """Update live throughput and drop rate metrics from the active viewer."""
+        """Update live throughput, drop rate, and QoS violation score metrics from the active viewer."""
         if not self._viewer:
             self._metrics_timer.stop()
+            self._violation_history = []
             return
 
         try:
@@ -720,15 +726,58 @@ class BestDeployFinderApp(QMainWindow):
             total_frames = total_inferences + total_drops
             drop_rate_pct = (total_drops / total_frames * 100.0) if total_frames > 0 else 0.0
             
+            # 3. QoS violation score V(t) calculation
+            v_l_sum = 0.0
+            n_active = 0
+            is_any_violated = False
+            
+            for v_name in scheduled_views:
+                handler = getattr(self._viewer, f"{v_name}_handler", None)
+                if handler:
+                    # L_i: average inference time (ms)
+                    l_i = float(getattr(handler, 'avg_infer_time', 0.0) or 0.0)
+                    
+                    # L_SLO: Use 'infps' from model_settings as fallback if SLO not directly available
+                    # SLO (ms) = 1000 / infps
+                    infps = 10.0  # Default fallback
+                    if hasattr(handler, 'model_settings'):
+                        view_settings = handler.model_settings.get(v_name, {})
+                        infps = float(view_settings.get('infps', 10.0) or 10.0)
+                    
+                    l_slo = 1000.0 / infps if infps > 0 else 100.0
+                    
+                    violation_ratio = (l_i / l_slo) - 1.0
+                    v_l_sum += max(0.0, violation_ratio)
+                    n_active += 1
+                    
+                    if l_i > l_slo:
+                        is_any_violated = True
+            
+            v_l_t = (v_l_sum / n_active) if n_active > 0 else 0.0
+            
+            # Update violation history for D(t) calculation
+            self._violation_history.append(is_any_violated)
+            if len(self._violation_history) > self._qos_window_T:
+                self._violation_history.pop(0)
+            
+            # D(t): sum of violations in the window (each step is 1s)
+            d_t = float(sum(self._violation_history))
+            t_min = float(len(self._violation_history))
+            d_tilde_t = (d_t / t_min) if t_min > 0 else 0.0
+            
+            # V(t) = V_L(t) + alpha * D_tilde(t)
+            v_score = v_l_t + self._qos_alpha * d_tilde_t
+            
             # Update UI
             if hasattr(self, 'throughput_value'):
                 self.throughput_value.setText(f"{avg_throughput:.2f} FPS")
             if hasattr(self, 'drop_value'):
                 self.drop_value.setText(f"{drop_rate_pct:.2f}%")
+            if hasattr(self, 'vscore_value'):
+                self.vscore_value.setText(f"{v_score:.4f}")
                 
         except Exception as e:
-            # Silently ignore errors during live update to avoid flickering/crashes
-            pass
+            self._log(f"[Error][Metrics] {str(e)}")
 
     def on_change_deploy_clicked(self):
         """Show Change Deployment Dialog (modeless)."""

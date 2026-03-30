@@ -310,7 +310,7 @@ class UnifiedViewer(QMainWindow):
         
         # CPU/NPU monitoring
         self.cpu_timer = QTimer()
-        self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
+        self.cpu_timer.timeout.connect(self.update_runtime_metrics)
         self.cpu_timer.start(1000)
     
     def initialize_model_settings(self, schedule_file=None, combination_name=None):
@@ -1436,7 +1436,7 @@ class UnifiedViewer(QMainWindow):
         except Exception:
             pass
         
-    def update_cpu_npu_usage(self):
+    def update_runtime_metrics(self):
         """Update CPU and NPU usage information."""
         current = get_cpu_metrics(interval=0)
         prev = self.prev_cpu_stats
