@@ -6,11 +6,12 @@ from PyQt5.QtWidgets import QFileSystemModel, QDialog, QVBoxLayout, QListWidget,
 class ChangeDeployDialog(QDialog):
     """Modeless dialog to show and select generated combinations from model_schedules.yaml."""
 
-    def __init__(self, parent, schedule_path):
+    def __init__(self, parent, schedule_path, schedule_data=None):
         super().__init__(parent)
         self.setWindowTitle("Change Deployment")
         self.setModal(False)  # Modeless
         self.schedule_path = schedule_path
+        self.schedule_data = schedule_data
         self.parent_app = parent
 
         layout = QVBoxLayout(self)
@@ -31,17 +32,25 @@ class ChangeDeployDialog(QDialog):
 
     def load_combinations(self):
         self.list_widget.clear()
-        if not os.path.exists(self.schedule_path):
-            self.list_widget.addItem("No schedule file found.")
+        data = self.schedule_data
+        
+        if not data:
+            if not os.path.exists(self.schedule_path):
+                self.list_widget.addItem("No schedule file or data found.")
+                return
+
+            try:
+                with open(self.schedule_path, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+            except Exception as e:
+                self.list_widget.addItem(f"Error loading file: {e}")
+                return
+
+        if not data:
+            self.list_widget.addItem("Empty schedule data.")
             return
 
         try:
-            with open(self.schedule_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            if not data:
-                self.list_widget.addItem("Empty schedule file.")
-                return
-
             for combo_name in sorted(data.keys()):
                 # Format: combination_1 (model1_cpu, model2_gpu)
                 models_info = []

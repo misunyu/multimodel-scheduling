@@ -30,9 +30,11 @@ class ScheduleGenerator:
 
         if not models:
             raise ValueError("No models selected (folder or .onnx file).")
-        if len(models) > 4:
-            self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
-            models = models[:4]
+
+        # Removed 4-model limit to allow 5+ models as per user request (2^5=32).
+        # We calculate the expected number of combinations for logging/warning.
+        expected_count = 2 ** len(models)
+        self.log(f"[Predict] Models selected: {len(models)}, Expected combinations: {expected_count}")
 
         # Load device info
         try:
@@ -67,7 +69,14 @@ class ScheduleGenerator:
                 rec(idx + 1, assign)
 
         rec(0, {})
-        self.log(f"[Predict] Generated {len(combinations)} combinations (CPU/GPU only)")
+        actual_count = len(combinations)
+        self.log(f"[Predict] Generated {actual_count} combinations (CPU/GPU only)")
+
+        if len(models) == 5 and actual_count != 32:
+            self.log(f"[Warning] Expected 32 combinations for 5 models, but got {actual_count}!")
+        elif actual_count != expected_count:
+            self.log(f"[Warning] Expected {expected_count} combinations, but got {actual_count}!")
+
         return self._write_schedule_yaml(models, combinations, out_path, input_fps_by_model)
 
     def _write_schedule_yaml(self, models, combinations, out_path: Optional[str] = None, input_fps_by_model=None) -> dict:

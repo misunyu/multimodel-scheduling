@@ -117,6 +117,7 @@ class BestDeployFinderApp(QMainWindow):
         self._current_selected_models = set()   # set[str]
         self._current_best_combo = None         # str | None
         self._current_score = None              # float | None
+        self._current_schedule_data = None      # dict | None
         self._executor_proc = None              # subprocess.Popen | None (Legacy)
         self._executor = None                   # ScheduleExecutor | None
         self._running_combo_name = None         # str | None - currently executing combination name
@@ -781,9 +782,24 @@ class BestDeployFinderApp(QMainWindow):
 
     def on_change_deploy_clicked(self):
         """Show Change Deployment Dialog (modeless)."""
+        # Always check if schedule needs regeneration based on current selection
+        current_selection = set(self._get_selected_model_names())
+        last_selection = getattr(self, '_current_selected_models', set())
+        
+        # If selection changed or no schedule data, regenerate
+        if current_selection != last_selection or not getattr(self, '_current_schedule_data', None):
+            self.log("[Action] Selection changed or no schedule. Regenerating for Change Deploy...")
+            try:
+                self._current_schedule_data = self.generate_all_combinations(out_path=self.generated_schedule_path)
+                self._current_selected_models = current_selection
+            except Exception as e:
+                self.log(f"[Error] Failed to regenerate schedule: {e}")
+
         if not hasattr(self, '_change_deploy_dialog') or self._change_deploy_dialog is None:
-            self._change_deploy_dialog = ChangeDeployDialog(self, self.generated_schedule_path)
+            self._change_deploy_dialog = ChangeDeployDialog(self, self.generated_schedule_path, schedule_data=getattr(self, '_current_schedule_data', None))
         else:
+            # Update data before showing
+            self._change_deploy_dialog.schedule_data = getattr(self, '_current_schedule_data', None)
             self._change_deploy_dialog.load_combinations()
 
         self._change_deploy_dialog.show()
@@ -1012,12 +1028,12 @@ class BestDeployFinderApp(QMainWindow):
 
         # Step 1: Generate schedule data (memory based)
         try:
-            # We don't pass out_path to generate_all_combinations, so it won't save to file by default.
-            # If you want to debug save, you can pass self.generated_schedule_path.
-            debug_save = False # Or check some UI flag
-            out_path = self.generated_schedule_path if debug_save else None
+            # We now always save to file to ensure consistency with Change Deploy...
+            out_path = self.generated_schedule_path
             schedule_data = self.generate_all_combinations(out_path=out_path)
-            self.log(f"[Step1] Generated schedule data in memory.")
+            self._current_schedule_data = schedule_data
+            self._current_selected_models = set(self._get_selected_model_names())
+            self.log(f"[Step1] Generated schedule data (total {len(schedule_data)} combinations) and saved to {out_path}.")
         except Exception as e:
             self.log(f"[Error][Step1] {e}")
             if hasattr(self, 'label_best_deploy_value'):
