@@ -69,15 +69,16 @@ def video_reader_process(video_path, frame_queue, shutdown_event, max_queue_size
 
     cap.release()
 
-def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=None):
+def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=None, ready_event=None):
     """
     Process for running YOLO model on CPU.
-    
+
     Args:
         input_queue: Queue to get input frames from
         output_queue: Queue to put output results into
         shutdown_event: Event to signal shutdown
         view_name: Optional view identifier for logging
+        ready_event: Optional Event set after model loading completes (for adaptive deploy)
     """
     try:
         # Load the YOLO model
@@ -148,7 +149,11 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
             model="yolov3_small",
             model_load_time_ms=load_time_ms,
         )
-        
+
+        # Signal that the model is loaded and ready for inference (adaptive deploy)
+        if ready_event is not None:
+            ready_event.set()
+
         while not shutdown_event.is_set():
             try:
                 item = input_queue.get(timeout=1)
@@ -159,7 +164,7 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
                     enqueue_ts = None
             except queue.Empty:
                 continue
-                
+
             pre_s = time.time()
             # Waiting time until preprocessing begins
             wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
@@ -216,15 +221,16 @@ def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=No
     except Exception as e:
         print(f"[YOLO CPU Process ERROR] {e}")
 
-def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=None):
+def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=None, ready_event=None):
     """
     Process for running ResNet model on CPU.
-    
+
     Args:
-        image_dir: Directory containing images to process
+        input_queue: Queue to get input images from
         output_queue: Queue to put output results into
         shutdown_event: Event to signal shutdown
         view_name: Optional view identifier for logging
+        ready_event: Optional Event set after model loading completes (for adaptive deploy)
     """
     try:
         # Load the ResNet model (CPU), align with eval_resnet50_imagenet.py
@@ -286,6 +292,11 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
             model="resnet50_big",
             model_load_time_ms=load_time_ms,
         )
+
+        # Signal that the model is loaded and ready for inference (adaptive deploy)
+        if ready_event is not None:
+            ready_event.set()
+
         while not shutdown_event.is_set():
             try:
                 item = input_queue.get(timeout=1)
@@ -652,10 +663,13 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
             pass
 
 
-def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=None, model_name="yolov3_small"):
+def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=None, model_name="yolov3_small", ready_event=None):
     """
     Process for running YOLO model on GPU via ONNX Runtime CUDA EP.
     CPU fallback is NOT allowed if execution:gpu is requested.
+
+    Args:
+        ready_event: Optional Event set after model loading completes (for adaptive deploy)
     """
     try:
         print(f"[YOLO GPU] Loading model ({model_name})...")
@@ -752,6 +766,10 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
             model_load_time_ms=load_time_ms,
         )
 
+        # Signal that the model is loaded and ready for inference (adaptive deploy)
+        if ready_event is not None:
+            ready_event.set()
+
         first_infer = True
         while not shutdown_event.is_set():
             try:
@@ -815,10 +833,13 @@ def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=No
         print(f"[YOLO GPU Process ERROR] {e}")
 
 
-def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=None):
+def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=None, ready_event=None):
     """
     Process for running ResNet model on GPU via ONNX Runtime CUDA EP.
     CPU fallback is NOT allowed if execution:gpu is requested.
+
+    Args:
+        ready_event: Optional Event set after model loading completes (for adaptive deploy)
     """
     try:
         print(f"[ResNet GPU] Loading model...")
@@ -901,6 +922,10 @@ def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=
             model="resnet50_big",
             model_load_time_ms=load_time_ms,
         )
+
+        # Signal that the model is loaded and ready for inference (adaptive deploy)
+        if ready_event is not None:
+            ready_event.set()
 
         first_infer = True
         while not shutdown_event.is_set():

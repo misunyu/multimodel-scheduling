@@ -200,11 +200,11 @@ class ResNetViewHandler(ViewHandler):
 
 class VideoFeeder:
     """Class for feeding video frames to model queues, honoring per-view input FPS (infps)."""
-    
+
     def __init__(self, video_queue, view_frame_queues, yolo_views, shutdown_flag, model_settings=None):
         """
         Initialize the video feeder.
-        
+
         Args:
             video_queue: Queue containing video frames
             view_frame_queues: Dictionary mapping view names to frame queues
@@ -214,6 +214,7 @@ class VideoFeeder:
         """
         self.video_queue = video_queue
         self.view_frame_queues = view_frame_queues
+        self._queue_lock = threading.Lock()  # Protects view_frame_queues for adaptive deploy swaps
         self.yolo_views = set(yolo_views or [])
         self.shutdown_flag = shutdown_flag
         self.model_settings = model_settings or {}
@@ -235,12 +236,35 @@ class VideoFeeder:
         # Last enqueue timestamps per view
         self.last_enqueue_ts = {v: 0.0 for v in self.yolo_views}
         
+    def update_intervals(self, model_settings):
+        """Recalculate per-view enqueue intervals from updated model_settings at runtime."""
+        self.model_settings = model_settings or self.model_settings
+        for v in self.yolo_views:
+            try:
+                infps = self.model_settings.get(v, {}).get("infps", None)
+                if infps is None:
+                    interval = None
+                else:
+                    inf = float(infps)
+                    interval = (1.0 / inf) if inf > 0 else None
+                self.view_intervals[v] = interval
+            except Exception:
+                self.view_intervals[v] = None
+
+    def swap_view_queue(self, view_name, new_queue):
+        """Thread-safe swap of the frame queue for a view (used by adaptive deploy)."""
+        with self._queue_lock:
+            self.view_frame_queues[view_name] = new_queue
+            if view_name not in self.drop_counts:
+                self.drop_counts[view_name] = 0
+            print(f"[VideoFeeder] Swapped queue for {view_name}")
+
     def start_feed_thread(self):
         """Start the thread for feeding video frames to model queues."""
         thread = threading.Thread(target=self.feed_queues, daemon=True)
         thread.start()
         return thread
-        
+
     def reset_counters(self):
         """Reset drop counters and any per-view timestamps (for warmup handling)."""
         try:
@@ -249,7 +273,7 @@ class VideoFeeder:
         except Exception:
             pass
         # We intentionally do not reset last_enqueue_ts to preserve pacing; only metrics reset is needed.
-        
+
     def feed_queues(self):
         """Feed video frames to model queues, enforcing per-view infps intervals when provided."""
         global_exit_flag = False  # This should be passed from the main application
@@ -272,12 +296,13 @@ class VideoFeeder:
                 now = time.time()
                 # Feed frames to all views that are running YOLO models
                 for view_name in list(self.yolo_views):
-                    if view_name not in self.view_frame_queues:
+                    with self._queue_lock:
+                        frame_q = self.view_frame_queues.get(view_name)
+                    if frame_q is None:
                         continue
                     interval = self.view_intervals.get(view_name)  # None means no throttle (enqueue every frame)
                     last_ts = self.last_enqueue_ts.get(view_name, 0.0)
                     if (interval is None) or ((now - last_ts) >= interval):
-                        frame_q = self.view_frame_queues[view_name]
                         try:
                             frame_q.put_nowait((frame.copy(), now))
                             self.last_enqueue_ts[view_name] = now
@@ -311,6 +336,7 @@ class ResnetImageFeeder:
         """
         self.image_dir = image_dir
         self.view_frame_queues = view_frame_queues
+        self._queue_lock = threading.Lock()  # Protects view_frame_queues for adaptive deploy swaps
         self.resnet_views = set(resnet_views or [])
         self.shutdown_flag = shutdown_flag
         self.model_settings = model_settings or {}
@@ -344,6 +370,29 @@ class ResnetImageFeeder:
             self._images = []
         if not self._images:
             print("[ResnetImageFeeder] No images found. Feeder will be idle.")
+
+    def update_intervals(self, model_settings):
+        """Recalculate per-view enqueue intervals from updated model_settings at runtime."""
+        self.model_settings = model_settings or self.model_settings
+        for v in self.resnet_views:
+            try:
+                infps = self.model_settings.get(v, {}).get("infps", None)
+                if infps is None:
+                    interval = self.default_interval_sec
+                else:
+                    inf = float(infps)
+                    interval = (1.0 / inf) if inf > 0 else None
+                self.view_intervals[v] = interval
+            except Exception:
+                self.view_intervals[v] = self.default_interval_sec
+
+    def swap_view_queue(self, view_name, new_queue):
+        """Thread-safe swap of the frame queue for a view (used by adaptive deploy)."""
+        with self._queue_lock:
+            self.view_frame_queues[view_name] = new_queue
+            if view_name not in self.drop_counts:
+                self.drop_counts[view_name] = 0
+            print(f"[ResnetImageFeeder] Swapped queue for {view_name}")
 
     def start_feed_thread(self):
         thread = threading.Thread(target=self.feed_queues, daemon=True)
@@ -383,7 +432,8 @@ class ResnetImageFeeder:
             now = time.time()
             try:
                 for view_name in list(self.resnet_views):
-                    q = self.view_frame_queues.get(view_name)
+                    with self._queue_lock:
+                        q = self.view_frame_queues.get(view_name)
                     if q is None:
                         continue
                     interval = self.view_intervals.get(view_name, self.default_interval_sec)

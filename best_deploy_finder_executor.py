@@ -347,8 +347,15 @@ class BestDeployFinderApp(QMainWindow):
             pairs = ", ".join([f"{m}: {int(v)}" for m, v in sorted(self.input_fps_by_model.items())])
             self._log(f"[Info] Updated input rates: {pairs}")
 
+        def apply_rates_live():
+            """Save rates and push to running viewer feeders without XGBoost prediction."""
+            save_rates()
+            if self._viewer:
+                self._viewer.update_input_rates(self.input_fps_by_model)
+                self._log("[Info] Applied input rates to running execution.")
+
         # Connect Apply button
-        apply_btn.clicked.connect(save_rates)
+        apply_btn.clicked.connect(apply_rates_live)
 
         predict_start_btn = dlg.findChild(QPushButton, 'predict_start')
         if predict_start_btn:
@@ -605,16 +612,24 @@ class BestDeployFinderApp(QMainWindow):
     def _launch_executor_direct(self, schedule_path: str, combo_name: str = None, duration: int = None):
         """Launch UnifiedViewer direct (controller-less mode)."""
         self.log(f"[Exec] Launching viewer direct for: {combo_name or 'All'}")
-        
+
         try:
             # Initialize or reuse UnifiedViewer directly
             duration = duration or 60
-            
+
+            # Check adaptive deploy checkbox
+            adaptive = False
+            try:
+                if hasattr(self, 'use_adaptive_deploy') and self.use_adaptive_deploy.isChecked():
+                    adaptive = True
+            except Exception:
+                pass
+
             if self._viewer:
-                self.log("[Exec] Reusing existing viewer instance.")
+                self.log(f"[Exec] Reusing existing viewer instance. adaptive={adaptive}")
                 # Update viewer state for the new combination using the new update_combination method
-                self._viewer.update_combination(schedule_path, combo_name)
-                
+                self._viewer.update_combination(schedule_path, combo_name, adaptive=adaptive)
+
                 # Bring to front without repositioning
                 try:
                     if self._viewer.isVisible():
@@ -641,12 +656,17 @@ class BestDeployFinderApp(QMainWindow):
                 self._viewer = viewer
             
             self._running_combo_name = combo_name
-            
-            # Start execution directly using parent.start_execution logic flow
-            self.start_execution(duration)
 
-            # Start metrics timer
-            self._metrics_timer.start()
+            # In adaptive mode with an already-running viewer, skip restart —
+            # AdaptiveDeployManager already hot-swapped only the changed workers.
+            if adaptive and self._viewer and getattr(self._viewer, '_run_active', False):
+                self.log("[Exec] Adaptive deploy: execution continues with hot-swapped workers")
+                self._metrics_timer.start()
+            else:
+                # Start execution directly using parent.start_execution logic flow
+                self.start_execution(duration)
+                # Start metrics timer
+                self._metrics_timer.start()
 
             return True
         except Exception as e:
@@ -873,6 +893,10 @@ class BestDeployFinderApp(QMainWindow):
                             is_alive = is_viewer_alive or is_executor_alive
                             if is_alive and running_name and str(running_name) == str(self._current_best_combo):
                                 self.log(f"[Decision] Same selection and same combination '{running_name}' is already running. Keeping current executor.")
+                                # Apply any pending input rate changes live
+                                if self._viewer and getattr(self, 'input_fps_by_model', None):
+                                    self._viewer.update_input_rates(self.input_fps_by_model)
+                                    self.log("[Decision] Applied updated input rates to running execution.")
                                 return
                         except Exception:
                             pass

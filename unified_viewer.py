@@ -1100,29 +1100,36 @@ class UnifiedViewer(QMainWindow):
         except Exception as e:
             pass
     
-    def update_combination(self, schedule_file, combination_name):
+    def update_combination(self, schedule_file, combination_name, adaptive=False):
         """Update the viewer with a new schedule file and combination name for reuse.
-        
+
         Args:
             schedule_file (str): Path to the new model scheduling information file.
             combination_name (str): New combination key to use from the YAML.
+            adaptive (bool): If True, use adaptive deployment (hot-swap only changed-device models).
         """
-        print(f"[UnifiedViewer] Updating combination to: {combination_name} (File: {schedule_file})")
+        print(f"[UnifiedViewer] Updating combination to: {combination_name} (File: {schedule_file}) adaptive={adaptive}")
         self.schedule_file = schedule_file
         self.requested_combination = combination_name
-        
-        # Stop any active run before updating settings
-        try:
-            self.stop_execution()
-        except Exception:
-            pass
-            
-        # Re-initialize with new combination settings
-        self.initialize_model_settings(schedule_file, combination_name)
-        # Note: UI components (placeholders) are typically static once created,
-        # but we re-initialize state variables for the new run.
-        self.initialize_state_variables()
-        
+
+        if adaptive and getattr(self, '_run_active', False):
+            # Adaptive path: hot-swap only changed-device models (isolated in adaptive_deploy.py)
+            from adaptive_deploy import AdaptiveDeployManager
+            mgr = AdaptiveDeployManager(self)
+            mgr.execute(schedule_file, combination_name)
+        else:
+            # Original path: stop everything and restart
+            try:
+                self.stop_execution()
+            except Exception:
+                pass
+
+            # Re-initialize with new combination settings
+            self.initialize_model_settings(schedule_file, combination_name)
+            # Note: UI components (placeholders) are typically static once created,
+            # but we re-initialize state variables for the new run.
+            self.initialize_state_variables()
+
         # Bring window to front if needed, but maintain position/geometry
         try:
             if not self.isVisible():
@@ -1133,6 +1140,31 @@ class UnifiedViewer(QMainWindow):
         except Exception:
             pass
     
+    def update_input_rates(self, input_fps_by_model):
+        """Update input rates on running feeders without restarting execution.
+
+        Args:
+            input_fps_by_model: Dict mapping model base name to desired input FPS.
+        """
+        if not input_fps_by_model:
+            return
+        # Update model_settings infps for each view whose model matches
+        for view_name, settings in self.model_settings.items():
+            model_name = settings.get("model", "")
+            if not model_name:
+                continue
+            # Strip path and extension to get base name for matching
+            import os as _os
+            base = _os.path.splitext(_os.path.basename(model_name))[0]
+            if base in input_fps_by_model:
+                settings["infps"] = input_fps_by_model[base]
+        # Push updated intervals to running feeders
+        if getattr(self, 'video_feeder', None):
+            self.video_feeder.update_intervals(self.model_settings)
+        if getattr(self, 'resnet_feeder', None):
+            self.resnet_feeder.update_intervals(self.model_settings)
+        print(f"[UnifiedViewer] Input rates updated live: {input_fps_by_model}")
+
     # Monitoring and statistics methods
     def start_execution(self, duration):
         """
