@@ -1100,20 +1100,35 @@ class UnifiedViewer(QMainWindow):
         except Exception as e:
             pass
     
-    def update_combination(self, schedule_file, combination_name, adaptive=False):
+    def update_combination(self, schedule_file, combination_name, adaptive=False,
+                           reactive=False, prev_combo_name=None,
+                           prev_model_set=None, prev_vscore=None):
         """Update the viewer with a new schedule file and combination name for reuse.
 
         Args:
             schedule_file (str): Path to the new model scheduling information file.
             combination_name (str): New combination key to use from the YAML.
-            adaptive (bool): If True, use adaptive deployment (hot-swap only changed-device models).
+            adaptive (bool): Mode 1 — adaptive hot-swap only changed-device models.
+            reactive (bool): Mode 2 — adaptive hot-swap + reactive rollback/fallback.
+            prev_combo_name (str): Previous combination name (for Mode 2 rollback).
+            prev_model_set (set): Previous model name set (for Mode 2 same-model check).
+            prev_vscore (float): Previous stable V(t) (for Mode 2 rollback delta).
         """
-        print(f"[UnifiedViewer] Updating combination to: {combination_name} (File: {schedule_file}) adaptive={adaptive}")
+        print(f"[UnifiedViewer] Updating combination to: {combination_name} "
+              f"(File: {schedule_file}) adaptive={adaptive} reactive={reactive}")
         self.schedule_file = schedule_file
         self.requested_combination = combination_name
 
-        if adaptive and getattr(self, '_run_active', False):
-            # Adaptive path: hot-swap only changed-device models (isolated in adaptive_deploy.py)
+        if reactive and getattr(self, '_run_active', False):
+            # Reactive path (Mode 2): adaptive hot-swap + monitor & rollback/fallback
+            from reactive_deploy import ReactiveDeployManager
+            mgr = ReactiveDeployManager(self)
+            mgr.execute(schedule_file, combination_name,
+                        prev_combo_name=prev_combo_name,
+                        prev_model_set=prev_model_set,
+                        prev_vscore=prev_vscore)
+        elif adaptive and getattr(self, '_run_active', False):
+            # Adaptive path (Mode 1): hot-swap only changed-device models
             from adaptive_deploy import AdaptiveDeployManager
             mgr = AdaptiveDeployManager(self)
             mgr.execute(schedule_file, combination_name)
@@ -1253,8 +1268,21 @@ class UnifiedViewer(QMainWindow):
         # Schedule stopping execution after the specified duration (includes warmup)
         QTimer.singleShot(duration * 1000, self.timed_shutdown)
     
+    def cancel_timed_shutdown(self):
+        """Prevent the pending timed_shutdown from stopping execution.
+
+        Called by the executor when adaptive mode keeps the viewer alive
+        between combinations so the old timer doesn't kill the run.
+        """
+        self._timed_shutdown_cancelled = True
+
     def timed_shutdown(self):
         """Stop execution after the scheduled duration without closing the application."""
+        # If adaptive deploy cancelled this timer, skip the shutdown
+        if getattr(self, '_timed_shutdown_cancelled', False):
+            print("[timed_shutdown] Cancelled (adaptive deploy transition in progress)")
+            self._timed_shutdown_cancelled = False
+            return
         print("Execution duration completed, stopping model execution...")
         try:
             self.stop_execution_async()
@@ -1653,6 +1681,71 @@ class UnifiedViewer(QMainWindow):
             # print(f"[Viewer] metrics label update failed: {e}")
             pass
         
+        # Per-second metrics CSV recording (enabled when metrics_csv_path is set)
+        # Skip recording during warmup (before measurement window starts)
+        try:
+            csv_path = getattr(self, 'metrics_csv_path', None)
+            _mstart = getattr(self, 'measurement_start_ts', None)
+            if csv_path and getattr(self, '_run_active', False) and _mstart and _mstart > 0:
+                import csv as _csv
+                write_header = not os.path.exists(csv_path)
+                combo = getattr(self, 'current_combination', '')
+                # Collect per-view FPS
+                v1f = float(getattr(getattr(self, 'view1_handler', None), 'avg_fps', 0.0) or 0.0)
+                v2f = float(getattr(getattr(self, 'view2_handler', None), 'avg_fps', 0.0) or 0.0)
+                v3f = float(getattr(getattr(self, 'view3_handler', None), 'avg_fps', 0.0) or 0.0)
+                v4f = float(getattr(getattr(self, 'view4_handler', None), 'avg_fps', 0.0) or 0.0)
+                # Skip recording if all FPS are zero during an active run —
+                # this is a transient artifact at deploy transitions, not a real measurement
+                _all_zero = (v1f + v2f + v3f + v4f) == 0.0
+                v1it = getattr(getattr(self, 'view1_handler', None), 'avg_infer_time', 0.0) or 0.0
+                v2it = getattr(getattr(self, 'view2_handler', None), 'avg_infer_time', 0.0) or 0.0
+                v3it = getattr(getattr(self, 'view3_handler', None), 'avg_infer_time', 0.0) or 0.0
+                v4it = getattr(getattr(self, 'view4_handler', None), 'avg_infer_time', 0.0) or 0.0
+                sched = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
+                t_fps = sum({"view1": v1f, "view2": v2f, "view3": v3f, "view4": v4f}[v] for v in sched)
+                # Compute QoS violation score inline
+                _vl_sum = 0.0
+                _n_act = 0
+                for _vn in sched:
+                    _h = getattr(self, f"{_vn}_handler", None)
+                    if _h:
+                        _li = float(getattr(_h, 'avg_infer_time', 0.0) or 0.0)
+                        _infps = float((_h.model_settings or {}).get(_vn, {}).get('infps', 10.0) or 10.0) if hasattr(_h, 'model_settings') else 10.0
+                        _lslo = 1000.0 / _infps if _infps > 0 else 100.0
+                        _vl_sum += max(0.0, (_li / _lslo) - 1.0)
+                        _n_act += 1
+                _vl_t = (_vl_sum / _n_act) if _n_act > 0 else 0.0
+                # Drop rate
+                import time as _t2
+                _active = set(list(getattr(self, 'yolo_views', set()) or set())) | set(list(getattr(self, 'resnet_views', set()) or set()))
+                _vf2 = getattr(self, 'video_feeder', None)
+                _rf2 = getattr(self, 'resnet_feeder', None)
+                _td = sum(int(getattr(_vf2, 'drop_counts', {}).get(v, 0) or 0) for v in _active) if _vf2 else 0
+                _td += sum(int(getattr(_rf2, 'drop_counts', {}).get(v, 0) or 0) for v in _active) if _rf2 else 0
+                try:
+                    _el = max(0.001, _t2.time() - float(getattr(self, 'measurement_start_ts', 0.0)))
+                except Exception:
+                    _el = 1.0
+                _dr = _td / _el if _el > 0 else 0.0
+                if not _all_zero:
+                    with open(csv_path, 'a', newline='') as _cf:
+                        _w = _csv.writer(_cf)
+                        if write_header:
+                            _w.writerow(['timestamp', 'combination', 'total_fps',
+                                         'view1_fps', 'view2_fps', 'view3_fps', 'view4_fps',
+                                         'view1_infer_ms', 'view2_infer_ms', 'view3_infer_ms', 'view4_infer_ms',
+                                         'drop_rate_fps', 'v_score'])
+                        _w.writerow([
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            combo, f"{t_fps:.2f}",
+                            f"{v1f:.2f}", f"{v2f:.2f}", f"{v3f:.2f}", f"{v4f:.2f}",
+                            f"{v1it:.2f}", f"{v2it:.2f}", f"{v3it:.2f}", f"{v4it:.2f}",
+                            f"{_dr:.4f}", f"{_vl_t:.6f}",
+                        ])
+        except Exception as _e:
+            pass
+
         # Update previous stats for next calculation
         self.prev_cpu_stats = current
     

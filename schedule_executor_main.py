@@ -24,11 +24,14 @@ from unified_viewer import UnifiedViewer, InfoWindow
 class ScheduleExecutor:
     """Encapsulates state and behavior for running schedule combinations sequentially."""
 
-    def __init__(self, schedule_file: str, duration: int, info_window: InfoWindow, selected_combo: str = None):
+    def __init__(self, schedule_file: str, duration: int, info_window: InfoWindow,
+                 selected_combo: str = None, adaptive_mode: int = 0, metrics_csv: str = None):
         self.schedule_file = schedule_file
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
         self._selected_combo = selected_combo
+        self.adaptive_mode = adaptive_mode  # 0=off, 1=adaptive hot-swap, 2=reserved
+        self.metrics_csv = metrics_csv      # Path for per-second CSV metrics recording
 
         self._viewer: UnifiedViewer = None
         self._index: int = 0
@@ -143,11 +146,26 @@ class ScheduleExecutor:
         combo = self._combinations[self._index]
         print(f"[Executor] Starting schedule: {combo}")
 
+        adaptive = (self.adaptive_mode == 1)
+        reactive = (self.adaptive_mode == 2)
+
         # Reuse existing viewer if it exists
         if self._viewer is not None:
-            print(f"[Executor] Reusing existing viewer for schedule: {combo}")
+            print(f"[Executor] Reusing existing viewer for schedule: {combo} "
+                  f"(adaptive={adaptive}, reactive={reactive})")
             try:
-                self._viewer.update_combination(self.schedule_file, combo)
+                # Collect previous state for reactive mode (rollback/fallback)
+                prev_combo = getattr(self, '_prev_running_combo', None)
+                prev_model_set = getattr(self, '_prev_model_set', None)
+                prev_vscore = getattr(self, '_prev_stable_vscore', None)
+
+                self._viewer.update_combination(
+                    self.schedule_file, combo,
+                    adaptive=adaptive, reactive=reactive,
+                    prev_combo_name=prev_combo,
+                    prev_model_set=prev_model_set,
+                    prev_vscore=prev_vscore,
+                )
             except Exception as e:
                 print(f"[Executor] Error updating combination: {e}")
                 self._cleanup_viewer()
@@ -169,6 +187,13 @@ class ScheduleExecutor:
         # Pass shared results path to the viewer so all combinations append to the same run file
         try:
             self._viewer.results_path = self._results_path
+        except Exception:
+            pass
+
+        # Pass metrics CSV path for per-second recording
+        try:
+            if self.metrics_csv:
+                self._viewer.metrics_csv_path = self.metrics_csv
         except Exception:
             pass
 
@@ -209,13 +234,81 @@ class ScheduleExecutor:
             run_duration = max(1, min(measured_duration + 1, remaining))
         else:
             run_duration = measured_duration + 1
-        self._viewer.start_execution(run_duration)
 
-        # Schedule moving to the next combination after run_duration + small buffer (ms)
-        buffer_ms = 1000
-        QTimer.singleShot((run_duration * 1000) + buffer_ms, self._after_stop)
+        # In adaptive/reactive mode with a still-running viewer, skip start_execution —
+        # the hot-swap manager already transitioned workers while the run continued.
+        if (adaptive or reactive) and getattr(self._viewer, '_run_active', False):
+            print(f"[Executor] {'Reactive' if reactive else 'Adaptive'}: execution continues, hot-swap in progress")
+        else:
+            self._viewer.start_execution(run_duration)
+
+        # Save current state for reactive mode's rollback/fallback tracking
+        self._prev_running_combo = combo
+        try:
+            ms = getattr(self._viewer, 'model_settings', {}) or {}
+            self._prev_model_set = set(
+                cfg.get("model", "") for cfg in ms.values() if cfg.get("model", "")
+            )
+        except Exception:
+            self._prev_model_set = None
+        # Stable V(t) will be collected by ReactiveDeployManager after stabilisation;
+        # store the last known value from the previous combo here.
+        try:
+            from reactive_deploy import _collect_vscore
+            if self._viewer and getattr(self._viewer, '_run_active', False):
+                self._prev_stable_vscore = _collect_vscore(self._viewer)
+        except Exception:
+            self._prev_stable_vscore = None
+
+        # Schedule moving to the next combination.
+        # For adaptive/reactive: fire BEFORE timed_shutdown so we can cancel it
+        # and keep the viewer alive. For mode 0: fire after with a buffer.
+        if adaptive or reactive:
+            # Fire 1 second before timed_shutdown (which fires at run_duration*1000)
+            after_ms = max(1000, (run_duration - 1) * 1000)
+            QTimer.singleShot(after_ms, self._after_stop)
+        else:
+            buffer_ms = 1000
+            QTimer.singleShot((run_duration * 1000) + buffer_ms, self._after_stop)
 
     def _after_stop(self):
+        if not self._running:
+            return
+
+        adaptive = (self.adaptive_mode == 1)
+        reactive = (self.adaptive_mode == 2)
+        is_last = (self._index + 1 >= len(self._combinations))
+
+        if (adaptive or reactive) and not is_last:
+            # Adaptive/reactive mode: skip stop_execution between combos so the viewer
+            # stays alive and update_combination can hot-swap.
+            # Also cancel the pending timed_shutdown from the previous start_execution,
+            # otherwise it will fire independently and kill the running workers.
+            if self._viewer is not None:
+                self._viewer.cancel_timed_shutdown()
+        elif reactive and is_last:
+            # Reactive mode on the last combo: delay stop to allow rollback to
+            # execute and produce measurable results. The reactive monitor needs
+            # 5s stabilisation + hot-swap time + recovery observation.
+            if self._viewer is not None:
+                self._viewer.cancel_timed_shutdown()
+            print(f"[Executor] Reactive: last combo — extending run for potential rollback")
+            extra_sec = 15  # extra seconds to observe rollback recovery
+            QTimer.singleShot(extra_sec * 1000, self._reactive_final_stop)
+            return  # skip normal _run_next advancement
+        else:
+            try:
+                if self._viewer is not None:
+                    self._viewer.stop_execution()
+            except Exception as e:
+                print(f"[Executor] Warning: stop_execution error: {e}")
+
+        self._index += 1
+        QTimer.singleShot(300, self._run_next)
+
+    def _reactive_final_stop(self):
+        """Final stop for reactive mode after rollback observation window."""
+        print("[Executor] Reactive: rollback observation window ended. Stopping execution.")
         if not self._running:
             return
         try:
@@ -223,8 +316,19 @@ class ScheduleExecutor:
                 self._viewer.stop_execution()
         except Exception as e:
             print(f"[Executor] Warning: stop_execution error: {e}")
-        self._index += 1
-        QTimer.singleShot(300, self._run_next)  # short delay to flush file writes
+        self._running = False
+        self._index = 0
+        self._set_start_button_enabled(True)
+        self._write_best_header()
+        # Signal auto-mode exit if applicable
+        try:
+            from PyQt5.QtWidgets import QApplication
+            from PyQt5.QtCore import QTimer as _Qt
+            app = QApplication.instance()
+            if app:
+                _Qt.singleShot(500, app.quit)
+        except Exception:
+            pass
 
     def _write_best_header(self):
         """Rewrite the run results file into required object format with best deployment."""
@@ -427,6 +531,10 @@ def main():
                         help='When set, run only the specified combination name from the schedule file in executor-only mode (no controller).')
     parser.add_argument('--auto_start_all', action='store_true',
                         help='Automatically start running all combinations and quit the app when done (no Start button needed).')
+    parser.add_argument('--adaptive-mode', type=int, default=0, choices=[0, 1, 2],
+                        help='Adaptive deploy mode: 0=off, 1=adaptive hot-swap, 2=reserved (default: 0)')
+    parser.add_argument('--metrics-csv', type=str, default=None,
+                        help='Path to CSV file for per-second metrics recording')
     args = parser.parse_args()
 
     # Resolve schedule path: if given path doesn't exist, try tests/<basename>
@@ -485,7 +593,10 @@ def main():
             pass
         
         try:
-            executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
+            executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info,
+                                        selected_combo=args.schedule_name,
+                                        adaptive_mode=getattr(args, 'adaptive_mode', 0),
+                                        metrics_csv=getattr(args, 'metrics_csv', None))
         except ValueError as e:
             print(f"[Main] ERROR: {e}")
             return 1
@@ -525,7 +636,9 @@ def main():
 
     # Default GUI mode with controller
     try:
-        executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info)
+        executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info,
+                                    adaptive_mode=getattr(args, 'adaptive_mode', 0),
+                                    metrics_csv=getattr(args, 'metrics_csv', None))
     except ValueError as e:
         print(f"[Main] ERROR: {e}")
         return 1

@@ -7,7 +7,9 @@ whose device changes by starting the new worker in the background and
 switching over once it is ready.
 """
 import copy
+import os
 import queue
+import yaml
 from threading import Event, Thread
 from queue import Queue
 
@@ -88,15 +90,65 @@ class AdaptiveDeployManager:
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_combination(schedule_file, combination_name):
+        """Parse a schedule YAML and return model_settings dict for one combination.
+
+        Returns (settings_dict, views_without_model_set, headless_ids_list).
+        This does NOT touch the viewer — it is a pure read operation.
+        """
+        with open(schedule_file, "r") as f:
+            config = yaml.safe_load(f) or {}
+
+        combo_key = combination_name
+        if combo_key not in config and config:
+            combo_key = next(iter(config))
+
+        settings = {}
+        views_without = set()
+        headless_ids = []
+
+        if combo_key in config:
+            for model_config_name, model_config in (config[combo_key] or {}).items():
+                if not isinstance(model_config, dict) or "display" not in model_config:
+                    continue
+                view_name = model_config.get("display")
+                vnorm = str(view_name).strip().lower() if view_name is not None else ""
+
+                if (not vnorm) or (vnorm in {"none", "off", "hidden", "no", "false", "0"}):
+                    safe_name = str(model_config_name).replace(" ", "_")
+                    hid = f"headless_{safe_name}"
+                    headless_ids.append(hid)
+                    settings[hid] = {
+                        "model": model_config.get("model", ""),
+                        "execution": model_config.get("execution", "cpu"),
+                        "infps": model_config.get("infps", None),
+                    }
+                    continue
+
+                if vnorm in {"view1", "view2", "view3", "view4"}:
+                    settings[vnorm] = {
+                        "model": model_config.get("model", ""),
+                        "execution": model_config.get("execution", "cpu"),
+                        "infps": model_config.get("infps", None),
+                    }
+
+        for vn in ("view1", "view2", "view3", "view4"):
+            if vn not in settings:
+                views_without.add(vn)
+                settings[vn] = {"model": "", "execution": "cpu"}
+
+        return settings, views_without, headless_ids, combo_key
+
     def execute(self, schedule_file, combination_name):
         """Perform an adaptive combination switch.
 
-        1. Snapshot current model_settings.
-        2. Load new model_settings from the schedule file.
-        3. For each view compare old/new:
-           - Same model+device -> keep running (no-op).
-           - Different -> hot-swap (start new worker, wait for ready, switch queues).
-        4. Update feeder view-sets if model type (yolo/resnet) changed.
+        Key difference from the non-adaptive path: we do NOT call
+        viewer.initialize_model_settings() which would replace model_settings
+        and views_without_model atomically, causing a brief state where
+        metrics reads 0. Instead we parse the YAML independently and
+        update the viewer's state incrementally, keeping kept-view
+        handler references and stats intact throughout.
         """
         v = self.viewer
 
@@ -105,9 +157,9 @@ class AdaptiveDeployManager:
         old_yolo_views = set(getattr(v, 'yolo_views', set()))
         old_resnet_views = set(getattr(v, 'resnet_views', set()))
 
-        # --- 2. Load new model_settings (does NOT start processes) -----------
-        v.initialize_model_settings(schedule_file, combination_name)
-        new_settings = v.model_settings
+        # --- 2. Parse new settings WITHOUT touching the viewer ---------------
+        new_settings, new_views_without, new_headless_ids, combo_key = \
+            self._parse_combination(schedule_file, combination_name)
 
         # --- 3. Per-view comparison & hot-swap -------------------------------
         kept_views = set()
@@ -145,11 +197,33 @@ class AdaptiveDeployManager:
                 self._hot_swap_view(vname, old_cfg, new_cfg)
                 swapped_views.add(vname)
 
-        # --- 4. Handle headless views (stop all old, start new) -----
-        # Headless views are lightweight; always restart them cleanly.
+        # --- 4. Incrementally update viewer state (kept views stay intact) ---
+        # Update model_settings in-place: overwrite entries for swapped views,
+        # keep existing entries for kept views so handler references stay valid.
+        for vname in self.NAMED_VIEWS:
+            if vname in swapped_views:
+                v.model_settings[vname] = new_settings[vname]
+        # Update views_without_model
+        v.views_without_model = new_views_without
+        # Update combination name and schedule label
+        v.current_combination = combo_key
+        v.schedule_file = schedule_file
+        v.requested_combination = combination_name
+        try:
+            v.info_window.update_schedule_name(f"Current Schedule: {combo_key}")
+        except Exception:
+            pass
+        # Update headless ids for new combination
+        v.headless_ids = new_headless_ids
+        # Update model_settings for headless entries
+        for hid in new_headless_ids:
+            if hid in new_settings:
+                v.model_settings[hid] = new_settings[hid]
+
+        # --- 5. Handle headless views (stop all old, start new) -----
         self._restart_headless(old_settings, new_settings)
 
-        # --- 5. Update feeder yolo/resnet view-sets --------------------------
+        # --- 6. Update feeder yolo/resnet view-sets --------------------------
         self._update_feeders(old_yolo_views, old_resnet_views, swapped_views, new_settings)
 
         print(f"[AdaptiveDeploy] Transition complete. kept={kept_views}, swapped={swapped_views}")

@@ -617,18 +617,40 @@ class BestDeployFinderApp(QMainWindow):
             # Initialize or reuse UnifiedViewer directly
             duration = duration or 60
 
-            # Check adaptive deploy checkbox
+            # Check adaptive deploy mode (0=off, 1=adaptive, 2=reactive)
             adaptive = False
+            reactive = False
             try:
-                if hasattr(self, 'use_adaptive_deploy') and self.use_adaptive_deploy.isChecked():
-                    adaptive = True
+                if hasattr(self, 'use_adaptive_deploy'):
+                    # Checkbox maps: unchecked=mode 0, checked=mode 1
+                    # CLI --adaptive-mode can set mode 2
+                    if self.use_adaptive_deploy.isChecked():
+                        adaptive = True
             except Exception:
                 pass
+            # CLI override: adaptive_mode attribute may be set by main()
+            _cli_mode = getattr(self, '_adaptive_mode_cli', None)
+            if _cli_mode == 2:
+                reactive = True
+                adaptive = False
+            elif _cli_mode == 1:
+                adaptive = True
+                reactive = False
 
             if self._viewer:
-                self.log(f"[Exec] Reusing existing viewer instance. adaptive={adaptive}")
-                # Update viewer state for the new combination using the new update_combination method
-                self._viewer.update_combination(schedule_path, combo_name, adaptive=adaptive)
+                self.log(f"[Exec] Reusing existing viewer instance. adaptive={adaptive} reactive={reactive}")
+                # Collect previous state for reactive rollback
+                prev_combo = getattr(self, '_running_combo_name', None)
+                prev_model_set = getattr(self, '_prev_model_set', None)
+                prev_vscore = getattr(self, '_prev_stable_vscore', None)
+
+                self._viewer.update_combination(
+                    schedule_path, combo_name,
+                    adaptive=adaptive, reactive=reactive,
+                    prev_combo_name=prev_combo,
+                    prev_model_set=prev_model_set,
+                    prev_vscore=prev_vscore,
+                )
 
                 # Bring to front without repositioning
                 try:
@@ -657,10 +679,25 @@ class BestDeployFinderApp(QMainWindow):
             
             self._running_combo_name = combo_name
 
-            # In adaptive mode with an already-running viewer, skip restart —
-            # AdaptiveDeployManager already hot-swapped only the changed workers.
-            if adaptive and self._viewer and getattr(self._viewer, '_run_active', False):
-                self.log("[Exec] Adaptive deploy: execution continues with hot-swapped workers")
+            # Track previous model set for reactive mode
+            try:
+                ms = getattr(self._viewer, 'model_settings', {}) or {}
+                self._prev_model_set = set(
+                    cfg.get("model", "") for cfg in ms.values() if cfg.get("model", "")
+                )
+            except Exception:
+                self._prev_model_set = None
+            try:
+                from reactive_deploy import _collect_vscore
+                if self._viewer and getattr(self._viewer, '_run_active', False):
+                    self._prev_stable_vscore = _collect_vscore(self._viewer)
+            except Exception:
+                self._prev_stable_vscore = None
+
+            # In adaptive/reactive mode with an already-running viewer, skip restart —
+            # the hot-swap manager already transitioned only the changed workers.
+            if (adaptive or reactive) and self._viewer and getattr(self._viewer, '_run_active', False):
+                self.log(f"[Exec] {'Reactive' if reactive else 'Adaptive'} deploy: execution continues")
                 self._metrics_timer.start()
             else:
                 # Start execution directly using parent.start_execution logic flow
@@ -1183,6 +1220,8 @@ class BestDeployFinderApp(QMainWindow):
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Best Deploy Finder GUI')
     parser.add_argument('--models-root', type=str, help='Path to the models root folder (default: ./models)')
+    parser.add_argument('--adaptive-mode', type=int, default=0, choices=[0, 1, 2],
+                        help='Adaptive deploy mode: 0=off, 1=adaptive hot-swap, 2=reactive (default: 0)')
     return parser.parse_args()
 
 
@@ -1190,6 +1229,10 @@ def main():
     args = parse_arguments()
     app = QApplication(sys.argv)
     window = BestDeployFinderApp(models_root=args.models_root)
+    # Apply --adaptive-mode CLI argument
+    window._adaptive_mode_cli = args.adaptive_mode
+    if hasattr(window, 'use_adaptive_deploy') and args.adaptive_mode == 1:
+        window.use_adaptive_deploy.setChecked(True)
     window.show()
     sys.exit(app.exec_())
 
