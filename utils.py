@@ -235,6 +235,20 @@ def resolve_npu_object_o(logical_name: str, part: int = 1) -> str:
     # Fallback
     return candidates[0]
 
+
+def resolve_npu_partition_onnx(logical_name: str, part: int = 0) -> str:
+    """Resolve NPU partition ONNX path. part=0 for front, part=2 for back."""
+    base = _normalize_base(logical_name)
+    suffix = f"{base}_neubla_p{part}.onnx"
+    candidates = [
+        os.path.join("models", base, "partitions", suffix),
+        os.path.join("models", logical_name, "partitions", f"{logical_name}_neubla_p{part}.onnx"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return candidates[0]
+
 # -------------------------------------------------------------
 # Image/Qt and system utilities (existing)
 # -------------------------------------------------------------

@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 import queue
-
 # import npu
 
 # Import local modules
@@ -20,7 +19,7 @@ from image_processing import (
 
 # Modularized timing/logging utilities (moved to dedicated module)
 from timing_utils import log_model_load, log_inference
-from utils import resolve_cpu_model_onnx, resolve_npu_object_o
+from utils import resolve_cpu_model_onnx, resolve_npu_object_o, resolve_npu_partition_onnx
 
 # Load ImageNet class labels
 with open("imagenet_classes.txt", "r") as f:
@@ -532,10 +531,10 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
         except:
             pass
 
-def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, view_name=None):
+def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, view_name=None, model_name="resnet50_small"):
     """
     Process for running ResNet model on NPU.
-    
+
     Args:
         image_dir: Directory containing images to process
         output_queue: Queue to put output results into
@@ -544,48 +543,47 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
         view_name: Optional view identifier for logging
     """
     try:
-        # Import NPU-specific functions only when needed
-        from npu import (
-            initialize_driver, 
-            close_driver, 
-            send_receive_data_npu, 
-            resnet50_prepare_onnx_model,
-            resnet50_preprocess
-        )
+        from npu import initialize_driver, close_driver, send_receive_data_npu
+
         driver = None
+        # Load front partition (p0) from models/ directory
+        front_onnx = resolve_npu_partition_onnx(model_name, part=0)
+        back_onnx = resolve_npu_partition_onnx(model_name, part=2)
+
         try:
             host_load_s = time.time()
-            front_sess, back_sess, params = resnet50_prepare_onnx_model(
-                "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
-            )
+            front_sess = ort.InferenceSession(front_onnx)
+            back_sess = ort.InferenceSession(back_onnx) if os.path.exists(back_onnx) else None
             host_load_e = time.time()
             host_model_load_ms = (host_load_e - host_load_s) * 1000.0
         except Exception as e:
             print(f"[ResNet NPU INIT ERROR] Host model preparation failed: {e}")
             raise
 
-        scale = params['/0/avgpool/GlobalAveragePool_output_0_scale'] * params['0.fc.weight_scale']
-        zp_act = params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
-        zp_w = params['0.fc.weight_zero_point']
-        scale_out = params['/0/fc/Gemm_output_0_scale']
-        zp_out = params['/0/fc/Gemm_output_0_zero_point']
-        weight_q = params['0.fc.weight_quantized'].T.astype(np.int32)
+        # Extract quantization params from front partition for manual fallback
+        quant_params = {}
+        try:
+            import onnx
+            onnx_model = onnx.load(front_onnx)
+            for init in onnx_model.graph.initializer:
+                quant_params[init.name] = onnx.numpy_helper.to_array(init)
+        except Exception:
+            pass
 
         try:
             npu_load_s = time.time()
-            driver = initialize_driver(npu_id, resolve_npu_object_o("resnet50_small", part=1))
+            driver = initialize_driver(npu_id, resolve_npu_object_o(model_name, part=1))
             npu_load_e = time.time()
             npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
         except Exception as e:
             print(f"[ResNet NPU INIT ERROR] NPU driver initialization failed: {e}")
             raise
 
-        # Log model load (host + NPU memory)
         log_model_load(
             pipeline="resnet50",
             device=f"NPU{npu_id}",
             view=view_name,
-            model="resnet50_small",
+            model=model_name,
             model_load_time_ms=host_model_load_ms,
             npu_memory_load_time_ms=npu_memory_load_time_ms,
         )
@@ -602,9 +600,8 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
                 continue
 
             pre_s = time.time()
-            # Waiting time until preprocessing begins
             wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            input_data = front_sess.run(None, {"input": resnet50_preprocess(img)})[0].tobytes()
+            input_data = front_sess.run(None, {"input": resnet50_preprocess_local(img)})[0].tobytes()
             pre_e = time.time()
             pre_ms = (pre_e - pre_s) * 1000.0
             infer_start = time.time()
@@ -613,22 +610,36 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
                 output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
             except Exception as e:
                 print(f"[ResNet NPU DATA TRANSFER ERROR] send/receive failed: {e}")
-                # Skip this frame and continue
                 continue
 
             try:
-                back_output = back_sess.run(None, {"input": output_data.reshape(1, -1)})
-                output = back_output[0]
-                max_index = int(np.argmax(output))
-            except Exception as e:
-                # Fallback to manual computation if back session fails
-                output = np.matmul(output_data.astype(np.int32), weight_q)
-                output -= zp_act * np.sum(weight_q, axis=0)
-                output -= zp_w * np.sum(output_data, axis=0)
-                output += zp_act * zp_w
-                output = np.round(output * scale / scale_out) + zp_out
-                output = output.astype(np.uint8)
-                max_index = int(np.argmax(output))
+                if back_sess is not None:
+                    back_inp = back_sess.get_inputs()[0]
+                    expected_size = int(np.prod(back_inp.shape))
+                    feed = output_data[:expected_size].reshape(back_inp.shape)
+                    back_out = back_sess.run(None, {back_inp.name: feed})
+                    max_index = int(np.argmax(back_out[0]))
+                else:
+                    raise RuntimeError("no back session")
+            except Exception:
+                # Manual dequant fallback
+                try:
+                    scale = quant_params['/0/avgpool/GlobalAveragePool_output_0_scale'] * quant_params['0.fc.weight_scale']
+                    zp_act = quant_params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
+                    zp_w = quant_params['0.fc.weight_zero_point']
+                    scale_out = quant_params['/0/fc/Gemm_output_0_scale']
+                    zp_out = quant_params['/0/fc/Gemm_output_0_zero_point']
+                    weight_q = quant_params['0.fc.weight_quantized'].T.astype(np.int32)
+                    output = np.matmul(output_data.astype(np.int32), weight_q)
+                    output -= zp_act * np.sum(weight_q, axis=0)
+                    output -= zp_w * np.sum(output_data, axis=0)
+                    output += zp_act * zp_w
+                    output = np.round(output * scale / scale_out) + zp_out
+                    output = output.astype(np.uint8)
+                    max_index = int(np.argmax(output))
+                except Exception as e2:
+                    print(f"[ResNet NPU POSTPROCESS ERROR] {e2}")
+                    continue
 
             infer_end = time.time()
             post_s = time.time()
@@ -638,12 +649,11 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
             post_ms = (post_e - post_s) * 1000.0
 
             infer_ms = (infer_end - infer_start) * 1000.0
-            # Log per-frame inference timing
             log_inference(
                 pipeline="resnet50",
                 device=f"NPU{npu_id}",
                 view=view_name,
-                model="resnet50_small",
+                model=model_name,
                 preprocess_time_ms=pre_ms,
                 inference_time_ms=infer_ms,
                 postprocess_time_ms=post_ms,
@@ -655,7 +665,6 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
     except Exception as e:
         print(f"[ResNet NPU Process ERROR] {e}")
     finally:
-        # Import close_driver only when needed
         try:
             from npu import close_driver
             close_driver(driver)

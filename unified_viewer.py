@@ -12,6 +12,12 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
 from queue import Queue
 from threading import Event, Thread
+import multiprocessing as mp
+
+
+def _oq_attr(view_name):
+    """Return the output queue attribute name for a view."""
+    return f"{view_name}_output_queue" if view_name in ("view1", "view2") else f"{view_name}_result_queue"
 import threading
 
 # Import local modules
@@ -624,10 +630,16 @@ class UnifiedViewer(QMainWindow):
                         daemon=True,
                     )
                 elif execution in ("npu0", "npu1"):
-                    print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {hid} ({model}).")
-                    process = Thread(
-                        target=run_yolo_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid, model),
+                    npu_id = int(execution[-1])
+                    frame_queue = mp.Queue(maxsize=2)
+                    output_queue = mp.Queue(maxsize=1)
+                    shutdown_event = mp.Event()
+                    self.headless_frame_queues[hid] = frame_queue
+                    self.headless_output_queues[hid] = output_queue
+                    self.headless_shutdown_events[hid] = shutdown_event
+                    process = mp.Process(
+                        target=run_yolo_npu_process,
+                        args=(frame_queue, output_queue, shutdown_event, npu_id, hid, model),
                         daemon=True,
                     )
                 else:
@@ -645,10 +657,16 @@ class UnifiedViewer(QMainWindow):
                         daemon=True,
                     )
                 elif execution in ("npu0", "npu1"):
-                    print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {hid}.")
-                    process = Thread(
-                        target=run_resnet_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
+                    npu_id = int(execution[-1])
+                    frame_queue = mp.Queue(maxsize=2)
+                    output_queue = mp.Queue(maxsize=1)
+                    shutdown_event = mp.Event()
+                    self.headless_frame_queues[hid] = frame_queue
+                    self.headless_output_queues[hid] = output_queue
+                    self.headless_shutdown_events[hid] = shutdown_event
+                    process = mp.Process(
+                        target=run_resnet_npu_process,
+                        args=(frame_queue, output_queue, shutdown_event, npu_id, hid, model),
                         daemon=True,
                     )
                 else:
@@ -803,11 +821,18 @@ class UnifiedViewer(QMainWindow):
                     daemon=True,
                 )
             elif execution in ("npu0", "npu1"):
-                # NPU execution is deprecated; fall back to GPU to align with new policy
-                print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {view_name} ({model}).")
-                process = Thread(
-                    target=run_yolo_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name, model),
+                npu_id = int(execution[-1])
+                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id} (process)")
+                # Replace queues/event with multiprocessing versions for NPU Process
+                frame_queue = mp.Queue(maxsize=2)
+                output_queue = mp.Queue(maxsize=1)
+                shutdown_event = mp.Event()
+                setattr(self, f"{view_name}_frame_queue", frame_queue)
+                setattr(self, _oq_attr(view_name), output_queue)
+                setattr(self, f"{view_name}_shutdown_event", shutdown_event)
+                process = mp.Process(
+                    target=run_yolo_npu_process,
+                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
                     daemon=True,
                 )
             else:
@@ -828,10 +853,17 @@ class UnifiedViewer(QMainWindow):
                     daemon=True,
                 )
             elif execution in ("npu0", "npu1"):
-                print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {view_name} ({model}).")
-                process = Thread(
-                    target=run_resnet_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
+                npu_id = int(execution[-1])
+                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id} (process)")
+                frame_queue = mp.Queue(maxsize=2)
+                output_queue = mp.Queue(maxsize=1)
+                shutdown_event = mp.Event()
+                setattr(self, f"{view_name}_frame_queue", frame_queue)
+                setattr(self, _oq_attr(view_name), output_queue)
+                setattr(self, f"{view_name}_shutdown_event", shutdown_event)
+                process = mp.Process(
+                    target=run_resnet_npu_process,
+                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
                     daemon=True,
                 )
             else:

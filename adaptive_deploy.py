@@ -10,6 +10,7 @@ import copy
 import os
 import queue
 import yaml
+import multiprocessing as mp
 from threading import Event, Thread
 from queue import Queue
 
@@ -18,6 +19,8 @@ from model_processors import (
     run_resnet_cpu_process,
     run_yolo_gpu_process,
     run_resnet_gpu_process,
+    run_yolo_npu_process,
+    run_resnet_npu_process,
 )
 
 
@@ -49,6 +52,13 @@ def _create_worker_thread(view_name, cfg, frame_queue, output_queue, shutdown_ev
                 kwargs={"ready_event": ready_event},
                 daemon=True,
             )
+        elif execution in ("npu0", "npu1"):
+            npu_id = int(execution[-1])
+            return mp.Process(
+                target=run_yolo_npu_process,
+                args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
+                daemon=True,
+            )
         else:
             return Thread(
                 target=run_yolo_cpu_process,
@@ -62,6 +72,13 @@ def _create_worker_thread(view_name, cfg, frame_queue, output_queue, shutdown_ev
                 target=run_resnet_gpu_process,
                 args=(frame_queue, output_queue, shutdown_event, view_name),
                 kwargs={"ready_event": ready_event},
+                daemon=True,
+            )
+        elif execution in ("npu0", "npu1"):
+            npu_id = int(execution[-1])
+            return mp.Process(
+                target=run_resnet_npu_process,
+                args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
                 daemon=True,
             )
         else:
@@ -241,18 +258,25 @@ class AdaptiveDeployManager:
         old_frame_q = getattr(v, f"{vname}_frame_queue", None)
         old_output_q = getattr(v, _output_queue_attr(vname), None)
 
-        # Create new resources
-        new_frame_q = Queue(maxsize=2)
-        new_output_q = Queue(maxsize=1)
-        new_shutdown = Event()
-        ready_event = Event()
+        # Create new resources — use multiprocessing types for NPU workers
+        new_execution = new_cfg.get("execution", "cpu")
+        _is_npu = new_execution in ("npu0", "npu1")
+        new_frame_q = mp.Queue(maxsize=2) if _is_npu else Queue(maxsize=2)
+        new_output_q = mp.Queue(maxsize=1) if _is_npu else Queue(maxsize=1)
+        new_shutdown = mp.Event() if _is_npu else Event()
+        ready_event = Event()  # watcher is always a thread
 
         new_process = _create_worker_thread(vname, new_cfg, new_frame_q, new_output_q, new_shutdown, ready_event)
         new_process.start()
 
         # Watcher thread: waits for ready, then atomically swaps queues
         def _watcher():
-            ready_event.wait()  # blocks until model loaded
+            if _is_npu:
+                # NPU Process doesn't support ready_event; wait for process to start
+                import time as _tw
+                _tw.sleep(3.0)
+            else:
+                ready_event.wait()  # blocks until model loaded
             print(f"[AdaptiveDeploy] {vname}: new worker ready, switching queues")
 
             # 1. Swap feeder input queue (thread-safe via lock)
@@ -305,9 +329,10 @@ class AdaptiveDeployManager:
     # ------------------------------------------------------------------
     def _start_fresh_view(self, vname, cfg):
         v = self.viewer
-        frame_q = Queue(maxsize=2)
-        output_q = Queue(maxsize=1)
-        shutdown_ev = Event()
+        _is_npu = cfg.get("execution", "cpu") in ("npu0", "npu1")
+        frame_q = mp.Queue(maxsize=2) if _is_npu else Queue(maxsize=2)
+        output_q = mp.Queue(maxsize=1) if _is_npu else Queue(maxsize=1)
+        shutdown_ev = mp.Event() if _is_npu else Event()
 
         setattr(v, f"{vname}_frame_queue", frame_q)
         setattr(v, _output_queue_attr(vname), output_q)
