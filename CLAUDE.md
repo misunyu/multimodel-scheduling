@@ -56,7 +56,7 @@ python schedule_executor_main.py --schedule <schedule.yaml> --duration 30 --auto
 
 ### Performance Logging
 
-Model inference metrics are logged asynchronously (`utils.async_log`) to JSON Lines files under `results/`. Each record includes timestamps, FPS, latency, and run IDs. QoS violation scores are computed from throughput/drop-rate deviations.
+Model inference metrics are logged asynchronously (`utils.async_log`) to JSON Lines files under `results/`. Each record includes timestamps, FPS, latency, and run IDs. The QoS violation score is `V(t) = (1/T) · Σ_{τ=t-T+1..t} v(τ)` where `v(τ) = (1/N) · Σ_i max(0, ℓ_i(τ)/L_SLO,i − 1)` and `T = 5s`.
 
 ### Scripts Directory
 

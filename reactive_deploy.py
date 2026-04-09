@@ -70,37 +70,43 @@ def _estimate_gpu_mem(model_name: str) -> float:
 # Violation score helpers
 # ---------------------------------------------------------------------------
 
-def _collect_vscore(viewer, alpha: float = 0.3, window_T: int = 5) -> float:
-    """Compute instantaneous V(t) = V_L(t) + alpha * D_tilde(t) from the viewer."""
+def _collect_vscore(viewer, window_T: int = 5) -> float:
+    """Compute V(t) = (1/T) * sum_{tau=t-T+1}^{t} v(tau) from the viewer.
+
+    v(tau) = (1/N) * sum_i max(0, l_i(tau)/L_SLO,i - 1)
+    """
     views_without = getattr(viewer, 'views_without_model', set())
     sched = [v for v in ("view1", "view2", "view3", "view4") if v not in views_without]
 
-    vl_sum = 0.0
+    v_sum = 0.0
     n_active = 0
     for vname in sched:
         handler = getattr(viewer, f"{vname}_handler", None)
         if handler is None:
             continue
-        li = float(getattr(handler, 'avg_infer_time', 0.0) or 0.0)
+        infer_ms = float(getattr(handler, 'avg_infer_time', 0.0) or 0.0)
+        wait_ms = float(getattr(handler, 'avg_wait_ms', 0.0) or 0.0)
+        li = infer_ms + wait_ms  # end-to-end response time
+        if li <= 0:
+            # Cold-starting view (no measurement yet) — skip so v(t) is not
+            # diluted toward zero by views that have not produced data.
+            continue
         ms = getattr(handler, 'model_settings', None) or {}
         infps = float((ms.get(vname) or {}).get('infps', 10.0) or 10.0)
         l_slo = 1000.0 / infps if infps > 0 else 100.0
-        vl_sum += max(0.0, (li / l_slo) - 1.0)
+        v_sum += max(0.0, (li / l_slo) - 1.0)
         n_active += 1
 
-    vl_t = (vl_sum / n_active) if n_active > 0 else 0.0
+    v_t = (v_sum / n_active) if n_active > 0 else 0.0
 
-    # D_tilde from viewer's violation_history (maintained by _update_live_metrics)
-    hist = getattr(viewer, '_violation_history_mode2', [])
-    hist.append(1 if vl_t > 0 else 0)
+    # Sliding window of v(tau) samples on the viewer (one entry per call)
+    hist = getattr(viewer, '_v_history_mode2', [])
+    hist.append(v_t)
     if len(hist) > window_T:
         hist[:] = hist[-window_T:]
-    viewer._violation_history_mode2 = hist
-    d_t = sum(hist)
-    t_min = len(hist)
-    d_tilde = d_t / t_min if t_min > 0 else 0.0
+    viewer._v_history_mode2 = hist
 
-    return vl_t + alpha * d_tilde
+    return sum(hist) / len(hist) if hist else 0.0
 
 
 def _collect_model_costs(viewer) -> dict:
@@ -180,9 +186,9 @@ class ReactiveDeployManager:
     """
 
     STABILISATION_SEC = 5       # seconds to wait before measuring V(t)
+    WINDOW_T = 5                # length of the V(t) sliding window (seconds)
     ROLLBACK_DELTA = 5.0        # V(t) increase threshold for rollback
     FALLBACK_VSCORE = 40.0      # V(t) threshold for fallback heuristic
-    ALPHA = 0.3
 
     def __init__(self, viewer):
         self.viewer = viewer
@@ -200,7 +206,7 @@ class ReactiveDeployManager:
            - Different model set → fallback heuristic if V(t) > FALLBACK_VSCORE
         """
         v = self.viewer
-        v._violation_history_mode2 = []  # fresh history for D_tilde
+        v._v_history_mode2 = []  # fresh sliding window for V(t)
 
         # --- Phase 1: hot-swap via AdaptiveDeployManager --------------------
         adaptive_mgr = AdaptiveDeployManager(v)
@@ -246,7 +252,7 @@ class ReactiveDeployManager:
             return
 
         # Measure stable V(t)
-        new_vscore = _collect_vscore(v, alpha=self.ALPHA)
+        new_vscore = _collect_vscore(v, window_T=self.WINDOW_T)
         print(f"[ReactiveDeployManager] Stable V(t) = {new_vscore:.4f} "
               f"(prev={prev_vscore}, same_models={same_models})")
 

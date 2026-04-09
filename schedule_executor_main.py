@@ -25,13 +25,17 @@ class ScheduleExecutor:
     """Encapsulates state and behavior for running schedule combinations sequentially."""
 
     def __init__(self, schedule_file: str, duration: int, info_window: InfoWindow,
-                 selected_combo: str = None, adaptive_mode: int = 0, metrics_csv: str = None):
+                 selected_combo: str = None, adaptive_mode: int = 0, metrics_csv: str = None,
+                 combo_durations: dict = None):
         self.schedule_file = schedule_file
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
         self._selected_combo = selected_combo
         self.adaptive_mode = adaptive_mode  # 0=off, 1=adaptive hot-swap, 2=reserved
         self.metrics_csv = metrics_csv      # Path for per-second CSV metrics recording
+        # Optional per-combo duration override: {combo_name: int_seconds}
+        # When a combo is not in this map, default_duration is used.
+        self.combo_durations = dict(combo_durations or {})
 
         self._viewer: UnifiedViewer = None
         self._index: int = 0
@@ -226,7 +230,9 @@ class ScheduleExecutor:
             pass
 
         # Apply 1-second warmup: run for duration+1, but measurement starts after 1s inside viewer
-        measured_duration = self.default_duration
+        measured_duration = int(self.combo_durations.get(combo, self.default_duration))
+        if measured_duration < 1:
+            measured_duration = 1
         # If capped, ensure we don't exceed remaining time (include 1s warm-up)
         if getattr(self, '_end_time', None) is not None:
             remaining = max(0, int(self._end_time - time.time()))
@@ -535,7 +541,25 @@ def main():
                         help='Adaptive deploy mode: 0=off, 1=adaptive hot-swap, 2=reserved (default: 0)')
     parser.add_argument('--metrics-csv', type=str, default=None,
                         help='Path to CSV file for per-second metrics recording')
+    parser.add_argument('--combo-duration', action='append', default=[],
+                        metavar='COMBO=SECONDS',
+                        help='Per-combination duration override. Repeatable. '
+                             'Combos not listed here use --duration. '
+                             'Example: --combo-duration combination_failure=5')
     args = parser.parse_args()
+
+    # Parse --combo-duration overrides into a {combo_name: seconds} dict
+    combo_durations: dict = {}
+    for spec in (args.combo_duration or []):
+        if "=" not in spec:
+            print(f"[Main] WARNING: ignoring malformed --combo-duration '{spec}' (need COMBO=SECONDS)")
+            continue
+        name, _, val = spec.partition("=")
+        name = name.strip()
+        try:
+            combo_durations[name] = max(1, int(val.strip()))
+        except ValueError:
+            print(f"[Main] WARNING: ignoring --combo-duration '{spec}' (seconds must be int)")
 
     # Resolve schedule path: if given path doesn't exist, try tests/<basename>
     schedule_path = args.schedule
@@ -596,7 +620,8 @@ def main():
             executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info,
                                         selected_combo=args.schedule_name,
                                         adaptive_mode=getattr(args, 'adaptive_mode', 0),
-                                        metrics_csv=getattr(args, 'metrics_csv', None))
+                                        metrics_csv=getattr(args, 'metrics_csv', None),
+                                        combo_durations=combo_durations)
         except ValueError as e:
             print(f"[Main] ERROR: {e}")
             return 1
@@ -638,7 +663,8 @@ def main():
     try:
         executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info,
                                     adaptive_mode=getattr(args, 'adaptive_mode', 0),
-                                    metrics_csv=getattr(args, 'metrics_csv', None))
+                                    metrics_csv=getattr(args, 'metrics_csv', None),
+                                    combo_durations=combo_durations)
     except ValueError as e:
         print(f"[Main] ERROR: {e}")
         return 1

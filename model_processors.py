@@ -358,7 +358,7 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
                 if shutdown_event.is_set():
                     break
                 try:
-                    output_queue.put((img, class_name, infer_time_ms))
+                    output_queue.put((img, class_name, infer_time_ms, wait_ms))
                 except (BrokenPipeError, EOFError, OSError) as e:
                     print(f"[ResNet CPU] Output queue closed: {e}. Exiting process loop.")
                     break
@@ -650,7 +650,7 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
                 wait_to_preprocess_ms=wait_ms,
             )
 
-            output_queue.put((img, class_name, infer_ms))
+            output_queue.put((img, class_name, infer_ms, wait_ms))
 
     except Exception as e:
         print(f"[ResNet NPU Process ERROR] {e}")
@@ -985,7 +985,7 @@ def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=
                 )
 
                 try:
-                    output_queue.put((img, class_name, infer_time_ms))
+                    output_queue.put((img, class_name, infer_time_ms, wait_ms))
                 except (BrokenPipeError, EOFError, OSError) as e:
                     print(f"[ResNet GPU] Output queue closed: {e}. Exiting process loop.")
                     break

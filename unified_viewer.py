@@ -524,14 +524,34 @@ class UnifiedViewer(QMainWindow):
                 continue
     
     def initialize_state_variables(self):
-        """Initialize state variables."""
+        """Initialize state variables.
+
+        Most fields here are recreated on every (re)start so workers and
+        handlers see fresh shutdown events. The fields below, however, are
+        deliberately PERSISTENT across stop_execution / start_execution
+        cycles so that input feeders can keep pushing frames during the
+        cold-start gap of mode 0 phase transitions:
+
+          - feeder_shutdown_flag : separate Event used only by feeders;
+                                   set only on full application shutdown.
+          - video_frame_queue,
+            view{1..4}_frame_queue : feeder-side queues. New workers in the
+                                     next phase consume any frames the
+                                     feeders pushed during the gap, so
+                                     wait_ms (and therefore v(t)) reflects
+                                     the real cold-start backlog.
+        """
         # Global flag for signaling threads to exit
         self.global_exit_flag = False
-        
+
         # Initialize common state variables
         self.shutdown_flag = Event()
         self.prev_cpu_stats = get_cpu_metrics(interval=0)
-        
+
+        # Persistent feeder shutdown flag — created once per viewer lifetime.
+        if not hasattr(self, 'feeder_shutdown_flag') or self.feeder_shutdown_flag is None:
+            self.feeder_shutdown_flag = Event()
+
         # Ensure stop_execution is idempotent: save throughput only once per schedule
         self._already_stopped = False
         # Track if a run is currently active to prevent duplicate starts
@@ -540,30 +560,36 @@ class UnifiedViewer(QMainWindow):
         # Store the requested execution window duration (seconds) for saving into results
         self.window_duration_sec = None
 
-        # Initialize queues and events
-        self.video_frame_queue = Queue(maxsize=2)
+        # Persistent input queues — only create them once. Output queues and
+        # per-view shutdown events are still recreated each phase below.
+        if not hasattr(self, 'video_frame_queue') or self.video_frame_queue is None:
+            self.video_frame_queue = Queue(maxsize=2)
         self.video_shutdown_event = Event()
-        
-        # View1 queues and events
-        self.view1_frame_queue = Queue(maxsize=2)
+
+        # View1
+        if not hasattr(self, 'view1_frame_queue') or self.view1_frame_queue is None:
+            self.view1_frame_queue = Queue(maxsize=2)
         self.view1_output_queue = Queue(maxsize=1)
         self.view1_shutdown_event = Event()
-        
-        # View2 queues and events
-        self.view2_frame_queue = Queue(maxsize=2)
+
+        # View2
+        if not hasattr(self, 'view2_frame_queue') or self.view2_frame_queue is None:
+            self.view2_frame_queue = Queue(maxsize=2)
         self.view2_output_queue = Queue(maxsize=1)
         self.view2_shutdown_event = Event()
-        
-        # View3 queues and events
-        self.view3_frame_queue = Queue(maxsize=2)
+
+        # View3
+        if not hasattr(self, 'view3_frame_queue') or self.view3_frame_queue is None:
+            self.view3_frame_queue = Queue(maxsize=2)
         self.view3_result_queue = Queue(maxsize=1)
         self.view3_shutdown_event = Event()
-        
-        # View4 queues and events
-        self.view4_frame_queue = Queue(maxsize=2)
+
+        # View4
+        if not hasattr(self, 'view4_frame_queue') or self.view4_frame_queue is None:
+            self.view4_frame_queue = Queue(maxsize=2)
         self.view4_result_queue = Queue(maxsize=1)
         self.view4_shutdown_event = Event()
-        
+
         # Initialize a dictionary to track which views are running YOLO models (need video frames)
         self.yolo_views = set()
         # Track ResNet views that need image feeder at 10 Hz
@@ -846,8 +872,17 @@ class UnifiedViewer(QMainWindow):
         process.start()
     
     def initialize_threads(self):
-        """Initialize and start view handler threads."""
-        # Create view frame queues dictionary
+        """Initialize and start view handler threads.
+
+        Feeders are persistent across phase transitions: if a feeder already
+        exists from a previous start_execution() call, we reuse it and just
+        update its model_settings / view sets so that it picks up the new
+        infps and (still-the-same) frame queues. This way the feeder keeps
+        pushing frames during the cold-start gap of mode 0, so the new
+        workers see a backlog and v(t) reflects realistic transition cost.
+        """
+        # Create view frame queues dictionary (these Queue objects are persistent
+        # across phases — see initialize_state_variables).
         view_frame_queues = {
             "view1": self.view1_frame_queue,
             "view2": self.view2_frame_queue,
@@ -857,29 +892,52 @@ class UnifiedViewer(QMainWindow):
         # Extend with headless frame queues so feeders can push inputs
         for hid, fq in (getattr(self, 'headless_frame_queues', {}) or {}).items():
             view_frame_queues[hid] = fq
-        
-        # Start video feeder thread only if there are YOLOv4 views
-        self.video_feeder = None
+
+        # ----- Video feeder (YOLO) -----
+        existing_vf = getattr(self, 'video_feeder', None)
         if self.yolo_views:
-            self.video_feeder = VideoFeeder(
-                self.video_frame_queue,
-                view_frame_queues,
-                self.yolo_views,
-                self.shutdown_flag,
-                model_settings=self.model_settings
+            if existing_vf is None:
+                self.video_feeder = VideoFeeder(
+                    self.video_frame_queue,
+                    view_frame_queues,
+                    self.yolo_views,
+                    self.feeder_shutdown_flag,
+                    model_settings=self.model_settings
+                )
+                self.video_feeder.start_feed_thread()
+            else:
+                # Reuse: refresh view set, queue map, and per-view intervals
+                existing_vf.yolo_views = set(self.yolo_views)
+                with existing_vf._queue_lock:
+                    for vn, q in view_frame_queues.items():
+                        existing_vf.view_frame_queues[vn] = q
+                existing_vf.update_intervals(self.model_settings)
+        # If there are no YOLO views in this phase but a feeder exists from a
+        # previous YOLO phase, leave it running with an empty yolo_views set
+        # (it will simply idle until the next phase brings YOLO back).
+        elif existing_vf is not None:
+            existing_vf.yolo_views = set()
+            existing_vf.update_intervals(self.model_settings)
+
+        # ----- ResNet image feeder -----
+        existing_rf = getattr(self, 'resnet_feeder', None)
+        if existing_rf is None:
+            self.resnet_feeder = ResnetImageFeeder(
+                image_dir="./imagenet-sample-images",
+                view_frame_queues=view_frame_queues,
+                resnet_views=self.resnet_views,
+                shutdown_flag=self.feeder_shutdown_flag,
+                model_settings=self.model_settings,
+                default_interval_sec=0.5
             )
-            self.video_feeder.start_feed_thread()
-        # Start ResNet image feeder honoring per-view infps (defaulting to 2 FPS)
-        self.resnet_feeder = ResnetImageFeeder(
-            image_dir="./imagenet-sample-images",
-            view_frame_queues=view_frame_queues,
-            resnet_views=self.resnet_views,
-            shutdown_flag=self.shutdown_flag,
-            model_settings=self.model_settings,
-            default_interval_sec=0.5
-        )
-        self.resnet_feeder.start_feed_thread()
-        
+            self.resnet_feeder.start_feed_thread()
+        else:
+            existing_rf.resnet_views = set(self.resnet_views)
+            with existing_rf._queue_lock:
+                for vn, q in view_frame_queues.items():
+                    existing_rf.view_frame_queues[vn] = q
+            existing_rf.update_intervals(self.model_settings)
+
         # Start view handler threads
         self.initialize_view_handlers()
     
@@ -1016,6 +1074,11 @@ class UnifiedViewer(QMainWindow):
         print("\n[SIGINT] Caught Ctrl+C, shutting down...")
         # Immediately set shutdown flags to stop video generation
         self.shutdown_flag.set()
+        try:
+            if hasattr(self, 'feeder_shutdown_flag') and self.feeder_shutdown_flag:
+                self.feeder_shutdown_flag.set()
+        except Exception:
+            pass
         self.global_exit_flag = True
         
         # Set all shutdown events to stop processes
@@ -1048,6 +1111,11 @@ class UnifiedViewer(QMainWindow):
             try:
                 if hasattr(self, 'shutdown_flag') and self.shutdown_flag:
                     self.shutdown_flag.set()
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'feeder_shutdown_flag') and self.feeder_shutdown_flag:
+                    self.feeder_shutdown_flag.set()
             except Exception:
                 pass
             self.global_exit_flag = True
@@ -1089,6 +1157,14 @@ class UnifiedViewer(QMainWindow):
         try:
             self.stop_execution()
         except Exception as e:
+            pass
+        # Now also stop the persistent feeders (they survive stop_execution
+        # so the viewer can do mode 0 phase transitions without losing input
+        # frames; full app shutdown is the only place we tear them down).
+        try:
+            if hasattr(self, 'feeder_shutdown_flag') and self.feeder_shutdown_flag:
+                self.feeder_shutdown_flag.set()
+        except Exception:
             pass
         # Request application quit without forcing interpreter exit
         try:
@@ -1238,11 +1314,15 @@ class UnifiedViewer(QMainWindow):
         # Note: vid_proc can legitimately be None when no yolov4 models are scheduled.
         # Treat that as "not running" so we (re)initialize processes/threads for ResNet-only runs too.
         if (vid_proc is None) or (hasattr(vid_proc, 'is_alive') and not vid_proc.is_alive()):
-            # Reset runtime state (events/queues/flags) for a fresh run after Stop
+            # Reset runtime state (events/queues/flags) for a fresh run after Stop.
+            # Note: feeders and input queues are deliberately NOT cleared so they
+            # keep running across phase transitions in mode 0 — see
+            # initialize_state_variables() / initialize_threads() docstrings.
             try:
                 self.initialize_state_variables()
-                # Also clear handler references from previous run to aid GC
-                for name in ['view1_handler','view2_handler','view3_handler','view4_handler','video_feeder','resnet_feeder']:
+                # Clear only handler references (workers/handlers are recreated).
+                # Feeders are reused across phases so do NOT clear them here.
+                for name in ['view1_handler','view2_handler','view3_handler','view4_handler']:
                     if hasattr(self, name):
                         try:
                             setattr(self, name, None)
@@ -1476,13 +1556,16 @@ class UnifiedViewer(QMainWindow):
                 print(f"[Queue Drain] {name}: {count} items drained")
             except Exception:
                 pass
-        # Enumerate all queues used in the viewer
+        # Drain only OUTPUT queues. Input frame queues (video_frame_queue,
+        # view*_frame_queue) are persistent across phase transitions so the
+        # feeders can continue pushing during the cold-start gap; draining
+        # them here would discard exactly the backlog we want the next phase
+        # to see (and would reset the wait-time spike that drives V(t) up).
         queue_names = [
-            'video_frame_queue',
-            'view1_frame_queue', 'view1_output_queue',
-            'view2_frame_queue', 'view2_output_queue',
-            'view3_frame_queue', 'view3_result_queue',
-            'view4_frame_queue', 'view4_result_queue',
+            'view1_output_queue',
+            'view2_output_queue',
+            'view3_result_queue',
+            'view4_result_queue',
         ]
         for name in queue_names:
             q = getattr(self, name, None)
@@ -1704,18 +1787,36 @@ class UnifiedViewer(QMainWindow):
                 v4it = getattr(getattr(self, 'view4_handler', None), 'avg_infer_time', 0.0) or 0.0
                 sched = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
                 t_fps = sum({"view1": v1f, "view2": v2f, "view3": v3f, "view4": v4f}[v] for v in sched)
-                # Compute QoS violation score inline
-                _vl_sum = 0.0
+                # Compute the per-tick (instantaneous) QoS violation v(t):
+                #   v(t) = (1/N_active) * sum_i max(0, l_i(t)/L_SLO,i - 1)
+                # where N_active is the number of scheduled views that have
+                # actually produced at least one measurement so far, and
+                # l_i(t) is the END-TO-END response time (queue wait + infer)
+                # for model i. We deliberately skip views that have not yet
+                # produced any measurement (cold start of new workers): if
+                # they were counted with l_i = 0 they would dilute the average
+                # exactly when we need v(t) to spike. Including wait time lets
+                # v(t) reflect cold-start backlogs that build up while feeders
+                # keep running but workers are restarting (mode 0 transitions).
+                # The windowed score V(t) = mean of v(tau) over the last T
+                # ticks is computed downstream from this per-tick value.
+                _v_sum = 0.0
                 _n_act = 0
                 for _vn in sched:
                     _h = getattr(self, f"{_vn}_handler", None)
                     if _h:
-                        _li = float(getattr(_h, 'avg_infer_time', 0.0) or 0.0)
+                        _infer = float(getattr(_h, 'avg_infer_time', 0.0) or 0.0)
+                        _wait = float(getattr(_h, 'avg_wait_ms', 0.0) or 0.0)
+                        _li = _infer + _wait
+                        if _li <= 0:
+                            # View has no measurement yet (cold-starting worker).
+                            # Skip so it doesn't dilute v(t) toward zero.
+                            continue
                         _infps = float((_h.model_settings or {}).get(_vn, {}).get('infps', 10.0) or 10.0) if hasattr(_h, 'model_settings') else 10.0
                         _lslo = 1000.0 / _infps if _infps > 0 else 100.0
-                        _vl_sum += max(0.0, (_li / _lslo) - 1.0)
+                        _v_sum += max(0.0, (_li / _lslo) - 1.0)
                         _n_act += 1
-                _vl_t = (_vl_sum / _n_act) if _n_act > 0 else 0.0
+                _v_t = (_v_sum / _n_act) if _n_act > 0 else 0.0
                 # Drop rate
                 import time as _t2
                 _active = set(list(getattr(self, 'yolo_views', set()) or set())) | set(list(getattr(self, 'resnet_views', set()) or set()))
@@ -1741,7 +1842,7 @@ class UnifiedViewer(QMainWindow):
                             combo, f"{t_fps:.2f}",
                             f"{v1f:.2f}", f"{v2f:.2f}", f"{v3f:.2f}", f"{v4f:.2f}",
                             f"{v1it:.2f}", f"{v2it:.2f}", f"{v3it:.2f}", f"{v4it:.2f}",
-                            f"{_dr:.4f}", f"{_vl_t:.6f}",
+                            f"{_dr:.4f}", f"{_v_t:.6f}",
                         ])
         except Exception as _e:
             pass
