@@ -264,7 +264,7 @@ def make_plot(times_sec, v_t, cold_starts,
         if t0_sec <= ((gs + ge) / 2.0) <= t_recover_sec
     ]
 
-    fig, ax = plt.subplots(figsize=(8.6, 4.8))
+    fig, ax = plt.subplots(figsize=(7.6, 4.8))
 
     # ----- shaded phase regions (background, low zorder) ----------------
     # Pale fills so the V(t) curve drawn on top stays clearly readable.
@@ -340,8 +340,11 @@ def make_plot(times_sec, v_t, cold_starts,
     ax.set_ylim(0.0, y_max)
 
     # ----- legend ---------------------------------------------------------
+    # Anchored just inside the top-right corner — close to the right axis
+    # edge but with a tiny inset so it doesn't visually touch the border.
     if static_times_sec and static_v_t:
-        ax.legend(loc="upper right", framealpha=0.92, fontsize=9)
+        ax.legend(loc="upper right", bbox_to_anchor=(0.985, 0.99),
+                  framealpha=0.92, fontsize=9)
 
     # ----- top-of-axis event labels --------------------------------------
     label_y = y_max * 0.96
@@ -430,18 +433,29 @@ def make_plot(times_sec, v_t, cold_starts,
 
     # ----- phase labels along the bottom ---------------------------------
     # Clamp label positions to the visible X range so labels for phases that
-    # would otherwise sit before x_min still show inside the figure.
+    # would otherwise sit before x_min still show inside the figure. The
+    # right edge of the visible X range is the END OF THE STATIC CURVE
+    # (when present) — the stop-and-start trace usually extends a couple
+    # seconds further but those tail rows are stable-state V(t)≈0 noise
+    # and only create an empty band on the right side of the figure.
+    if static_times_sec:
+        x_max_visible = max(static_times_sec)
+    else:
+        x_max_visible = max(times_sec) if times_sec else 1.0
     bottom_y = y_max * 0.04
-    x_max_for_clamp = max(times_sec) if times_sec else 1.0
     if phase_labels:
         for x_center, name in phase_labels:
-            x_clamped = max(x_min + 0.5, min(x_max_for_clamp - 0.5, x_center))
+            x_clamped = max(x_min + 0.5, min(x_max_visible - 0.5, x_center))
             ax.text(x_clamped, bottom_y, name, fontsize=8, color="#555555",
                     ha="center", va="bottom", style="italic")
 
     # ----- axes ----------------------------------------------------------
-    x_max = max(times_sec) if times_sec else 1.0
-    ax.set_xlim(left=x_min, right=x_max + 1.0)
+    ax.set_xlim(left=x_min, right=x_max_visible + 0.3)
+    # Integer ticks every 2 seconds (e.g. 0, 2, 4, ...) instead of the
+    # default 2.5-second floats matplotlib picks for this range.
+    tick_start = int(x_min)
+    tick_end = int(x_max_visible) + 1
+    ax.set_xticks(list(range(tick_start, tick_end, 2)))
     ax.set_xlabel("Time (seconds)", fontsize=11)
     ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=11)
     ax.grid(True, linestyle="--", alpha=0.4)
