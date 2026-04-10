@@ -264,7 +264,7 @@ def make_plot(times_sec, v_t, cold_starts,
         if t0_sec <= ((gs + ge) / 2.0) <= t_recover_sec
     ]
 
-    fig, ax = plt.subplots(figsize=(7.6, 4.8))
+    fig, ax = plt.subplots(figsize=(6.6, 4.4))
 
     # ----- shaded phase regions (background, low zorder) ----------------
     # Pale fills so the V(t) curve drawn on top stays clearly readable.
@@ -329,21 +329,20 @@ def make_plot(times_sec, v_t, cold_starts,
                 label="stop-and-start", zorder=21)
 
     # ----- y-axis range ---------------------------------------------------
-    visible_v = [v for x, v in zip(times_sec, v_t) if x >= x_min]
-    if static_times_sec and static_v_t:
-        visible_v += [v for x, v in zip(static_times_sec, static_v_t)
-                      if x >= x_min]
-    y_max_data = max(visible_v) if visible_v else 1.0
-    y_max = y_max_data * 1.22
+    # Capped at V(t) = 130 so the figure stays compact: the static curve
+    # tail above 130 is cropped (stop-and-start never goes above ~64).
+    y_max = 130.0
     if y_max <= epsilon:
         y_max = epsilon * 1.5
     ax.set_ylim(0.0, y_max)
 
     # ----- legend ---------------------------------------------------------
-    # Anchored just inside the top-right corner — close to the right axis
-    # edge but with a tiny inset so it doesn't visually touch the border.
+    # Lowered to roughly V(t) = 80 (the top of the legend box sits at that
+    # height). Keeps the upper area free for the t_xxx markers and the
+    # Redeployment downtime annotation.
     if static_times_sec and static_v_t:
-        ax.legend(loc="upper right", bbox_to_anchor=(0.985, 0.99),
+        ax.legend(loc="upper right",
+                  bbox_to_anchor=(0.985, 80.0 / y_max),
                   framealpha=0.92, fontsize=9)
 
     # ----- top-of-axis event labels --------------------------------------
@@ -414,19 +413,22 @@ def make_plot(times_sec, v_t, cold_starts,
         )
         ax.add_patch(empty_ellipse)
 
-        # Text sits high (above all phase arrows / epsilon line / static
-        # curve in this region) and slightly to the right of t_recover
-        # so it never overlaps the t_recover label or the legend. Arrow
-        # tip points at the center of the dotted ellipse.
+        # Text sits just above the legend (whose top is at V(t)≈80) so it
+        # doesn't overlap, but as low as possible so the curved arrow to
+        # the dotted ellipse stays short. Smaller fontsize keeps the
+        # 3-line label compact in the tighter figure.
         text_x = t_recover_sec + 1.4
-        text_y = y_max * 0.78
+        text_y = 89.0
         ax.annotate(
-            "Redeployment\ndowntime\n(no service)",
+            "Redeployment downtime\n(no service)",
             xy=(gap_mid, empty_center_y),
             xytext=(text_x, text_y),
-            arrowprops=dict(arrowstyle="->", color="#444444",
-                            lw=1.2, connectionstyle="arc3,rad=0.25"),
-            fontsize=9, color="#333333",
+            arrowprops=dict(arrowstyle="-|>,head_length=0.5,head_width=0.3",
+                            color="#444444",
+                            lw=1.0, linestyle=':',
+                            facecolor="#444444",
+                            connectionstyle="arc3,rad=0.25"),
+            fontsize=7.5, color="#333333",
             ha="left", va="center",
             zorder=11,
         )
@@ -434,14 +436,12 @@ def make_plot(times_sec, v_t, cold_starts,
     # ----- phase labels along the bottom ---------------------------------
     # Clamp label positions to the visible X range so labels for phases that
     # would otherwise sit before x_min still show inside the figure. The
-    # right edge of the visible X range is the END OF THE STATIC CURVE
-    # (when present) — the stop-and-start trace usually extends a couple
-    # seconds further but those tail rows are stable-state V(t)≈0 noise
-    # and only create an empty band on the right side of the figure.
-    if static_times_sec:
-        x_max_visible = max(static_times_sec)
-    else:
-        x_max_visible = max(times_sec) if times_sec else 1.0
+    # right edge of the visible X range is hard-capped at 18 s — both
+    # curves still get plotted past that, but matplotlib's xlim crops
+    # them. The static tail (>18 s) is just an extension of the
+    # already-clear monotonic climb and the stop-and-start tail is V≈0
+    # stable noise; cropping them tightens the figure horizontally.
+    x_max_visible = 18.0
     bottom_y = y_max * 0.04
     if phase_labels:
         for x_center, name in phase_labels:
