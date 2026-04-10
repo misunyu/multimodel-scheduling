@@ -82,11 +82,11 @@ COLD_START_MIN_GAP = 1.5  # wall-clock seconds: anything bigger between two
 PHASE_DISPLAY = {
     "combination_initial":  "Initial Deployment",
     "combination_overload": None,
-    "combination_offload":  "Changed Stable Deployment",
+    "combination_offload":  "Changed Stable\nDeployment",
     # Backward compatibility with the previous scenario YAML
     "combination_baseline": "Initial Deployment",
     "combination_failure":  None,
-    "combination_recovery": "Changed Stable Deployment",
+    "combination_recovery": "Changed Stable\nDeployment",
 }
 
 
@@ -676,6 +676,13 @@ def main():
     # displayed detection phase from any cold-start gap that happens to sit
     # inside the [t0, t_detect] interval.
     t_detect_sec = times_sec[t_detect_row]
+
+    # t_recover is anchored at the actual 1 Hz tick where V(t) <= epsilon
+    # is first observed. The system can only conclude "recovery complete"
+    # at a measurement tick — there is no V(t) data between ticks, so
+    # interpolating to the exact line/epsilon intersection (which would
+    # land at ~11.7 s for our scenario) would be semantically wrong even
+    # though it visually lines up better with the curve.
     t_recover_sec = times_sec[t_recover_row]
     t0_sec = t_detect_sec - float(WINDOW_T)
 
@@ -734,12 +741,17 @@ def main():
     # ----- Plot -----
     # Phase labels along the bottom (skip phases whose display name is None,
     # e.g. the middle overload phase that we deliberately leave unlabeled).
+    # Phase 3 label is placed at ~16s so the two-line "Changed Stable
+    # Deployment" text sits to the right of the recovering stop-and-start
+    # curve (which doesn't fully relax until ~14 s), inside the cropped
+    # figure right edge (18 s).
+    phase3_label_x = 16.0
     raw_phase_labels = [
         ((times_sec[p1_start] + times_sec[max(p1_start, p2_start - 1)]) / 2.0,
          PHASE_DISPLAY.get(phase_names[0], phase_names[0])),
         ((times_sec[p2_start] + times_sec[max(p2_start, p3_start - 1)]) / 2.0,
          PHASE_DISPLAY.get(phase_names[1], phase_names[1])),
-        ((times_sec[p3_start] + times_sec[p3_end - 1]) / 2.0,
+        (phase3_label_x,
          PHASE_DISPLAY.get(phase_names[2], phase_names[2])),
     ]
     phase_labels = [(x, lbl) for x, lbl in raw_phase_labels if lbl]
