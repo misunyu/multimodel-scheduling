@@ -326,13 +326,14 @@ def main():
         description="Run the QoS recovery scenario and produce qos_score_validation.pdf")
     parser.add_argument("--baseline-duration", type=int, default=12,
                         help="Seconds for the initial (verified) phase (default: 12)")
-    parser.add_argument("--failure-duration", type=int, default=2,
+    parser.add_argument("--failure-duration", type=int, default=3,
                         help="Seconds for the failure (overload) phase. Should be "
                              "long enough that the windowed V(t) (T=3) reaches the "
                              "post-failure plateau before phase 3 starts, but short "
                              "enough that cumulative averaging does not pull V(t) "
-                             "back below epsilon. Default 2 keeps the failure "
-                             "phase at ~3 measurement rows.")
+                             "back below epsilon. Default 3 yields ~4 measurement "
+                             "rows, the V(t) climbs cleanly to a single peak around "
+                             "the rollback transition.")
     parser.add_argument("--recovery-duration", type=int, default=12,
                         help="Seconds for the recovery (offloaded) phase (default: 12)")
     parser.add_argument("--schedule", type=str, default=DEFAULT_SCHEDULE,
