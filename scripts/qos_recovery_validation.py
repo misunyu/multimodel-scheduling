@@ -61,6 +61,7 @@ import time
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
@@ -94,15 +95,24 @@ PHASE_DISPLAY = {
 # ---------------------------------------------------------------------------
 
 def run_scenario(schedule: str, baseline_dur: int, failure_dur: int,
-                 recovery_dur: int, csv_path: str) -> None:
+                 recovery_dur: int, csv_path: str, mode: int = 0,
+                 label: str = "stop-and-restart") -> None:
     """Run the 3-phase scenario in a single executor invocation.
 
-    Mode 0 (stop-and-restart) is used so each phase starts with fresh view
-    handlers (no cumulative-average dilution from earlier phases). The
+    Two modes are supported by this script:
+
+      mode 0 — stop-and-restart. Each phase tears down the running workers
+               and starts fresh ones. Used for the "stop-and-start" line in
+               the figure. The cold-start gap between failure and recovery is
+               where bounded recovery happens.
+      mode 3 — static. The first combination's placement keeps running for
+               the entire scenario; phase transitions only sweep the per-view
+               input rates. Used for the "static" line in the figure: the
+               system never reacts, so V(t) climbs once the input rate
+               exceeds capacity and never returns below epsilon.
+
     --combo-duration overrides let baseline and recovery be long enough to
-    show stable steady-state V(t) while keeping the failure phase short, so
-    the artificial gap between detection and the hardcoded rollback stays
-    small in the figure.
+    show stable steady-state V(t) while keeping the failure phase short.
     """
     if os.path.exists(csv_path):
         os.remove(csv_path)
@@ -111,7 +121,7 @@ def run_scenario(schedule: str, baseline_dur: int, failure_dur: int,
         PYTHON, os.path.join(PROJECT_DIR, "schedule_executor_main.py"),
         "--schedule", schedule,
         "--duration", str(max(baseline_dur, failure_dur, recovery_dur)),
-        "--adaptive-mode", "0",
+        "--adaptive-mode", str(mode),
         "--metrics-csv", csv_path,
         "--auto_start_all",
         "--combo-duration", f"combination_initial={baseline_dur}",
@@ -123,7 +133,7 @@ def run_scenario(schedule: str, baseline_dur: int, failure_dur: int,
     timeout = (baseline_dur + failure_dur + recovery_dur) * 4 + 60
 
     print("=" * 60)
-    print(f"  QoS recovery scenario "
+    print(f"  QoS recovery scenario [{label}, mode={mode}] "
           f"(baseline={baseline_dur}s, failure={failure_dur}s, recovery={recovery_dur}s)")
     print("=" * 60)
     print(f"  cmd: {' '.join(cmd)}")
@@ -221,7 +231,8 @@ def find_cold_start_gaps(times_sec):
 
 def make_plot(times_sec, v_t, cold_starts,
               t0_sec, t_detect_sec, t_recover_sec,
-              epsilon, pdf_path, phase_labels, x_min):
+              epsilon, pdf_path, phase_labels, x_min,
+              static_times_sec=None, static_v_t=None):
     """Render the qos_score_validation figure on a wall-clock X-axis.
 
     The X-axis is wall-clock seconds since the first measurement, so the
@@ -230,9 +241,28 @@ def make_plot(times_sec, v_t, cold_starts,
     blank stretches in the data. Those gaps are explicitly marked with a
     hatched grey vspan labelled "Rollback in progress" so the reader can
     see them while the V(t) curve itself stays a single continuous line.
+
+    If ``static_times_sec`` / ``static_v_t`` are supplied, a second V(t)
+    curve from the static (mode 3) baseline is drawn on the same axes and a
+    legend distinguishing "stop-and-start" from "static" is shown. The
+    static run never recovers, so its line monotonically climbs and stays
+    above epsilon for the rest of the scenario.
     """
     detection_phase = t_detect_sec - t0_sec
     recovery_phase = t_recover_sec - t_detect_sec
+
+    # Filter cold-start gaps to only those that lie inside the detection ->
+    # recovery window. Gaps that happen later (e.g. a brief cpu_timer tick
+    # miss while the GPU workers stabilise in phase 3) are not "real"
+    # redeployment events and they would just visually pollute the
+    # "Changed Stable Deployment" region. We use the same filtered list for
+    # both the hatched shading and the line-break NaN insertion so the
+    # stop-and-start curve also stays continuous through any spurious
+    # post-recovery gaps.
+    relevant_cold_starts = [
+        (gs, ge, gi) for (gs, ge, gi) in cold_starts
+        if t0_sec <= ((gs + ge) / 2.0) <= t_recover_sec
+    ]
 
     fig, ax = plt.subplots(figsize=(8.6, 4.8))
 
@@ -242,31 +272,76 @@ def make_plot(times_sec, v_t, cold_starts,
     ax.axvspan(t_detect_sec, t_recover_sec, color="#b6e3b6", alpha=0.22, zorder=1)
 
     # ----- cold-start gap shading (rollback in progress) ----------------
-    for gap_start, gap_end, _idx in cold_starts:
-        ax.axvspan(gap_start, gap_end, color="#9a9a9a", alpha=0.20,
-                   hatch="//", edgecolor="#666666", linewidth=0.0,
-                   zorder=1.5)
+    # Drawn at very low zorder + low opacity so the V(t) curves layered on
+    # top are never obscured by either the gray fill or the hatch pattern.
+    for gap_start, gap_end, _idx in relevant_cold_starts:
+        ax.axvspan(gap_start, gap_end, color="#9a9a9a", alpha=0.13,
+                   hatch="//", edgecolor="#888888", linewidth=0.0,
+                   zorder=0.5)
 
     # ----- detection threshold (horizontal line, behind V(t)) -----------
     ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.2,
                zorder=2)
+    # epsilon symbol on the left side of the y-axis at the threshold height
+    ax.text(-0.012, epsilon, r"$\epsilon$",
+            transform=ax.get_yaxis_transform(),
+            fontsize=12, color="#333333",
+            ha="right", va="center")
 
     # ----- vertical event markers (behind V(t)) -------------------------
     ax.axvline(x=t0_sec,        color="#c0392b", linestyle="-", linewidth=1.6, alpha=0.85, zorder=2)
     ax.axvline(x=t_detect_sec,  color="#e67e22", linestyle="-", linewidth=1.6, alpha=0.85, zorder=2)
     ax.axvline(x=t_recover_sec, color="#27ae60", linestyle="-", linewidth=1.6, alpha=0.85, zorder=2)
 
-    # ----- V(t) curve, drawn LAST and on top so it stays visible --------
-    # Plot the full V(t) as a single continuous line.
-    ax.plot(times_sec, v_t, color="#0f3060", linewidth=2.4, zorder=10)
+    # ----- V(t) curves, drawn LAST and on top so they stay visible -------
+    # Bumped to a high zorder so the curves are unambiguously drawn on top
+    # of the cold-start hatched bands (some of which fall on top of the
+    # GPU-stable region where the stop-and-start line is very close to 0
+    # — without high zorder the hatch pattern visually obscures it).
+    if static_times_sec and static_v_t:
+        ax.plot(static_times_sec, static_v_t,
+                color="#a02020", linewidth=2.0, linestyle="--",
+                label="static", zorder=20)
+
+    # The stop-and-start curve is drawn segment by segment, breaking the line
+    # at every *relevant* cold-start gap (= the redeployment events inside
+    # the detection -> recovery window). Without this, matplotlib draws a
+    # straight line across the gap (where there are NO measurement rows),
+    # which can look like a flat plateau and obscures the fact that the
+    # underlying 1 Hz sampling is actually missing data while workers are
+    # being torn down and re-loaded. Spurious post-recovery gaps (e.g. a
+    # brief cpu_timer tick miss in stable phase 3) are NOT broken so the
+    # stable-state portion of the curve remains a single continuous line.
+    if relevant_cold_starts:
+        gap_indices = {idx for _s, _e, idx in relevant_cold_starts}
+        plot_x = []
+        plot_y = []
+        for i, (x, y) in enumerate(zip(times_sec, v_t)):
+            if i in gap_indices and plot_x:
+                plot_x.append(float('nan'))
+                plot_y.append(float('nan'))
+            plot_x.append(x)
+            plot_y.append(y)
+        ax.plot(plot_x, plot_y, color="#0f3060", linewidth=2.4,
+                label="stop-and-start", zorder=21)
+    else:
+        ax.plot(times_sec, v_t, color="#0f3060", linewidth=2.4,
+                label="stop-and-start", zorder=21)
 
     # ----- y-axis range ---------------------------------------------------
     visible_v = [v for x, v in zip(times_sec, v_t) if x >= x_min]
+    if static_times_sec and static_v_t:
+        visible_v += [v for x, v in zip(static_times_sec, static_v_t)
+                      if x >= x_min]
     y_max_data = max(visible_v) if visible_v else 1.0
     y_max = y_max_data * 1.22
     if y_max <= epsilon:
         y_max = epsilon * 1.5
     ax.set_ylim(0.0, y_max)
+
+    # ----- legend ---------------------------------------------------------
+    if static_times_sec and static_v_t:
+        ax.legend(loc="upper right", framealpha=0.92, fontsize=9)
 
     # ----- top-of-axis event labels --------------------------------------
     label_y = y_max * 0.96
@@ -287,12 +362,71 @@ def make_plot(times_sec, v_t, cold_starts,
                 ha="center", va="bottom", fontsize=9, color="#7b3306")
 
     if recovery_phase > 0:
-        y2 = y_max * 0.34
+        # Place the recovery-phase double arrow well below the epsilon line
+        # (a little above V(t) = 20) so it never collides with the
+        # recovering stop-and-start curve, the epsilon line, or the
+        # redeployment-downtime annotation that lives in the upper area.
+        y2 = 25.0
         ax.annotate("", xy=(t_recover_sec, y2), xytext=(t_detect_sec, y2),
                     arrowprops=dict(arrowstyle="<->", color="#155724", lw=1.4))
         ax.text((t_detect_sec + t_recover_sec) / 2.0, y2 + y_max * 0.02,
                 "Recovery\nphase",
                 ha="center", va="bottom", fontsize=9, color="#155724")
+
+    # ----- redeployment downtime annotation -----------------------------
+    # The dotted ellipse + arrow points at the first "real" redeployment
+    # gap (= the CPU -> GPU placement change in stop-and-start mode). Use
+    # the already-filtered relevant_cold_starts so we never accidentally
+    # land on a spurious post-recovery glitch.
+    relevant_gap = relevant_cold_starts[0] if relevant_cold_starts else None
+    if relevant_gap is not None:
+        g_start, g_end, g_idx = relevant_gap
+        gap_mid = (g_start + g_end) / 2.0
+
+        # The "empty" stop-and-start data sits between the V(t) value of
+        # the last pre-gap row (g_idx - 1) and the first post-gap row
+        # (g_idx). Use the average as the vertical center of the
+        # encircled empty region — this lands directly on the visual gap
+        # in the broken line.
+        y_before = float(v_t[g_idx - 1]) if g_idx > 0 else 0.0
+        y_after = float(v_t[g_idx])
+        empty_center_y = (y_before + y_after) / 2.0
+
+        # Thin dotted ellipse around the empty (broken) area. Width is
+        # slightly wider than the gap so the broken endpoints sit just
+        # inside the ellipse; height is a small fraction of the y range,
+        # large enough to enclose both endpoints comfortably.
+        ellipse_width = (g_end - g_start) * 1.6
+        ellipse_height = max(y_max * 0.10,
+                             abs(y_before - y_after) + y_max * 0.06)
+        empty_ellipse = Ellipse(
+            (gap_mid, empty_center_y),
+            width=ellipse_width,
+            height=ellipse_height,
+            linewidth=1.0,
+            linestyle=':',
+            edgecolor='#444444',
+            facecolor='none',
+            zorder=10.6,
+        )
+        ax.add_patch(empty_ellipse)
+
+        # Text sits high (above all phase arrows / epsilon line / static
+        # curve in this region) and slightly to the right of t_recover
+        # so it never overlaps the t_recover label or the legend. Arrow
+        # tip points at the center of the dotted ellipse.
+        text_x = t_recover_sec + 1.4
+        text_y = y_max * 0.78
+        ax.annotate(
+            "Redeployment\ndowntime\n(no service)",
+            xy=(gap_mid, empty_center_y),
+            xytext=(text_x, text_y),
+            arrowprops=dict(arrowstyle="->", color="#444444",
+                            lw=1.2, connectionstyle="arc3,rad=0.25"),
+            fontsize=9, color="#333333",
+            ha="left", va="center",
+            zorder=11,
+        )
 
     # ----- phase labels along the bottom ---------------------------------
     # Clamp label positions to the visible X range so labels for phases that
@@ -339,9 +473,16 @@ def main():
     parser.add_argument("--schedule", type=str, default=DEFAULT_SCHEDULE,
                         help="3-combo recovery schedule YAML")
     parser.add_argument("--no-run", action="store_true",
-                        help="Skip the executor run; reuse the most recent CSV")
+                        help="Skip the executor run; reuse the most recent CSVs")
     parser.add_argument("--csv", type=str, default=None,
-                        help="When --no-run is set, read this specific CSV instead")
+                        help="When --no-run is set, read this CSV as the "
+                             "stop-and-restart trace")
+    parser.add_argument("--static-csv", type=str, default=None,
+                        help="When --no-run is set, read this CSV as the static "
+                             "(mode 3) trace")
+    parser.add_argument("--no-static", action="store_true",
+                        help="Skip the static (mode 3) baseline run; only plot "
+                             "the stop-and-restart curve")
     parser.add_argument("--epsilon", type=float, default=None,
                         help="Override the detection threshold (default: empirical "
                              "midpoint of baseline and stressed V(t))")
@@ -353,6 +494,12 @@ def main():
     pdf_path = os.path.join(results_dir, "qos_score_validation.pdf")
 
     # ----- Run -----
+    # We need two traces:
+    #   csv_path        — stop-and-restart (mode 0). Drives detection /
+    #                     recovery markers and the cold-start gap shading.
+    #   static_csv_path — static (mode 3). Plotted as a second curve so the
+    #                     reader can compare a system that *does* react with
+    #                     a system that does not.
     if args.no_run:
         if args.csv:
             csv_path = args.csv
@@ -360,19 +507,48 @@ def main():
             cands = sorted(
                 f for f in os.listdir(results_dir)
                 if f.startswith("qos_recovery_") and f.endswith(".csv")
+                and "static" not in f
             )
             if not cands:
                 print("[Error] --no-run set but no qos_recovery_*.csv found.")
                 return 1
             csv_path = os.path.join(results_dir, cands[-1])
-        print(f"[Info] Reusing CSV: {csv_path}")
+        print(f"[Info] Reusing stop-and-restart CSV: {csv_path}")
+
+        static_csv_path = None
+        if not args.no_static:
+            if args.static_csv:
+                static_csv_path = args.static_csv
+            else:
+                cands = sorted(
+                    f for f in os.listdir(results_dir)
+                    if f.startswith("qos_recovery_static_") and f.endswith(".csv")
+                )
+                if cands:
+                    static_csv_path = os.path.join(results_dir, cands[-1])
+            if static_csv_path:
+                print(f"[Info] Reusing static CSV: {static_csv_path}")
     else:
         csv_path = os.path.join(results_dir, f"qos_recovery_{ts}.csv")
         run_scenario(args.schedule,
                      args.baseline_duration,
                      args.failure_duration,
                      args.recovery_duration,
-                     csv_path)
+                     csv_path,
+                     mode=0,
+                     label="stop-and-restart")
+
+        static_csv_path = None
+        if not args.no_static:
+            static_csv_path = os.path.join(
+                results_dir, f"qos_recovery_static_{ts}.csv")
+            run_scenario(args.schedule,
+                         args.baseline_duration,
+                         args.failure_duration,
+                         args.recovery_duration,
+                         static_csv_path,
+                         mode=3,
+                         label="static")
 
     # ----- Load -----
     rows = load_csv(csv_path)
@@ -511,6 +687,36 @@ def main():
                           for s, e, _ in cold_starts))
     print()
 
+    # ----- Static (mode 3) baseline -----
+    # Load and align the static run so the phase 1 -> phase 2 boundary
+    # (= moment of failure injection) lands at the same wall-clock X
+    # position as the stop-and-restart curve. This makes the divergence
+    # between the two strategies visually anchored on the same t_0.
+    static_times_sec = None
+    static_v_t = None
+    if static_csv_path and os.path.exists(static_csv_path):
+        try:
+            static_rows = load_csv(static_csv_path)
+        except FileNotFoundError:
+            static_rows = []
+        if static_rows:
+            print(f"[Info] Loaded {len(static_rows)} static-mode CSV rows from "
+                  f"{static_csv_path}")
+            static_v_t_raw = compute_windowed_v(static_rows, T=WINDOW_T)
+            static_times_raw = parse_timestamps(static_rows)
+            static_boundaries = find_phase_boundaries(static_rows)
+            print(f"[Info] Static-mode phase boundaries: {static_boundaries}")
+            if len(static_boundaries) >= 2:
+                static_p2_start = static_boundaries[1][0]
+                offset = times_sec[p2_start] - static_times_raw[static_p2_start]
+                static_times_sec = [t + offset for t in static_times_raw]
+            else:
+                # Fall back to no shift if mode 3 only saw one phase.
+                static_times_sec = list(static_times_raw)
+            static_v_t = list(static_v_t_raw)
+        else:
+            print(f"[Warning] Static CSV is empty: {static_csv_path}")
+
     # ----- Plot -----
     # Phase labels along the bottom (skip phases whose display name is None,
     # e.g. the middle overload phase that we deliberately leave unlabeled).
@@ -525,9 +731,12 @@ def main():
     phase_labels = [(x, lbl) for x, lbl in raw_phase_labels if lbl]
     make_plot(times_sec, v_t, cold_starts,
               t0_sec, t_detect_sec, t_recover_sec,
-              epsilon, pdf_path, phase_labels, x_min=PLOT_TIME_OFFSET)
+              epsilon, pdf_path, phase_labels, x_min=PLOT_TIME_OFFSET,
+              static_times_sec=static_times_sec, static_v_t=static_v_t)
     print(f"[Plot] Saved: {pdf_path}")
     print(f"[Plot] CSV:   {csv_path}")
+    if static_csv_path:
+        print(f"[Plot] Static CSV: {static_csv_path}")
     print(f"[Plot] Use \\includegraphics{{{os.path.basename(pdf_path)}}} in the LaTeX figure.")
     return 0
 

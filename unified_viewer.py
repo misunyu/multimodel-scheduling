@@ -1256,6 +1256,64 @@ class UnifiedViewer(QMainWindow):
             self.resnet_feeder.update_intervals(self.model_settings)
         print(f"[UnifiedViewer] Input rates updated live: {input_fps_by_model}")
 
+    def apply_static_phase(self, schedule_file, combination_name):
+        """Mode 3 (static): keep the running placement but adopt the input
+        rates declared by ``combination_name`` in ``schedule_file``.
+
+        Used by the qos_recovery_validation figure to plot a "static" baseline
+        — the system never reacts, the deployment never changes, only the
+        input rate sweeps through the scenario phases. The current_combination
+        label is updated so the per-second metrics CSV records the phase
+        boundary the figure script uses to find t_0 / t_detect.
+
+        No worker / feeder restart happens here; if the input-rate change
+        overwhelms the running placement, V(t) climbs and stays high.
+        """
+        try:
+            with open(schedule_file, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"[UnifiedViewer] apply_static_phase: failed to read "
+                  f"{schedule_file}: {e}")
+            return
+
+        combo_cfg = cfg.get(combination_name) or {}
+        if not combo_cfg:
+            print(f"[UnifiedViewer] apply_static_phase: combination "
+                  f"'{combination_name}' not found in {schedule_file}")
+            return
+
+        # Build {model_base_name: infps} from the requested combo's entries.
+        import os as _os
+        input_fps_by_model = {}
+        for _entry_name, entry in combo_cfg.items():
+            if not isinstance(entry, dict):
+                continue
+            mname = entry.get("model", "")
+            if not mname:
+                continue
+            base = _os.path.splitext(_os.path.basename(str(mname)))[0]
+            ifps = entry.get("infps", None)
+            if ifps is None:
+                continue
+            try:
+                input_fps_by_model[base] = float(ifps)
+            except (TypeError, ValueError):
+                continue
+
+        # Update CSV phase label so qos_recovery_validation.py's
+        # find_phase_boundaries() sees the same three combos as mode 0.
+        self.current_combination = combination_name
+        try:
+            self.info_window.update_schedule_name(
+                f"Current Schedule: {combination_name}")
+        except Exception:
+            pass
+
+        print(f"[UnifiedViewer] Static phase update: combination="
+              f"{combination_name}, input_rates={input_fps_by_model}")
+        self.update_input_rates(input_fps_by_model)
+
     # Monitoring and statistics methods
     def start_execution(self, duration):
         """

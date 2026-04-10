@@ -31,7 +31,7 @@ class ScheduleExecutor:
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
         self._selected_combo = selected_combo
-        self.adaptive_mode = adaptive_mode  # 0=off, 1=adaptive hot-swap, 2=reserved
+        self.adaptive_mode = adaptive_mode  # 0=off, 1=adaptive hot-swap, 2=reactive, 3=static (no-op deploy, just sweep infps)
         self.metrics_csv = metrics_csv      # Path for per-second CSV metrics recording
         # Optional per-combo duration override: {combo_name: int_seconds}
         # When a combo is not in this map, default_duration is used.
@@ -94,10 +94,58 @@ class ScheduleExecutor:
         try:
             with open(schedule_file, 'r') as f:
                 schedules = yaml.safe_load(f) or {}
+            # Cache the parsed schedule so _placement_signature() can compare
+            # combos without re-reading the YAML on every transition.
+            self._schedules_cache = schedules
             return list(schedules.keys())
         except Exception as e:
             print(f"[Executor] ERROR: Failed to read schedules from {schedule_file}: {e}")
+            self._schedules_cache = {}
             return []
+
+    def _next_transition_is_inplace(self) -> bool:
+        """Return True if the *next* mode 0 phase transition (current -> next
+        combo) will be applied in-place because the placement is unchanged.
+
+        Used to decide whether to:
+          - schedule _after_stop EARLY (before viewer's timed_shutdown), and
+          - cancel timed_shutdown in _after_stop to keep the viewer alive.
+
+        Only meaningful for mode 0; the adaptive/reactive/static modes already
+        keep the viewer alive across phase transitions by design.
+        """
+        if self.adaptive_mode != 0:
+            return False
+        if self._index + 1 >= len(self._combinations):
+            return False
+        cur = self._combinations[self._index]
+        nxt = self._combinations[self._index + 1]
+        return (self._placement_signature(cur) ==
+                self._placement_signature(nxt))
+
+    def _placement_signature(self, combo_name: str):
+        """Return a hashable, infps-independent signature of a combo's placement.
+
+        Two combos with the same set of (display, model, execution) tuples
+        share a signature. Differences in `infps` are ignored on purpose, so
+        a transition that only changes input rate (without moving any model
+        between devices) is detected as "no real placement change" and can
+        be applied in-place via apply_static_phase instead of restarting
+        workers — which would otherwise inject a spurious cold-start spike
+        into the V(t) trace (see qos_recovery_validation.py).
+        """
+        schedules = getattr(self, '_schedules_cache', None) or {}
+        cfg = schedules.get(combo_name) or {}
+        sig = []
+        for entry in cfg.values():
+            if not isinstance(entry, dict):
+                continue
+            sig.append((
+                str(entry.get('display', '')).strip().lower(),
+                str(entry.get('model', '')),
+                str(entry.get('execution', '')).strip().lower(),
+            ))
+        return tuple(sorted(sig))
 
     def _reset_results_file(self):
         # Ensure results directory exists and initialize the run file with an empty array
@@ -152,6 +200,53 @@ class ScheduleExecutor:
 
         adaptive = (self.adaptive_mode == 1)
         reactive = (self.adaptive_mode == 2)
+        static = (self.adaptive_mode == 3)
+
+        # Mode 3 (static): keep the first combination running. From the second
+        # combo onwards, only update infps + the CSV phase label — no worker
+        # restart, no hot-swap. Used by qos_recovery_validation.py to plot the
+        # "static" baseline against "stop-and-restart".
+        if static and self._viewer is not None and getattr(self._viewer, '_run_active', False):
+            try:
+                self._viewer.apply_static_phase(self.schedule_file, combo)
+            except Exception as e:
+                print(f"[Executor] Static phase update failed: {e}")
+            # Schedule the next phase advancement and return without touching
+            # workers / start_execution.
+            measured_duration = int(self.combo_durations.get(combo, self.default_duration))
+            if measured_duration < 1:
+                measured_duration = 1
+            QTimer.singleShot(measured_duration * 1000, self._after_stop)
+            return
+
+        # Mode 0 (stop-and-restart) shortcut for same-placement transitions:
+        # if the new combo only changes infps (the model->device assignment is
+        # identical to the currently-running combo), we MUST NOT tear down and
+        # restart workers — that would inject a spurious cold-start spike into
+        # V(t). Instead, do an in-place infps update like static mode. The
+        # "real" mode 0 restart is reserved for transitions that actually move
+        # at least one model between devices (e.g. CPU->GPU offload), which is
+        # the only kind of "stop-and-start" the paper figure cares about.
+        if (not adaptive and not reactive and not static
+                and self._viewer is not None
+                and getattr(self._viewer, '_run_active', False)):
+            prev_combo = getattr(self, '_prev_running_combo', None)
+            if prev_combo and prev_combo != combo:
+                if (self._placement_signature(prev_combo) ==
+                        self._placement_signature(combo)):
+                    print(f"[Executor] Mode 0: same placement {prev_combo} -> "
+                          f"{combo}; applying infps in-place (no restart)")
+                    try:
+                        self._viewer.apply_static_phase(self.schedule_file, combo)
+                    except Exception as e:
+                        print(f"[Executor] In-place phase update failed: {e}")
+                    measured_duration = int(self.combo_durations.get(
+                        combo, self.default_duration))
+                    if measured_duration < 1:
+                        measured_duration = 1
+                    self._prev_running_combo = combo
+                    QTimer.singleShot(measured_duration * 1000, self._after_stop)
+                    return
 
         # Reuse existing viewer if it exists
         if self._viewer is not None:
@@ -267,9 +362,14 @@ class ScheduleExecutor:
             self._prev_stable_vscore = None
 
         # Schedule moving to the next combination.
-        # For adaptive/reactive: fire BEFORE timed_shutdown so we can cancel it
-        # and keep the viewer alive. For mode 0: fire after with a buffer.
-        if adaptive or reactive:
+        # For adaptive/reactive/static: fire BEFORE timed_shutdown so we can
+        # cancel it and keep the viewer alive across phase transitions.
+        # For mode 0 with a same-placement next transition (in-place infps
+        # update): same — fire early and cancel timed_shutdown so workers
+        # survive into the in-place phase.
+        # For mode 0 with a real placement change: fire after the
+        # timed_shutdown with a buffer (the viewer will be torn down).
+        if adaptive or reactive or static or self._next_transition_is_inplace():
             # Fire 1 second before timed_shutdown (which fires at run_duration*1000)
             after_ms = max(1000, (run_duration - 1) * 1000)
             QTimer.singleShot(after_ms, self._after_stop)
@@ -283,13 +383,19 @@ class ScheduleExecutor:
 
         adaptive = (self.adaptive_mode == 1)
         reactive = (self.adaptive_mode == 2)
+        static = (self.adaptive_mode == 3)
+        # Mode 0 only: is the next transition a same-placement (in-place)
+        # infps update? If so, keep the viewer alive across the boundary.
+        mode0_inplace_next = self._next_transition_is_inplace()
         is_last = (self._index + 1 >= len(self._combinations))
 
-        if (adaptive or reactive) and not is_last:
-            # Adaptive/reactive mode: skip stop_execution between combos so the viewer
-            # stays alive and update_combination can hot-swap.
-            # Also cancel the pending timed_shutdown from the previous start_execution,
-            # otherwise it will fire independently and kill the running workers.
+        if (adaptive or reactive or static or mode0_inplace_next) and not is_last:
+            # Adaptive/reactive/static OR mode-0-with-in-place-next: skip
+            # stop_execution between combos so the viewer stays alive and
+            # update_combination / apply_static_phase can take effect.
+            # Also cancel the pending timed_shutdown from the previous
+            # start_execution, otherwise it will fire independently and
+            # kill the running workers.
             if self._viewer is not None:
                 self._viewer.cancel_timed_shutdown()
         elif reactive and is_last:
@@ -537,8 +643,12 @@ def main():
                         help='When set, run only the specified combination name from the schedule file in executor-only mode (no controller).')
     parser.add_argument('--auto_start_all', action='store_true',
                         help='Automatically start running all combinations and quit the app when done (no Start button needed).')
-    parser.add_argument('--adaptive-mode', type=int, default=0, choices=[0, 1, 2],
-                        help='Adaptive deploy mode: 0=off, 1=adaptive hot-swap, 2=reserved (default: 0)')
+    parser.add_argument('--adaptive-mode', type=int, default=0, choices=[0, 1, 2, 3],
+                        help='Adaptive deploy mode: 0=off (stop-and-restart between combos), '
+                             '1=adaptive hot-swap, 2=reactive (rollback/fallback), '
+                             '3=static (no deploy change between combos — only sweeps infps; '
+                             'used by qos_recovery_validation as the static baseline) '
+                             '(default: 0)')
     parser.add_argument('--metrics-csv', type=str, default=None,
                         help='Path to CSV file for per-second metrics recording')
     parser.add_argument('--combo-duration', action='append', default=[],
