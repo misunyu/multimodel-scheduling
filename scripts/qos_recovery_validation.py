@@ -323,10 +323,10 @@ def make_plot(times_sec, v_t, cold_starts,
             plot_x.append(x)
             plot_y.append(y)
         ax.plot(plot_x, plot_y, color="#0f3060", linewidth=2.4,
-                label="stop-and-start", zorder=21)
+                label="stop-and-restart", zorder=21)
     else:
         ax.plot(times_sec, v_t, color="#0f3060", linewidth=2.4,
-                label="stop-and-start", zorder=21)
+                label="stop-and-restart", zorder=21)
 
     # ----- y-axis range ---------------------------------------------------
     # Capped at V(t) = 130 so the figure stays compact: the static curve
