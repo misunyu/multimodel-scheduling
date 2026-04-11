@@ -343,7 +343,7 @@ def make_plot(times_sec, v_t, cold_starts,
     if static_times_sec and static_v_t:
         ax.legend(loc="upper right",
                   bbox_to_anchor=(0.985, 80.0 / y_max),
-                  framealpha=0.92, fontsize=9)
+                  framealpha=0.92, fontsize=7.5)
 
     # ----- top-of-axis event labels --------------------------------------
     label_y = y_max * 0.96
@@ -351,7 +351,7 @@ def make_plot(times_sec, v_t, cold_starts,
             fontsize=10, fontweight="bold", va="top", ha="left")
     ax.text(t_detect_sec,  label_y, r"  $t_{detect}$", color="#e67e22",
             fontsize=10, fontweight="bold", va="top", ha="left")
-    ax.text(t_recover_sec, label_y, r"  $t_{recover}$", color="#27ae60",
+    ax.text(t_recover_sec, label_y, r"  $t_{recovery}$", color="#27ae60",
             fontsize=10, fontweight="bold", va="top", ha="left")
 
     # ----- phase arrows (sit inside the shaded regions) -----------------
@@ -372,7 +372,7 @@ def make_plot(times_sec, v_t, cold_starts,
         ax.annotate("", xy=(t_recover_sec, y2), xytext=(t_detect_sec, y2),
                     arrowprops=dict(arrowstyle="<->", color="#155724", lw=1.4))
         ax.text((t_detect_sec + t_recover_sec) / 2.0, y2 + y_max * 0.02,
-                "Recovery\nphase",
+                "Reconfiguration\nphase",
                 ha="center", va="bottom", fontsize=9, color="#155724")
 
     # ----- redeployment downtime annotation -----------------------------

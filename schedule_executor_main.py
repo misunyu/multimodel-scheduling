@@ -31,7 +31,7 @@ class ScheduleExecutor:
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
         self._selected_combo = selected_combo
-        self.adaptive_mode = adaptive_mode  # 0=off, 1=adaptive hot-swap, 2=reactive, 3=static (no-op deploy, just sweep infps)
+        self.adaptive_mode = adaptive_mode  # 0=off, 1=adaptive hot-swap, 2=reactive (BoundGuard), 3=static, 4=stop-and-restart + rollback
         self.metrics_csv = metrics_csv      # Path for per-second CSV metrics recording
         # Optional per-combo duration override: {combo_name: int_seconds}
         # When a combo is not in this map, default_duration is used.
@@ -201,6 +201,7 @@ class ScheduleExecutor:
         adaptive = (self.adaptive_mode == 1)
         reactive = (self.adaptive_mode == 2)
         static = (self.adaptive_mode == 3)
+        restart_rollback = (self.adaptive_mode == 4)
 
         # Mode 3 (static): keep the first combination running. From the second
         # combo onwards, only update infps + the CSV phase label — no worker
@@ -338,10 +339,18 @@ class ScheduleExecutor:
 
         # In adaptive/reactive mode with a still-running viewer, skip start_execution —
         # the hot-swap manager already transitioned workers while the run continued.
+        # Mode 4 (stop-and-restart + rollback) does call start_execution because
+        # the forward transition itself is a stop-and-restart cycle.
         if (adaptive or reactive) and getattr(self._viewer, '_run_active', False):
             print(f"[Executor] {'Reactive' if reactive else 'Adaptive'}: execution continues, hot-swap in progress")
         else:
             self._viewer.start_execution(run_duration)
+
+        # Capture prev state BEFORE we overwrite it, so the mode-4 manager can
+        # use it as the rollback baseline.
+        prev_combo_for_mgr = getattr(self, '_prev_running_combo', None)
+        prev_model_set_for_mgr = getattr(self, '_prev_model_set', None)
+        prev_vscore_for_mgr = getattr(self, '_prev_stable_vscore', None)
 
         # Save current state for reactive mode's rollback/fallback tracking
         self._prev_running_combo = combo
@@ -360,6 +369,22 @@ class ScheduleExecutor:
                 self._prev_stable_vscore = _collect_vscore(self._viewer)
         except Exception:
             self._prev_stable_vscore = None
+
+        # Mode 4: spawn the validation+rollback monitor on top of the just-
+        # completed stop-and-restart transition.
+        if restart_rollback and self._viewer is not None:
+            try:
+                from restart_rollback_deploy import RestartRollbackDeployManager
+                mgr = RestartRollbackDeployManager(self._viewer)
+                mgr.execute(
+                    self.schedule_file, combo,
+                    prev_combo_name=prev_combo_for_mgr,
+                    prev_model_set=prev_model_set_for_mgr,
+                    prev_vscore=prev_vscore_for_mgr,
+                    run_duration=run_duration,
+                )
+            except Exception as e:
+                print(f"[Executor] Mode 4: failed to spawn restart-rollback monitor: {e}")
 
         # Schedule moving to the next combination.
         # For adaptive/reactive/static: fire BEFORE timed_shutdown so we can
@@ -384,6 +409,7 @@ class ScheduleExecutor:
         adaptive = (self.adaptive_mode == 1)
         reactive = (self.adaptive_mode == 2)
         static = (self.adaptive_mode == 3)
+        restart_rollback = (self.adaptive_mode == 4)
         # Mode 0 only: is the next transition a same-placement (in-place)
         # infps update? If so, keep the viewer alive across the boundary.
         mode0_inplace_next = self._next_transition_is_inplace()
@@ -398,13 +424,15 @@ class ScheduleExecutor:
             # kill the running workers.
             if self._viewer is not None:
                 self._viewer.cancel_timed_shutdown()
-        elif reactive and is_last:
-            # Reactive mode on the last combo: delay stop to allow rollback to
-            # execute and produce measurable results. The reactive monitor needs
-            # 5s stabilisation + hot-swap time + recovery observation.
+        elif (reactive or restart_rollback) and is_last:
+            # Reactive (mode 2) and restart-rollback (mode 4) on the last combo:
+            # delay stop to allow the rollback decision to execute and produce
+            # measurable results. Both monitors need 5s stabilisation +
+            # transition time + recovery observation.
             if self._viewer is not None:
                 self._viewer.cancel_timed_shutdown()
-            print(f"[Executor] Reactive: last combo — extending run for potential rollback")
+            label = "Reactive" if reactive else "Restart+Rollback"
+            print(f"[Executor] {label}: last combo — extending run for potential rollback")
             extra_sec = 15  # extra seconds to observe rollback recovery
             QTimer.singleShot(extra_sec * 1000, self._reactive_final_stop)
             return  # skip normal _run_next advancement
@@ -643,11 +671,15 @@ def main():
                         help='When set, run only the specified combination name from the schedule file in executor-only mode (no controller).')
     parser.add_argument('--auto_start_all', action='store_true',
                         help='Automatically start running all combinations and quit the app when done (no Start button needed).')
-    parser.add_argument('--adaptive-mode', type=int, default=0, choices=[0, 1, 2, 3],
+    parser.add_argument('--adaptive-mode', type=int, default=0, choices=[0, 1, 2, 3, 4],
                         help='Adaptive deploy mode: 0=off (stop-and-restart between combos), '
-                             '1=adaptive hot-swap, 2=reactive (rollback/fallback), '
+                             '1=adaptive hot-swap, 2=reactive / BoundGuard '
+                             '(hot-swap + validation/rollback/fallback), '
                              '3=static (no deploy change between combos — only sweeps infps; '
-                             'used by qos_recovery_validation as the static baseline) '
+                             'used by qos_recovery_validation as the static baseline), '
+                             '4=stop-and-restart + rollback (mode 0 transitions with mode 2 '
+                             'style validation/rollback; the "Stop-and-restart (+Rollback)" '
+                             'baseline used in the four-strategy comparison) '
                              '(default: 0)')
     parser.add_argument('--metrics-csv', type=str, default=None,
                         help='Path to CSV file for per-second metrics recording')
