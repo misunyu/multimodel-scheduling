@@ -1,0 +1,67 @@
+# dynamic_load_views_schedule_npu.yaml
+# NPU port of the (un-committed) dynamic_load_views_schedule.yaml referenced
+# by scripts/dynamic_load_validation.py.
+#
+# Three phases used to compare BoundGuard (mode 0) vs static (mode 3):
+#   phase_a — all CPU, low input rate                       (V ≈ 0)
+#   phase_b — all CPU, HIGH input rate, SAME placement      (V grows; mode 3 stays here)
+#   phase_c — heaviest two on npu0 / npu1, HIGH input rate  (V drops; mode 0 reaches here)
+#
+# Mode 0 detects that phase_a -> phase_b is a same-placement transition
+# (only infps changes) and applies an in-place infps update via
+# apply_static_phase, with no cold-start gap. The phase_b -> phase_c
+# transition is a real placement change and triggers a stop-and-restart
+# cycle.
+#
+# Constraint: each NPU core (npu0, npu1) runs AT MOST one model at a time.
+
+phase_a:
+  yolov3_big_cpu:
+    display: view1
+    execution: cpu
+    infps: 5
+    model: yolov3_big
+  yolov3_small_cpu:
+    display: view2
+    execution: cpu
+    infps: 5
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 2
+    model: resnet50_small
+
+phase_b:
+  yolov3_big_cpu:
+    display: view1
+    execution: cpu
+    infps: 30
+    model: yolov3_big
+  yolov3_small_cpu:
+    display: view2
+    execution: cpu
+    infps: 30
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 10
+    model: resnet50_small
+
+phase_c:
+  yolov3_big_npu0:
+    display: view1
+    execution: npu0
+    infps: 30
+    model: yolov3_big
+  yolov3_small_npu1:
+    display: view2
+    execution: npu1
+    infps: 30
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 10
+    model: resnet50_small

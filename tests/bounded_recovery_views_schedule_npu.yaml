@@ -1,0 +1,58 @@
+# bounded_recovery_views_schedule_npu.yaml
+# NPU port of the (un-committed) bounded_recovery_views_schedule.yaml that
+# scripts/run_bounded_recovery_sweep.py expects. Same shape as
+# qos_recovery_schedule_npu.yaml so the bounded sweep can vary the
+# CPU background load around an unchanged foreground scenario.
+#
+# Constraint: each NPU core (npu0, npu1) runs AT MOST one model at a time.
+
+combination_initial:
+  yolov3_big_cpu:
+    display: view1
+    execution: cpu
+    infps: 5
+    model: yolov3_big
+  yolov3_small_cpu:
+    display: view2
+    execution: cpu
+    infps: 5
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 2
+    model: resnet50_small
+
+combination_overload:
+  yolov3_big_cpu:
+    display: view1
+    execution: cpu
+    infps: 30
+    model: yolov3_big
+  yolov3_small_cpu:
+    display: view2
+    execution: cpu
+    infps: 30
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 10
+    model: resnet50_small
+
+combination_offload:
+  yolov3_big_npu0:
+    display: view1
+    execution: npu0
+    infps: 30
+    model: yolov3_big
+  yolov3_small_npu1:
+    display: view2
+    execution: npu1
+    infps: 30
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 10
+    model: resnet50_small

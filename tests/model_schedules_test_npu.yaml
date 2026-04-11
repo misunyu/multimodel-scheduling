@@ -1,0 +1,47 @@
+# model_schedules_test_npu.yaml
+# NPU port of tests/model_schedules_test.yaml.
+#
+# Test schedule for adaptive/reactive deploy comparison.
+#
+# combination_1: GOOD deployment (heaviest two models on npu0 / npu1)
+# combination_2: WORSE deployment (same models, all CPU)
+#
+# Transition: combination_1 -> combination_2 degrades performance.
+# Mode 2 (reactive) should detect the degradation and rollback to
+# combination_1.
+#
+# Constraint: each NPU core (npu0, npu1) runs AT MOST one model at a time.
+
+combination_1:
+  yolov3_big_npu0:
+    display: view1
+    execution: npu0
+    infps: 30
+    model: yolov3_big
+  yolov3_small_npu1:
+    display: view2
+    execution: npu1
+    infps: 30
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 10
+    model: resnet50_small
+
+combination_2:
+  yolov3_big_cpu:
+    display: view1
+    execution: cpu
+    infps: 30
+    model: yolov3_big
+  yolov3_small_cpu:
+    display: view2
+    execution: cpu
+    infps: 30
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 10
+    model: resnet50_small

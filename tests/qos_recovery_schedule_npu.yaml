@@ -1,0 +1,72 @@
+# qos_recovery_schedule_npu.yaml
+# NPU port of tests/qos_recovery_schedule.yaml.
+#
+# Three-phase scenario for the bounded-recovery validation figure
+# (qos_score_validation.pdf in the paper). The original GPU scenario uses
+# 4 GPU placements concurrently; the NPU port uses 3 view models so the
+# recovery phase can place the two heaviest on npu0/npu1 and keep the
+# lightest on CPU. NPU0 and NPU1 each run AT MOST ONE model at a time.
+#
+#   combination_initial   : INITIAL  — all CPU at low input rate (V ≈ 0)
+#   combination_overload  : FAILURE  — same models, all CPU, but the
+#                                       input rate jumps to a level the CPU
+#                                       cannot sustain (V grows large)
+#   combination_offload   : RECOVERY — same high input rate, but the two
+#                                       heaviest models are offloaded to
+#                                       npu0 / npu1.
+#
+# Tunable: the per-combo `infps` numbers below are starting points. Tune
+# the overload values upward until V(t) clearly clears the validation
+# epsilon (default 30) within the failure phase, and tune the offload
+# values down if NPU saturation drives V(t) above epsilon there.
+
+combination_initial:
+  yolov3_big_cpu:
+    display: view1
+    execution: cpu
+    infps: 5
+    model: yolov3_big
+  yolov3_small_cpu:
+    display: view2
+    execution: cpu
+    infps: 5
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 2
+    model: resnet50_small
+
+combination_overload:
+  yolov3_big_cpu:
+    display: view1
+    execution: cpu
+    infps: 30
+    model: yolov3_big
+  yolov3_small_cpu:
+    display: view2
+    execution: cpu
+    infps: 30
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 10
+    model: resnet50_small
+
+combination_offload:
+  yolov3_big_npu0:
+    display: view1
+    execution: npu0
+    infps: 30
+    model: yolov3_big
+  yolov3_small_npu1:
+    display: view2
+    execution: npu1
+    infps: 30
+    model: yolov3_small
+  resnet50_small_cpu:
+    display: view3
+    execution: cpu
+    infps: 10
+    model: resnet50_small
