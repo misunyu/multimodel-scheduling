@@ -173,8 +173,15 @@ class ResNetViewHandler(ViewHandler):
             
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
-                # For ResNet models, the result queue contains (frame, class_name, infer_time)
-                frame, class_name, infer_time = self.result_queue.get(timeout=1)
+                # For ResNet models, the result queue contains
+                # (frame, class_name, infer_time[, wait_ms]). wait_ms was added
+                # so v(t) can include queue-wait latency.
+                item = self.result_queue.get(timeout=1)
+                if isinstance(item, tuple) and len(item) == 4:
+                    frame, class_name, infer_time, wait_ms = item
+                else:
+                    frame, class_name, infer_time = item
+                    wait_ms = 0.0
             except queue.Empty:
                 continue
             except (EOFError, BrokenPipeError, OSError) as e:
@@ -185,7 +192,7 @@ class ResNetViewHandler(ViewHandler):
             except Exception as e:
                 print(f"[{self.view_name} ERROR] {e}")
                 continue
-                
+
             try:
                 pixmap = convert_cv_to_qt(frame)
                 if not pixmap.isNull():
@@ -193,6 +200,11 @@ class ResNetViewHandler(ViewHandler):
                     if first_display:
                         first_display = False
                     self.update_stats(self.model_type, infer_time)
+                    # Update wait statistics if available
+                    if wait_ms is not None:
+                        self.total_wait_ms += float(wait_ms)
+                        self.wait_count += 1
+                        self.avg_wait_ms = self.total_wait_ms / self.wait_count if self.wait_count > 0 else 0.0
                 else:
                     print(f"[{self.view_name}] Pixmap is null")
             except Exception as e:

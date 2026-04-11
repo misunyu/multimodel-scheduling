@@ -1,0 +1,81 @@
+vscore_over_time_antara.pdf — reproducibility record
+============================================================
+Generated:        2026-04-11T16:37:05
+Generator script: scripts/plot_npu_violation.py
+Output PDF:       results/vscore_over_time_antara.pdf
+Source CSV stamp: 20260403_173820
+
+Source CSVs (per-second metrics from schedule_executor_main.py):
+  mode 1 (Adaptive hot-swap): results/adaptive_metrics_mode1_antara_20260403_173820.csv
+  mode 2 (BoundGuard): results/adaptive_metrics_mode2_antara_20260403_173820.csv
+
+Experimental setup
+------------------------------------------------------------
+Platform:        Antara CPU + 2x NPU (npu0, npu1) inside Docker
+                 (./docker_run.sh; cd /workspace/multimodel-scheduling).
+                 Per-NPU constraint: each core runs at most one model at a time.
+Schedule YAML:   gen_schedules_antara/model_schedules_vscore_test.yaml
+Models:          resnet50_big, resnet50_small, yolov3_big, yolov3_small
+Inputs:          ImageNet sample frames for ResNet (./imagenet-sample-images),
+                 video frames for YOLO. Per-view target rates:
+                 yolov3 infps=30, resnet50 infps=30 (from the schedule YAML).
+Batch size:      1 (per-frame inference; the NeublaDriver path uses single
+                 send/launch/receive cycles via npu.send_receive_data_npu).
+Duration:        30 s per combination, 2 combinations per mode (transition
+                 from combination_1 to combination_2 at the deploy change).
+                 Mode 2 (BoundGuard) extends past combination_2 to observe
+                 the rollback recovery (+15 s, see schedule_executor_main.py
+                 _reactive_final_stop).
+
+Deployment transition
+------------------------------------------------------------
+                       combination_1 (GOOD)   combination_2 (WORSE)
+  resnet50_big           NPU0                  CPU
+  resnet50_small         NPU1                  CPU
+  yolov3_big             CPU                   CPU
+  yolov3_small           CPU                   CPU
+
+Adaptive modes plotted
+------------------------------------------------------------
+  --adaptive-mode 1  Adaptive hot-swap (no rollback)
+  --adaptive-mode 2  BoundGuard (hot-swap + QoS detection + rollback)
+  Both modes invoked via:
+    python schedule_executor_main.py \
+        --schedule gen_schedules_antara/model_schedules_vscore_test.yaml \
+        --duration 30 --adaptive-mode {1,2} \
+        --metrics-csv <CSV path> --auto_start_all
+  See also run_antara_experiment.sh (runs all 3 modes sequentially).
+
+Key figure parameters
+------------------------------------------------------------
+  epsilon (rollback threshold)            : 5.0
+  smoothing window (rolling mean, ticks)  : 3
+  detected rollback offset (mode 2)       : +6.0 s
+  V(t) sampling rate                      : 1 Hz (cpu_timer in unified_viewer)
+
+BoundGuard runtime constants (reactive_deploy.ReactiveDeployManager)
+------------------------------------------------------------
+  WINDOW_T          = 3   # sliding-window length for V(t)
+  EPSILON           = 5.0 # absolute V(t) rollback threshold
+  STABILISATION_SEC = 5   # wait before measuring V(t) post hot-swap
+  FALLBACK_VSCORE   = 5.0 # different-model-set fallback threshold
+  Tuning note: if a healthy NPU baseline V(t) sits close to or above
+  EPSILON=5 and triggers false rollbacks, raise EPSILON in
+  reactive_deploy.py (e.g. 6 or 8) and rerun the experiment.
+
+Per-mode V(t) summary statistics
+------------------------------------------------------------
+  mode  samples   V mean    V max     pre-chg max   post-chg max  
+  1     56        4.051     6.329     1.801         6.329         
+  2     71        2.635     6.277     1.864         6.277         
+
+Notes
+------------------------------------------------------------
+- The CSVs used here come from a previous antara run (timestamp in the
+  filenames). To regenerate from a fresh run, execute
+  ./run_antara_experiment.sh inside Docker, then re-run this script with
+  --timestamp <new_stamp>.
+- v_score is the per-tick V(t) (= mean over views of max(0, l_i/L_SLO_i - 1))
+  written by unified_viewer's metrics CSV writer; see the v_score column.
+- The rollback offset is detected automatically as the first post-change
+  row where the 'combination' label reverts to the original combination.
