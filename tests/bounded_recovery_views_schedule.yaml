@@ -1,0 +1,90 @@
+# bounded_recovery_views_schedule.yaml
+#
+# Three-phase recovery scenario for the bounded-recovery validation sweep.
+# All four scenarios in scripts/run_bounded_recovery_sweep.py reuse this
+# YAML; only the *background* (headless) inference workers differ per
+# scenario. The view models are fixed:
+#
+#   view1 = mnasnet     (light CNN classifier)
+#   view2 = resnet50    (medium CNN classifier)
+#   view3 = resnext50   (medium CNN classifier)
+#   view4 = yolov4      (object detection -- run as yolo CPU/GPU pipeline)
+#
+# Phase 1 (initial)  : all four view models on CPU at low input rates so
+#                      V(t) sits near 0 even with the heavy yolo pipeline.
+# Phase 2 (overload) : SAME placement, but the input rates jump high enough
+#                      to drive the CPU above capacity. The same-placement
+#                      detection in schedule_executor_main keeps this an
+#                      in-place infps swap (no worker restart) so the
+#                      cold-start spike at the phase boundary disappears,
+#                      matching the qos_recovery scenario.
+# Phase 3 (offload)  : All four view models move to GPU. This is the actual
+#                      reconfiguration that the bounded-recovery analysis
+#                      measures: the cold-start gap between phase 2 and
+#                      phase 3 is the "rollback in progress" interval.
+
+combination_initial:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 3
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 3
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 3
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 1
+    model: yolov4
+
+combination_overload:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 400
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 60
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 60
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 10
+    model: yolov4
+
+combination_offload:
+  mnasnet_gpu:
+    display: view1
+    execution: gpu
+    infps: 400
+    model: mnasnet
+  resnet50_gpu:
+    display: view2
+    execution: gpu
+    infps: 60
+    model: resnet50
+  resnext50_gpu:
+    display: view3
+    execution: gpu
+    infps: 60
+    model: resnext50
+  yolov4_gpu:
+    display: view4
+    execution: gpu
+    infps: 10
+    model: yolov4

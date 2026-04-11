@@ -200,9 +200,18 @@ class AdaptiveDeployManager:
         # --- 4. Incrementally update viewer state (kept views stay intact) ---
         # Update model_settings in-place: overwrite entries for swapped views,
         # keep existing entries for kept views so handler references stay valid.
+        # For kept views, propagate the new infps so live feeders pick up the
+        # rate change (the placement is the same but the input rate may have
+        # changed between the two combos).
         for vname in self.NAMED_VIEWS:
             if vname in swapped_views:
                 v.model_settings[vname] = new_settings[vname]
+            elif vname in kept_views:
+                old_cfg = v.model_settings.get(vname, {}) or {}
+                new_infps = (new_settings.get(vname, {}) or {}).get("infps", None)
+                if new_infps is not None and old_cfg.get("infps") != new_infps:
+                    old_cfg["infps"] = new_infps
+                    v.model_settings[vname] = old_cfg
         # Update views_without_model
         v.views_without_model = new_views_without
         # Update combination name and schedule label
@@ -225,6 +234,19 @@ class AdaptiveDeployManager:
 
         # --- 6. Update feeder yolo/resnet view-sets --------------------------
         self._update_feeders(old_yolo_views, old_resnet_views, swapped_views, new_settings)
+
+        # --- 7. Push updated input intervals to running feeders --------------
+        # Even when every view kept its worker (same placement, only infps
+        # changed) we must still re-arm the per-model send intervals so the
+        # rate change actually takes effect. Without this, the feeders keep
+        # using the previous combo's intervals indefinitely.
+        try:
+            if getattr(v, 'video_feeder', None):
+                v.video_feeder.update_intervals(v.model_settings)
+            if getattr(v, 'resnet_feeder', None):
+                v.resnet_feeder.update_intervals(v.model_settings)
+        except Exception as e:
+            print(f"[AdaptiveDeploy] failed to push updated intervals: {e}")
 
         print(f"[AdaptiveDeploy] Transition complete. kept={kept_views}, swapped={swapped_views}")
 

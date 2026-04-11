@@ -1,0 +1,113 @@
+# ml_misprediction_candidates.yaml
+#
+# Candidate placements that the XGBoost-based latency predictor
+# (xgb_model_x3_double, alpha=0.2) ranks in order to pick the
+# "ML-driven" placement for the Case Study figure
+# (results/ml_misprediction_fallback.pdf).
+#
+# The candidate pool intentionally mixes CPU and GPU placements at
+# moderate input rates -- this is the operating regime the predictor
+# was trained on. The predictor's top pick (combination_all_gpu) is
+# saved into the JSON output for reproducibility.
+#
+# In the case-study experiment, the input rate at *runtime* is much
+# higher than the rate the predictor saw at training time (the
+# misprediction = OOD input rate, not OOD models). The predicted
+# placement therefore degrades visibly when we ramp the input rate up,
+# and BoundGuard's safety layer falls back to a placement that is more
+# robust to the new rate.
+#
+# All four candidates use the same four view models so the predictor
+# is choosing strictly between device assignments:
+#   view1 = mnasnet
+#   view2 = resnet50
+#   view3 = resnext50
+#   view4 = yolov4
+
+combination_all_gpu:
+  mnasnet_gpu:
+    display: view1
+    execution: gpu
+    infps: 5
+    model: mnasnet
+  resnet50_gpu:
+    display: view2
+    execution: gpu
+    infps: 4
+    model: resnet50
+  resnext50_gpu:
+    display: view3
+    execution: gpu
+    infps: 4
+    model: resnext50
+  yolov4_gpu:
+    display: view4
+    execution: gpu
+    infps: 1
+    model: yolov4
+
+combination_split_cpu_gpu:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 5
+    model: mnasnet
+  resnet50_gpu:
+    display: view2
+    execution: gpu
+    infps: 4
+    model: resnet50
+  resnext50_gpu:
+    display: view3
+    execution: gpu
+    infps: 4
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 1
+    model: yolov4
+
+combination_split_gpu_cpu:
+  mnasnet_gpu:
+    display: view1
+    execution: gpu
+    infps: 5
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 4
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 4
+    model: resnext50
+  yolov4_gpu:
+    display: view4
+    execution: gpu
+    infps: 1
+    model: yolov4
+
+combination_all_cpu:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 5
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 4
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 4
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 1
+    model: yolov4

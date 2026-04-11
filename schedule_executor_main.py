@@ -254,10 +254,23 @@ class ScheduleExecutor:
             print(f"[Executor] Reusing existing viewer for schedule: {combo} "
                   f"(adaptive={adaptive}, reactive={reactive})")
             try:
-                # Collect previous state for reactive mode (rollback/fallback)
+                # Collect previous state for reactive mode (rollback/fallback).
+                # `prev_vscore` must be the *terminal* V(t) of the combo we
+                # are transitioning away from (sampled live here), not the
+                # cached value from when the previous combo started -- that
+                # cached value is always ~0 because the workers had not yet
+                # produced data when it was captured, and a 0 baseline makes
+                # mode 2's rollback validation fire on every fallback.
                 prev_combo = getattr(self, '_prev_running_combo', None)
                 prev_model_set = getattr(self, '_prev_model_set', None)
-                prev_vscore = getattr(self, '_prev_stable_vscore', None)
+                try:
+                    from reactive_deploy import _collect_vscore as _live_vscore
+                    if getattr(self._viewer, '_run_active', False):
+                        prev_vscore = _live_vscore(self._viewer)
+                    else:
+                        prev_vscore = getattr(self, '_prev_stable_vscore', None)
+                except Exception:
+                    prev_vscore = getattr(self, '_prev_stable_vscore', None)
 
                 self._viewer.update_combination(
                     self.schedule_file, combo,
@@ -346,11 +359,23 @@ class ScheduleExecutor:
         else:
             self._viewer.start_execution(run_duration)
 
-        # Capture prev state BEFORE we overwrite it, so the mode-4 manager can
-        # use it as the rollback baseline.
+        # Capture prev state BEFORE we overwrite it, so the mode-2/mode-4
+        # managers can use it as the rollback baseline.
         prev_combo_for_mgr = getattr(self, '_prev_running_combo', None)
         prev_model_set_for_mgr = getattr(self, '_prev_model_set', None)
-        prev_vscore_for_mgr = getattr(self, '_prev_stable_vscore', None)
+        # `prev_vscore` must reflect the *terminal* V(t) of the combo we
+        # are transitioning away from -- not the V(t) at the moment that
+        # combo started, which would always be ~0 because the workers had
+        # not yet generated any data. Sample V(t) live here so the
+        # rollback delta is computed against the correct baseline.
+        try:
+            from reactive_deploy import _collect_vscore as _live_vscore
+            if self._viewer is not None and getattr(self._viewer, '_run_active', False):
+                prev_vscore_for_mgr = _live_vscore(self._viewer)
+            else:
+                prev_vscore_for_mgr = getattr(self, '_prev_stable_vscore', None)
+        except Exception:
+            prev_vscore_for_mgr = getattr(self, '_prev_stable_vscore', None)
 
         # Save current state for reactive mode's rollback/fallback tracking
         self._prev_running_combo = combo

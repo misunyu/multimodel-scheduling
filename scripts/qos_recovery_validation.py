@@ -372,7 +372,7 @@ def make_plot(times_sec, v_t, cold_starts,
         ax.annotate("", xy=(t_recover_sec, y2), xytext=(t_detect_sec, y2),
                     arrowprops=dict(arrowstyle="<->", color="#155724", lw=1.4))
         ax.text((t_detect_sec + t_recover_sec) / 2.0, y2 + y_max * 0.02,
-                "Reconfiguration\nphase",
+                "Recovery\nphase",
                 ha="center", va="bottom", fontsize=9, color="#155724")
 
     # ----- redeployment downtime annotation -----------------------------
