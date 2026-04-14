@@ -100,8 +100,10 @@ Scenario set in `scripts/run_bounded_recovery_sweep.py`'s `SCENARIOS` list:
 |---|------------------------------------|------------------------------------------------------------------------------------------|
 | 1 | Baseline (no bg)                   | none                                                                                     |
 | 2 | +1 light CPU bg                    | squeezenet1.0-12 / cpu / 30 fps                                                          |
-| 3 | +2 CPU bg (squeeze+shuf)           | squeezenet1.0-12 / cpu / 30 fps; shufflenet-v2-12 / cpu / 30 fps                         |
+| 3 | +2 CPU bg (squeeze+shuf)           | squeezenet1.0-12 / cpu / 30; shufflenet-v2-12 / cpu / 30                                 |
 | 4 | +heavy CPU (squeeze+shuf+vgg)      | squeezenet1.0-12 / cpu / 30; shufflenet-v2-12 / cpu / 30; vgg19 / cpu / 5                |
+| 5 | +GPT-2 (+gpt2 CPU)                 | S4 workers + gpt2 / cpu / 1 fps                                                          |
+| 6 | +TinyLlama (+llama CPU)            | S5 workers + tiny-llama-chat-onnx / cpu / unbounded                                      |
 
 Each background worker is a `subprocess.Popen` running
 `scripts/headless_inference_worker.py` with `--quiet`, started 2 seconds
@@ -150,33 +152,40 @@ value is therefore `3 + T_post_mean` and the slack
 
 ---
 
-## 6. Latest sweep results (2026-04-11)
+## 6. Latest sweep results (2026-04-13)
 
 `results/bounded_sweep/sweep.json` records the canonical measurements.
 Summary:
 
 | # | Scenario                          | T_detect (s) | T_post (s)   | Observed T_recovery (s) | Bound (s)    |
 |---|-----------------------------------|--------------|--------------|--------------------------|--------------|
-| 1 | Baseline (no bg)                  | 2.33 ± 0.47  | 15.00 ± 0.82 | 17.33 ± 0.47             | 18.00 ± 0.82 |
-| 2 | +1 light CPU bg                   | 2.33 ± 0.47  | 15.33 ± 0.47 | 17.67 ± 0.47             | 18.33 ± 0.47 |
+| 1 | Baseline (no bg)                  | 2.67 ± 0.47  | 14.67 ± 0.47 | 17.33 ± 0.47             | 17.67 ± 0.47 |
+| 2 | +1 light CPU bg                   | 2.33 ± 0.47  | 14.67 ± 1.25 | 17.00 ± 0.82             | 17.67 ± 1.25 |
 | 3 | +2 CPU bg (squeeze+shuf)          | 2.00 ± 0.00  | 15.33 ± 0.47 | 17.33 ± 0.47             | 18.33 ± 0.47 |
-| 4 | +heavy CPU (squeeze+shuf+vgg)     | 2.00 ± 0.00  | 16.67 ± 0.47 | 18.67 ± 0.47             | 19.67 ± 0.47 |
+| 4 | +heavy CPU (squeeze+shuf+vgg)     | 2.00 ± 0.00  | 15.67 ± 0.47 | 17.67 ± 0.47             | 18.67 ± 0.47 |
+| 5 | +GPT-2 (+gpt2 CPU)                | 2.00 ± 0.00  | 16.67 ± 0.47 | 18.67 ± 0.47             | 19.67 ± 0.47 |
+| 6 | +TinyLlama (+llama CPU)           | 2.00 ± 0.00  | 16.67 ± 0.47 | 18.67 ± 0.47             | 19.67 ± 0.47 |
 
-Total wall-clock for this sweep run: 14:52:34 → 15:02:34 (10 minutes).
+Total wall-clock for this sweep run: 17:45:30 → 18:00:38 (~15 minutes).
 
 Observations:
 
 - Detection delay sits at 2–3 s, bounded above by the sliding-window
   length T = 3 s as expected.
 - `T_post` (post-detection recovery) climbs monotonically as the CPU
-  background load gets heavier: 15.0 s (no bg) → 16.7 s (heavy bg).
-  This is the contribution of the cold-start cycle plus the V(t)
-  stabilisation tail; both lengthen under contention.
+  background load gets heavier: 14.7 s (no bg) → 16.7 s (LLM bg).
+  The CNN-only backgrounds (S1–S4) add about 1 s; the LLM models
+  (GPT-2 in S5, + TinyLlama in S6) add another ~1 s. This is the
+  contribution of the cold-start cycle plus the V(t) stabilisation
+  tail; both lengthen under contention.
 - Observed total recovery stays strictly below the analytical bound in
-  every scenario, with a margin of 0.67–1.00 s (= worst-case detection
+  every scenario, with a margin of 0.33–1.00 s (= worst-case detection
   delay − measured detection delay).
-- Variability across reps is small (σ ≤ 0.82 s) thanks to the 1 Hz tick
-  resolution and the deterministic phase structure.
+- Variability across reps is small (σ ≤ 1.25 s) thanks to the 1 Hz
+  tick resolution and the deterministic phase structure.
+- S5 and S6 produce the same measured latency (18.67 s observed),
+  suggesting that the additional TinyLlama process on top of GPT-2
+  does not measurably change the recovery cost on this machine.
 
 ---
 

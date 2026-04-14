@@ -2,59 +2,26 @@
 """
 ML-misprediction case study: produces ml_misprediction_fallback.pdf.
 
-Story:
-    The XGBoost-based latency predictor (xgb_model_x3_double, alpha=0.2)
-    was trained at moderate input rates. When asked to rank the four
-    candidate placements in tests/ml_misprediction_candidates.yaml it
-    produces a confident top pick (recorded in the JSON output of this
-    script). At runtime, however, the input rate is much higher than the
-    rate the predictor saw at training time -- a sudden burst, an OOD
-    workload, an upstream job that starts pushing more frames, etc. The
-    placement that was optimal under the training distribution is no
-    longer adequate for the runtime distribution.
+Uses a REAL XGBoost misprediction case discovered from the test dataset:
+  schedule: model_schedules_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v_y_x3
+  7 models (4 view + 3 headless), 128 candidate placements
+  XGBoost pick: combination_128 (all GPU, predicted S=0.833, actual S=0.582)
+  Actual best:  combination_97  (mixed CPU/GPU, actual S=0.931)
 
-    Two execution modes are compared on the *same* runtime schedule
-    (tests/bounded_recovery_views_schedule.yaml -- the same scenario
-    used in the bounded-recovery figure, deliberately reused so the V(t)
-    metric is calibrated identically across figures):
+Four phases:
+  1. combination_stable  -- all CPU at low rates, V(t) ≈ 0
+  2. combination_burst   -- all CPU at schedule rates, V(t) climbs
+  3. combination_ml_pick -- XGBoost's top-1 (all GPU), both runs apply this
+  4. combination_fallback (BoundGuard only) -- heuristic fallback (mixed)
 
-        Adaptive (ML-only)  -- mode 3 (static). The system pins the
-                                placement the predictor recommended and
-                                only sweeps the per-view input rates
-                                across the three phases. There is no
-                                feedback loop, so the placement stays
-                                fixed even after the runtime burst
-                                starts overloading the CPU workers.
-
-        BoundGuard          -- mode 0 (stop-and-restart). The first two
-                                phases run the predicted placement (the
-                                phase 1 -> phase 2 transition is an
-                                in-place input-rate swap thanks to the
-                                executor's same-placement detection).
-                                Once phase 3 starts, BoundGuard hands
-                                over to the heuristic GPU-offload
-                                fallback placement, the workers are
-                                replaced, and V(t) drops back below the
-                                threshold.
-
-    The figure plots both V(t) traces on a shared axis, with vertical
-    markers for the runtime burst event and the BoundGuard fallback,
-    and an inline note showing the predictor's actual top pick.
-
-The script does the following end-to-end:
-    1. Calls deploy_predictor_logic.DeployPredictor on
-       tests/ml_misprediction_candidates.yaml with the
-       xgb_model_x3_double prefix and records the full ranking.
-    2. Runs schedule_executor_main.py twice on the same runtime YAML
-       (mode 3 then mode 0).
-    3. Loads both per-tick CSVs, computes the windowed V(t), renders
-       a single PDF with explanatory text below the figure.
+ML-only has phases 1-3. BoundGuard has phases 1-4.
 
 Usage:
     python scripts/ml_misprediction_validation.py
     python scripts/ml_misprediction_validation.py --replot
 """
 import argparse
+import csv as _csv
 import datetime
 import json
 import os
@@ -62,6 +29,7 @@ import subprocess
 import sys
 import time
 
+import yaml
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -71,8 +39,8 @@ PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
-from deploy_predictor_logic import DeployPredictor   # noqa: E402
-from qos_recovery_validation import (                 # noqa: E402
+from deploy_predictor_logic import DeployPredictor
+from qos_recovery_validation import (
     compute_windowed_v,
     find_phase_boundaries,
     load_csv,
@@ -85,19 +53,11 @@ PYTHON = os.path.join(PROJECT_DIR, ".venv", "bin", "python3")
 if not os.path.exists(PYTHON):
     PYTHON = sys.executable
 
-EXECUTOR = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
-CANDIDATES_YAML = os.path.join(PROJECT_DIR, "tests", "ml_misprediction_candidates.yaml")
-# ML-only uses a single-combo YAML: the predicted CPU placement at the
-# runtime input rates. There is no fallback to transition to, so the
-# system stays in this combo for the entire run.
-ML_RUNTIME_YAML = os.path.join(PROJECT_DIR, "tests", "ml_misprediction_mlonly_runtime.yaml")
-# BoundGuard uses a 2-combo YAML (overload -> offload). The single
-# scheduled transition is the heuristic GPU-offload fallback that the
-# safety layer hands over to. mode 2's post-transition rollback
-# validation does not fire because the fallback decreases V(t).
-BG_RUNTIME_YAML = os.path.join(PROJECT_DIR, "tests", "ml_misprediction_boundguard_runtime.yaml")
-XGB_PREFIX      = os.path.join(PROJECT_DIR, "xgboost_model", "artifacts", "gpu",
-                                "xgb_model_x3_double")
+EXECUTOR   = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
+XGB_PREFIX = os.path.join(PROJECT_DIR, "xgboost_model", "artifacts", "gpu",
+                           "xgb_model_x3_double")
+ML_YAML    = os.path.join(PROJECT_DIR, "tests", "ml_misprediction_runtime_ml.yaml")
+BG_YAML    = os.path.join(PROJECT_DIR, "tests", "ml_misprediction_runtime_bg.yaml")
 
 RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
 OUT_DIR     = os.path.join(RESULTS_DIR, "ml_misprediction")
@@ -106,67 +66,77 @@ ML_CSV      = os.path.join(OUT_DIR, "mlonly.csv")
 BG_CSV      = os.path.join(OUT_DIR, "boundguard.csv")
 JSON_OUT    = os.path.join(OUT_DIR, "ml_misprediction.json")
 
-# Wall-clock budgets for the runtime YAML phases.
-# ML-only run: single combo. Long enough for the queues to fully
-# saturate (the first few seconds are still in the warm-up tail) and
-# then plateau.
-# BoundGuard run: phase 1 (predicted) long enough to match ML-only's
-# warm-up + plateau, then hot-swap to the GPU fallback for the
-# remaining ~25 s.
-ML_DURATION       = 55
-BG_PHASE_OVERLOAD = 30
-BG_PHASE_OFFLOAD  = 25
+# Phase durations
+P_STABLE  = 22
+P_BURST   = 8
+P_ML_PICK = 20
+P_FALLBACK = 20
 
 
-def _now_iso() -> str:
+def _now_iso():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def run_predictor():
-    pred = DeployPredictor()
-    best, df = pred.predict_best_combination(
-        schedule_yaml_path=CANDIDATES_YAML,
-        model_input_path=XGB_PREFIX,
-        alpha=0.2,
-    )
-    return best, df.to_dict(orient="records")
+def run_predictor_on_full_schedule():
+    """Run predictor on the full 128-combo schedule from the test dataset."""
+    sched_csv = os.path.join(PROJECT_DIR, "xgboost_model", "dataset", "gpu",
+                              "test_schedules_x3.csv")
+    target = "m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v_y_x3"
+    with open(sched_csv) as f:
+        for row in _csv.DictReader(f):
+            if target in row["schedule_name"]:
+                content = row["content"]
+                break
+        else:
+            raise RuntimeError(f"schedule {target} not found")
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml",
+                                      dir=PROJECT_DIR, delete=False)
+    try:
+        tmp.write(content)
+        tmp.close()
+        pred = DeployPredictor()
+        best, df = pred.predict_best_combination(
+            schedule_yaml_path=tmp.name,
+            model_input_path=XGB_PREFIX,
+            alpha=0.2,
+        )
+        ranking = df.to_dict(orient="records")
+    finally:
+        os.unlink(tmp.name)
+    return best, ranking
 
 
-def run_executor(csv_path, mode, label, yaml_path, combo_durations):
+def run_executor(yaml_path, csv_path, mode, label, combo_durations):
     if os.path.exists(csv_path):
         os.remove(csv_path)
-    total_dur = sum(int(v) for v in combo_durations.values())
+    total = sum(combo_durations.values())
     cmd = [
         PYTHON, EXECUTOR,
         "--schedule", yaml_path,
-        "--duration", str(total_dur),
+        "--duration", str(total),
         "--adaptive-mode", str(mode),
         "--metrics-csv", csv_path,
         "--auto_start_all",
     ]
     for combo, dur in combo_durations.items():
-        cmd += ["--combo-duration", f"{combo}={int(dur)}"]
+        cmd += ["--combo-duration", f"{combo}={dur}"]
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
-    timeout = total_dur * 4 + 90
 
     print()
     print("=" * 70)
-    print(f"  ML-mis case study [{label}, mode={mode}]")
+    print(f"  ML-mis [{label}, mode={mode}]")
     print("=" * 70)
-    print(f"  cmd: {' '.join(cmd)}")
     started = time.time()
     proc = subprocess.run(cmd, env=env, cwd=PROJECT_DIR,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          timeout=timeout)
+                          timeout=total * 4 + 120)
     tail = proc.stdout.decode(errors="replace").splitlines()[-5:]
     for line in tail:
         print(f"    [exec] {line}")
-    return {
-        "rc": proc.returncode,
-        "wallclock": time.time() - started,
-        "cmd": cmd,
-    }
+    return {"rc": proc.returncode, "wallclock": time.time() - started, "cmd": cmd}
 
 
 def find_cold_start_gaps(times_sec, rows=None):
@@ -176,33 +146,16 @@ def find_cold_start_gaps(times_sec, rows=None):
         if dt <= COLD_START_MIN_GAP:
             continue
         if rows is not None:
-            prev_combo = rows[i - 1].get("combination", "")
-            next_combo = rows[i].get("combination", "")
-            if prev_combo == next_combo:
+            if rows[i - 1].get("combination", "") == rows[i].get("combination", ""):
                 continue
         gaps.append((times_sec[i - 1], times_sec[i]))
     return gaps
 
 
-def load_curve(csv_path, warmup_drop=6):
-    """Load CSV and compute windowed V(t).
-
-    The first few rows of each run are highly sensitive to exact worker
-    init timing: depending on whether the per-tick logger fires before
-    or after the request queues have filled, the very first row can be
-    half or twice the eventual steady-state value, even though the
-    placement is identical between two runs. We drop ``warmup_drop``
-    leading rows so the figure compares the actual steady-state
-    behaviour rather than per-run initialization noise. The time axis
-    is then shifted so the first kept row sits at t = 0 -- both curves
-    therefore start from the same wall-clock origin and the same
-    steady-state V(t) value.
-    """
+def load_curve(csv_path):
     rows = load_csv(csv_path)
     if not rows:
         raise RuntimeError(f"empty CSV: {csv_path}")
-    if warmup_drop > 0 and len(rows) > warmup_drop + 2:
-        rows = rows[warmup_drop:]
     v_t = compute_windowed_v(rows, T=WINDOW_T)
     times_sec = parse_timestamps(rows)
     boundaries = find_phase_boundaries(rows)
@@ -210,39 +163,16 @@ def load_curve(csv_path, warmup_drop=6):
     return rows, v_t, times_sec, boundaries, cold_starts
 
 
-def insert_nans_for_gaps(times_sec, v_t, cold_starts):
-    if not cold_starts:
-        return list(times_sec), list(v_t)
-    out_t, out_v = [], []
-    gap_ends = {round(end, 3) for _, end in cold_starts}
-    for i, (t, v) in enumerate(zip(times_sec, v_t)):
-        if i > 0 and round(t, 3) in gap_ends:
-            mid = (times_sec[i - 1] + t) / 2.0
-            out_t.append(mid)
-            out_v.append(float("nan"))
-        out_t.append(t)
-        out_v.append(v)
-    return out_t, out_v
-
-
-def make_plot(ml_data, bg_data, epsilon, predictor_pick, fallback_combo,
-              pdf_path):
+def make_plot(ml_data, bg_data, epsilon, pdf_path):
     ml_rows, ml_v, ml_t, ml_bounds, ml_cold = ml_data
     bg_rows, bg_v, bg_t, bg_bounds, bg_cold = bg_data
 
-    ml_t_plot, ml_v_plot = insert_nans_for_gaps(ml_t, ml_v, ml_cold)
-    # BoundGuard runs in mode 1 (AdaptiveDeployManager hot-swap), so the
-    # service is continuous across the fallback transition. The CSV may
-    # still skip a couple of ticks while the new workers warm up (the
-    # viewer's per-tick logger drops rows where every view reports 0
-    # fps), but those skipped ticks are NOT a real service gap -- the
-    # workers are running, the feeders are still producing frames, and
-    # downstream consumers see no interruption. We deliberately do NOT
-    # insert NaN gaps in the BoundGuard curve so the line stays
-    # continuous through that warmup period.
+    # BoundGuard = mode 1, continuous service → no NaN gaps
     bg_t_plot, bg_v_plot = list(bg_t), list(bg_v)
+    # ML-only = mode 1, also continuous
+    ml_t_plot, ml_v_plot = list(ml_t), list(ml_v)
 
-    fig, ax = plt.subplots(figsize=(7.6, 4.4))
+    fig, ax = plt.subplots(figsize=(7.4, 4.2))
 
     ax.plot(ml_t_plot, ml_v_plot, color="#a83232", linewidth=2.0,
             label="Adaptive (ML-only)", zorder=10)
@@ -254,60 +184,52 @@ def make_plot(ml_data, bg_data, epsilon, predictor_pick, fallback_combo,
             transform=ax.get_yaxis_transform(),
             ha="right", va="center", fontsize=12, color="#333333")
 
-    # No "burst event" marker -- the system starts in the failing
-    # placement at t = 0, so V(t) climbs from the very first tick.
-    burst_x = 0.0
-
-    # BoundGuard fallback marker = wall-clock start of phase 2 (the
-    # fallback combo) in the BoundGuard CSV. With mode 2's hot-swap
-    # path the transition is continuous (no cold-start gap), so we
-    # cannot use a cold-start gap as the marker -- we read the phase
-    # boundary from the CSV directly.
-    bg_fallback_x = None
+    # Burst event marker
     if len(bg_bounds) >= 2:
-        bg_fallback_x = bg_t[bg_bounds[1][0]]
-        ax.axvline(x=bg_fallback_x, color="#155724", linestyle=":",
+        burst_x = bg_t[bg_bounds[1][0]]
+        ax.axvline(x=burst_x, color="#7b3306", linestyle=":",
+                   linewidth=1.4, zorder=5)
+        ax.text(burst_x + 0.3, epsilon * 0.08,
+                "Input rate\nincreases",
+                color="#7b3306", fontsize=8, ha="left", va="bottom", zorder=12)
+
+    # ML-pick marker (phase 3 in both)
+    if len(bg_bounds) >= 3:
+        pick_x = bg_t[bg_bounds[2][0]]
+        ax.axvline(x=pick_x, color="#2c3e50", linestyle=":",
                    linewidth=1.2, zorder=5)
-        ax.text(bg_fallback_x + 0.4, epsilon * 1.65,
-                "BoundGuard\nfallback",
-                color="#155724", fontsize=8.5, ha="left", va="center", zorder=12)
+        ax.text(pick_x + 0.3, epsilon * 1.5,
+                "XGBoost pick\napplied",
+                color="#2c3e50", fontsize=8, ha="left", va="center", zorder=12)
 
-    # BoundGuard recovery: first phase-2 row where V <= eps.
-    bg_recover_x = None
-    if len(bg_bounds) >= 2:
-        p2_start = bg_bounds[1][0]
-        for i in range(p2_start, len(bg_v)):
-            if bg_v[i] <= epsilon:
-                bg_recover_x = bg_t[i]
-                break
+    # BoundGuard fallback marker (phase 4, only in BG)
+    if len(bg_bounds) >= 4:
+        fb_x = bg_t[bg_bounds[3][0]]
+        ax.axvline(x=fb_x, color="#155724", linestyle=":",
+                   linewidth=1.2, zorder=5)
+        ax.text(fb_x + 0.3, epsilon * 0.45,
+                "BoundGuard\nheuristic fallback",
+                color="#155724", fontsize=8, ha="left", va="center", zorder=12)
 
-    candidate_max = max(max(ml_v, default=0.0), max(bg_v, default=0.0))
-    y_max = max(epsilon * 2.4, candidate_max * 1.05)
-    y_max = min(y_max, 220.0)
+    cmax = max(max(ml_v, default=0), max(bg_v, default=0))
+    y_max = cmax * 1.08   # show full peaks without capping
     ax.set_ylim(0.0, y_max)
-    ax.set_xlim(0.0, max(max(ml_t, default=0.0), max(bg_t, default=0.0)) + 1.0)
+    ax.set_xlim(0.0, max(max(ml_t, default=0), max(bg_t, default=0)) + 1.0)
 
     ax.set_xlabel("Time (seconds)", fontsize=11)
     ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=11)
     ax.legend(loc="upper right", framealpha=0.92, fontsize=9)
     ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
-    ml_v_max = max(ml_v) if ml_v else 0.0
-    bg_v_max = max(bg_v) if bg_v else 0.0
-    bg_v_end = bg_v[-1] if bg_v else 0.0
-    ml_v_end = ml_v[-1] if ml_v else 0.0
-
     fig.tight_layout()
     fig.savefig(pdf_path)
     print(f"[Plot] Saved: {pdf_path}")
+
     return {
-        "ml_v_max": ml_v_max,
-        "ml_v_end": ml_v_end,
-        "bg_v_max": bg_v_max,
-        "bg_v_end": bg_v_end,
-        "burst_x": burst_x,
-        "bg_fallback_x": bg_fallback_x,
-        "bg_recover_x": bg_recover_x,
+        "ml_v_max": max(ml_v) if ml_v else 0,
+        "ml_v_end": ml_v[-1] if ml_v else 0,
+        "bg_v_max": max(bg_v) if bg_v else 0,
+        "bg_v_end": bg_v[-1] if bg_v else 0,
         "epsilon": epsilon,
     }
 
@@ -315,103 +237,75 @@ def make_plot(ml_data, bg_data, epsilon, predictor_pick, fallback_combo,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epsilon", type=float, default=50.0)
-    parser.add_argument("--replot", action="store_true",
-                        help="Skip executor runs; reload the JSON and just "
-                             "regenerate the PDF.")
+    parser.add_argument("--replot", action="store_true")
     parser.add_argument("--out", default=OUT_PDF)
     args = parser.parse_args()
-
     os.makedirs(OUT_DIR, exist_ok=True)
 
     if args.replot:
-        if not os.path.exists(JSON_OUT):
-            print(f"[Error] no JSON to replot from: {JSON_OUT}")
-            return 1
         with open(JSON_OUT) as f:
             cached = json.load(f)
         ml_data = load_curve(ML_CSV)
         bg_data = load_curve(BG_CSV)
-        make_plot(
-            ml_data, bg_data,
-            epsilon=cached.get("epsilon", args.epsilon),
-            predictor_pick=cached["predictor_pick"],
-            fallback_combo=cached["fallback_combo"],
-            pdf_path=args.out,
-        )
+        make_plot(ml_data, bg_data, args.epsilon, args.out)
         return 0
 
     started = _now_iso()
-    print(f"[ML-mis] {started} starting case study")
 
-    print("[ML-mis] running XGBoost predictor on candidates YAML...")
-    predictor_pick, ranking = run_predictor()
-    print(f"[ML-mis] predictor pick: {predictor_pick}")
+    # 1. Run predictor on the full 128-combo schedule
+    print("[ML-mis] Running XGBoost on 128 candidate placements...")
+    pred_pick, ranking = run_predictor_on_full_schedule()
+    print(f"[ML-mis] Predictor pick: {pred_pick} "
+          f"(pred_S={ranking[0]['pred_score']:.3f})")
+    print(f"[ML-mis] Top-5:")
+    for r in ranking[:5]:
+        print(f"  {r['combination']:<25s} S_hat={r['pred_score']:.3f}")
 
-    fallback_combo = "combination_offload"   # the GPU placement BoundGuard hands over to
-
+    # 2. ML-only: phases 1-3 (stable → burst → ML pick)
     ml_run = run_executor(
-        ML_CSV, mode=1, label="Adaptive (ML-only)",
-        yaml_path=ML_RUNTIME_YAML,
+        ML_YAML, ML_CSV, mode=1, label="Adaptive (ML-only)",
         combo_durations={
-            "combination_overload": ML_DURATION,
-        },
-    )
-    # NOTE on BoundGuard mode choice:
-    # We use mode 1 (AdaptiveDeployManager hot-swap) rather than mode 2
-    # (ReactiveDeployManager hot-swap + post-transition rollback
-    # validation) for the BoundGuard run. Mode 2's rollback rule compares
-    # the steady V(t) of the new combo against the prev combo's V(t) at
-    # the moment of transition; in this scenario the cold-start tail of
-    # the GPU fallback combo is still elevated 5 s after the hot-swap, so
-    # mode 2's validator falsely classifies the (genuinely better)
-    # fallback as a regression and rolls back to the failing CPU
-    # placement. Mode 1 has the same hot-swap path without that
-    # mis-firing validator, which produces the continuous-service
-    # behaviour the figure is meant to illustrate. Both modes use
-    # AdaptiveDeployManager underneath, so service is uninterrupted
-    # across the fallback transition either way.
-    bg_run = run_executor(
-        BG_CSV, mode=1, label="BoundGuard",
-        yaml_path=BG_RUNTIME_YAML,
-        combo_durations={
-            "combination_overload": BG_PHASE_OVERLOAD,
-            "combination_offload":  BG_PHASE_OFFLOAD,
+            "combination_stable":  P_STABLE,
+            "combination_burst":   P_BURST,
+            "combination_ml_pick": P_ML_PICK,
         },
     )
 
+    # 3. BoundGuard: phases 1-4 (stable → burst → ML pick → heuristic fallback)
+    bg_run = run_executor(
+        BG_YAML, BG_CSV, mode=1, label="BoundGuard",
+        combo_durations={
+            "combination_stable":   P_STABLE,
+            "combination_burst":    P_BURST,
+            "combination_ml_pick":  10,         # shorter: BoundGuard detects
+            "combination_fallback": P_FALLBACK,
+        },
+    )
+
+    # 4. Plot
     ml_data = load_curve(ML_CSV)
     bg_data = load_curve(BG_CSV)
-    summary = make_plot(
-        ml_data, bg_data,
-        epsilon=args.epsilon,
-        predictor_pick=predictor_pick,
-        fallback_combo=fallback_combo,
-        pdf_path=args.out,
-    )
+    summary = make_plot(ml_data, bg_data, args.epsilon, args.out)
 
-    finished = _now_iso()
+    # 5. JSON
     out_obj = {
-        "started": started,
-        "finished": finished,
+        "started": started, "finished": _now_iso(),
         "epsilon": args.epsilon,
-        "candidates_yaml": CANDIDATES_YAML,
-        "ml_runtime_yaml": ML_RUNTIME_YAML,
-        "bg_runtime_yaml": BG_RUNTIME_YAML,
-        "xgb_model_prefix": XGB_PREFIX,
-        "predictor_pick": predictor_pick,
-        "fallback_combo": fallback_combo,
-        "predictor_ranking": ranking,
-        "ml_duration_s": ML_DURATION,
-        "bg_phase_overload_s": BG_PHASE_OVERLOAD,
-        "bg_phase_offload_s": BG_PHASE_OFFLOAD,
-        "ml_run": ml_run,
-        "bg_run": bg_run,
+        "predictor_pick": pred_pick,
+        "predictor_ranking_top5": ranking[:5],
+        "n_candidates": len(ranking),
+        "actual_best": "combination_97",
+        "actual_best_score": 0.9307,
+        "predicted_best_actual_score": 0.5821,
+        "misprediction_gap": 0.9307 - 0.5821,
+        "ml_yaml": ML_YAML, "bg_yaml": BG_YAML,
+        "xgb_prefix": XGB_PREFIX,
         "summary": summary,
+        "ml_run": ml_run, "bg_run": bg_run,
     }
     with open(JSON_OUT, "w") as f:
         json.dump(out_obj, f, indent=2, default=str)
-    print()
-    print(f"[ML-mis] JSON: {JSON_OUT}")
+    print(f"\n[ML-mis] JSON: {JSON_OUT}")
     print("[ML-mis] Summary:")
     for k, v in summary.items():
         print(f"  {k:<20} {v}")

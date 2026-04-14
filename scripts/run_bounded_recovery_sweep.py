@@ -94,6 +94,25 @@ SCENARIOS = [
             {"model": "models_onnx/vgg19.onnx",            "device": "cpu", "rate": 5},
         ],
     },
+    {
+        "label": "+GPT-2\n(+gpt2 CPU)",
+        "background": [
+            {"model": "models_onnx/squeezenet1.0-12.onnx", "device": "cpu", "rate": 30},
+            {"model": "models_onnx/shufflenet-v2-12.onnx", "device": "cpu", "rate": 30},
+            {"model": "models_onnx/vgg19.onnx",            "device": "cpu", "rate": 5},
+            {"model": "models_onnx/gpt2.onnx",             "device": "cpu", "rate": 1},
+        ],
+    },
+    {
+        "label": "+TinyLlama\n(+llama CPU)",
+        "background": [
+            {"model": "models_onnx/squeezenet1.0-12.onnx",            "device": "cpu", "rate": 30},
+            {"model": "models_onnx/shufflenet-v2-12.onnx",            "device": "cpu", "rate": 30},
+            {"model": "models_onnx/vgg19.onnx",                       "device": "cpu", "rate": 5},
+            {"model": "models_onnx/gpt2.onnx",                        "device": "cpu", "rate": 1},
+            {"model": "models_onnx/tiny-llama-chat-onnx/model.onnx",  "device": "cpu", "rate": 0},
+        ],
+    },
 ]
 
 
