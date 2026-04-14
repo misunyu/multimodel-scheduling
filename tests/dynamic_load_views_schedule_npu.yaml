@@ -1,67 +1,84 @@
 # dynamic_load_views_schedule_npu.yaml
-# NPU port of the (un-committed) dynamic_load_views_schedule.yaml referenced
-# by scripts/dynamic_load_validation.py.
 #
-# Three phases used to compare BoundGuard (mode 0) vs static (mode 3):
-#   phase_a — all CPU, low input rate                       (V ≈ 0)
-#   phase_b — all CPU, HIGH input rate, SAME placement      (V grows; mode 3 stays here)
-#   phase_c — heaviest two on npu0 / npu1, HIGH input rate  (V drops; mode 0 reaches here)
+# Four-model NPU scenario for the dynamic_load_adaptation figure.
 #
-# Mode 0 detects that phase_a -> phase_b is a same-placement transition
-# (only infps changes) and applies an in-place infps update via
-# apply_static_phase, with no cold-start gap. The phase_b -> phase_c
-# transition is a real placement change and triggers a stop-and-restart
-# cycle.
-#
-# Constraint: each NPU core (npu0, npu1) runs AT MOST one model at a time.
+# Narrative (matches the paper figure, YOLO CPU->NPU direction):
+#   phase_a — baseline. YOLOs on CPU, ResNets on NPU0/NPU1. Input
+#             rates tiny. V(t) ~ 0.
+#   phase_b — load change. SAME placement. YOLO input rate jumps from
+#             3 fps to 8 fps. The CPU cannot sustain YOLOv3 at 8 fps
+#             (CPU cap ~5.7 fps for yolov3_big, ~7.4 for yolov3_small),
+#             so queues build up; end-to-end latency climbs well above
+#             the SLO (1000/8 = 125 ms) and V(t) crosses epsilon.
+#   phase_c — reconfiguration. YOLOs move to NPU0/NPU1 (fits 8 fps
+#             cleanly, NPU yolov3 infer is ~77/48 ms), ResNets move to
+#             CPU where at infps=3 they are no burden. V(t) falls
+#             below epsilon for BoundGuard and the rebuilt Stop-and-
+#             restart workers. Static keeps the overloaded phase_a
+#             placement and stays above epsilon.
 
 phase_a:
   yolov3_big_cpu:
     display: view1
     execution: cpu
-    infps: 5
+    infps: 3
     model: yolov3_big
   yolov3_small_cpu:
     display: view2
     execution: cpu
-    infps: 5
+    infps: 3
     model: yolov3_small
-  resnet50_small_cpu:
+  resnet50_big_npu0:
     display: view3
-    execution: cpu
-    infps: 2
+    execution: npu0
+    infps: 3
+    model: resnet50_big
+  resnet50_small_npu1:
+    display: view4
+    execution: npu1
+    infps: 3
     model: resnet50_small
 
 phase_b:
   yolov3_big_cpu:
     display: view1
     execution: cpu
-    infps: 30
+    infps: 8
     model: yolov3_big
   yolov3_small_cpu:
     display: view2
     execution: cpu
-    infps: 30
+    infps: 8
     model: yolov3_small
-  resnet50_small_cpu:
+  resnet50_big_npu0:
     display: view3
-    execution: cpu
-    infps: 10
+    execution: npu0
+    infps: 3
+    model: resnet50_big
+  resnet50_small_npu1:
+    display: view4
+    execution: npu1
+    infps: 3
     model: resnet50_small
 
 phase_c:
   yolov3_big_npu0:
     display: view1
     execution: npu0
-    infps: 30
+    infps: 8
     model: yolov3_big
   yolov3_small_npu1:
     display: view2
     execution: npu1
-    infps: 30
+    infps: 8
     model: yolov3_small
-  resnet50_small_cpu:
+  resnet50_big_cpu:
     display: view3
     execution: cpu
-    infps: 10
+    infps: 3
+    model: resnet50_big
+  resnet50_small_cpu:
+    display: view4
+    execution: cpu
+    infps: 3
     model: resnet50_small

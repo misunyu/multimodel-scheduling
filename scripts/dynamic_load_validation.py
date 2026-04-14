@@ -3,39 +3,43 @@
 Dynamic Load Adaptation Validation: produces dynamic_load_adaptation.pdf.
 
 Goal of the figure:
-    Compare the V(t) trajectory under a sudden input-rate increase between
-        Static    (mode 3): the placement never changes; V(t) keeps
-                            climbing as queues build up.
-        BoundGuard (mode 0): the system reconfigures to a GPU placement
-                            shortly after the load change and V(t) drops
-                            back below the threshold.
+    Compare the V(t) trajectory under a sudden input-rate increase
+    between three execution modes driven by the same schedule YAML
+    (tests/dynamic_load_views_schedule_npu.yaml):
+
+        Static           (mode 3): placement never changes; V(t) keeps
+                                   climbing as queues build up on the
+                                   CPU-resident YOLO pair.
+        Stop-and-restart (mode 0): phase_b -> phase_c triggers a worker
+                                   stop-and-start; V(t) drops after the
+                                   cold-start gap.
+        Hot-swap         (mode 1): AdaptiveDeployManager brings the new
+                                   placement up in parallel and swaps
+                                   atomically, so service stays
+                                   continuous through the reconfig and
+                                   V(t) drops without a visible gap.
 
 Scenario:
-    Phase A — t = 0 .. 20 s   placement P1 (all CPU), low input rate, V(t) ~ 0
-    Phase B — t = 20 .. ~25 s placement P1 (all CPU), HIGH input rate
+    Phase A — t = 0 .. ~22 s  placement P1, low input rate, V(t) ~ 0
+    Phase B — t = 22 .. ~28 s placement P1, HIGH input rate
                               (the in-place "load change" event)
-    Phase C — t ~ 25 s onward placement P2 (all GPU), HIGH input rate
+    Phase C — t ~ 28 s onward placement P2, HIGH input rate
 
-The schedule is tests/dynamic_load_views_schedule.yaml. Mode 0 uses the
-same-placement detection in schedule_executor_main, so the phase-A -> phase-B
-transition is an in-place infps swap with no cold-start gap; the phase-B
--> phase-C transition is a real stop-and-restart with the visible
-cold-start window. Mode 3 keeps the first placement throughout and only
-sweeps the per-view input rates.
+This is a PLOT-ONLY script. Each V(t) curve must come from a data-
+collection run that is fully isolated (separate Docker container, all
+NPU drivers torn down between runs, same YAML schedule so input rates
+and placements match across techniques). The canonical runner is
+run_dynload_scenarios.sh — it sequences the three scenarios, kills
+each one before starting the next, and then invokes this script to
+produce the two PDFs from the three saved CSVs.
 
 Usage:
-    python scripts/dynamic_load_validation.py
-    python scripts/dynamic_load_validation.py --no-run        # replot only
-    python scripts/dynamic_load_validation.py --epsilon 50
-
-The script reuses the per-tick / windowed-V(t) helpers from
-qos_recovery_validation.py so the metric definition stays consistent
-across the two figures.
+    ./run_dynload_scenarios.sh            # run all three + plot
+    ./run_dynload_scenarios.sh plot       # replot only (CSVs already present)
+    python scripts/dynamic_load_validation.py --epsilon 10   # replot alone
 """
 import argparse
-import datetime
 import os
-import subprocess
 import sys
 
 import matplotlib
@@ -55,66 +59,20 @@ from qos_recovery_validation import (   # noqa: E402
     COLD_START_MIN_GAP,
 )
 
-PYTHON = os.path.join(PROJECT_DIR, ".venv", "bin", "python3")
-if not os.path.exists(PYTHON):
-    PYTHON = sys.executable
-
 DEFAULT_SCHEDULE = os.path.join(PROJECT_DIR, "tests", "dynamic_load_views_schedule_npu.yaml")
 RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
-OUT_PDF = os.path.join(RESULTS_DIR, "dynamic_load_adaptation.pdf")
-BG_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_boundguard.csv")
+OUT_PDF = os.path.join(RESULTS_DIR, "dynamic_load_adaptation_antara.pdf")
+OUT_SAS_PDF = os.path.join(RESULTS_DIR, "dynamic_load_start_and_stop_antara.pdf")
 ST_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_static.csv")
+SAS_CSV = os.path.join(RESULTS_DIR, "dynamic_load_stop_and_restart.csv")
+HS_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_hotswap.csv")
 
-# Phase 1 wall-clock budget. Setting this to 20 puts the load-change event
-# at t = 20 s on the figure x-axis.
-PHASE_A_DURATION = 22
-PHASE_B_DURATION = 6
-PHASE_C_DURATION = 22
-
-
-def run_scenario(schedule, csv_path, mode, label):
-    if os.path.exists(csv_path):
-        os.remove(csv_path)
-    cmd = [
-        PYTHON, os.path.join(PROJECT_DIR, "schedule_executor_main.py"),
-        "--schedule", schedule,
-        "--duration", str(PHASE_A_DURATION + PHASE_B_DURATION + PHASE_C_DURATION),
-        "--adaptive-mode", str(mode),
-        "--metrics-csv", csv_path,
-        "--auto_start_all",
-        "--combo-duration", f"combination_p1_low={PHASE_A_DURATION}",
-        "--combo-duration", f"combination_p1_high={PHASE_B_DURATION}",
-        "--combo-duration", f"combination_p2_high={PHASE_C_DURATION}",
-    ]
-    env = os.environ.copy()
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    timeout = (PHASE_A_DURATION + PHASE_B_DURATION + PHASE_C_DURATION) * 4 + 90
-
-    print("=" * 70)
-    print(f"  Dynamic load scenario [{label}, mode={mode}]")
-    print(f"  Phases: A={PHASE_A_DURATION}s  B={PHASE_B_DURATION}s  C={PHASE_C_DURATION}s")
-    print("=" * 70)
-    print(f"  cmd: {' '.join(cmd)}")
-    proc = subprocess.run(cmd, env=env, cwd=PROJECT_DIR,
-                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          timeout=timeout)
-    tail = proc.stdout.decode(errors="replace").splitlines()[-5:]
-    for line in tail:
-        print(f"    [exec] {line}")
-    if proc.returncode != 0:
-        print(f"  [warn] executor exited rc={proc.returncode}")
+PHASE_A_DURATION = 18
+PHASE_B_DURATION = 14
+PHASE_C_DURATION = 20
 
 
 def find_cold_start_gaps(times_sec, rows=None):
-    """Return wall-clock gaps that look like cold-start windows.
-
-    A "real" cold-start happens when the executor stops the workers for
-    one combo and starts new workers for another, so the gap straddles a
-    *phase boundary* in the CSV. Plain ticks that happen to be missing
-    inside a phase (GC pauses, scheduler jitter) are filtered out so the
-    figure doesn't sprout fake "rollback in progress" hatching in the
-    middle of the recovered region.
-    """
     gaps = []
     for i in range(1, len(times_sec)):
         dt = times_sec[i] - times_sec[i - 1]
@@ -124,7 +82,6 @@ def find_cold_start_gaps(times_sec, rows=None):
             prev_combo = rows[i - 1].get("combination", "")
             next_combo = rows[i].get("combination", "")
             if prev_combo == next_combo:
-                # Missing tick inside a phase, not a real cold start.
                 continue
         gaps.append((times_sec[i - 1], times_sec[i]))
     return gaps
@@ -142,10 +99,6 @@ def load_curve(csv_path):
 
 
 def insert_nans_for_gaps(times_sec, v_t, cold_starts):
-    """Break the line through cold-start gaps by inserting a NaN row at the
-    midpoint of each gap. matplotlib then renders a literal break instead
-    of drawing a straight line through the empty interval.
-    """
     if not cold_starts:
         return list(times_sec), list(v_t)
     out_t = []
@@ -161,63 +114,77 @@ def insert_nans_for_gaps(times_sec, v_t, cold_starts):
     return out_t, out_v
 
 
-def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
-              load_change_sec):
-    bg_rows, bg_v_t, bg_times, bg_bounds, bg_cold = bg_data
+def _draw_gap_connectors(ax, times_sec, v_t, cold_starts, color):
+    """Across each cold-start gap, draw a thin grey dotted line linking
+    the last pre-gap and first post-gap sample so the eye can still
+    follow the curve through the break."""
+    if not cold_starts:
+        return
+    gap_ends = {round(end, 3) for _, end in cold_starts}
+    for i in range(1, len(times_sec)):
+        if round(times_sec[i], 3) not in gap_ends:
+            continue
+        ax.plot([times_sec[i - 1], times_sec[i]],
+                [v_t[i - 1], v_t[i]],
+                color=color, linestyle=":", linewidth=0.9,
+                zorder=6, label="_nolegend_")
+
+
+def _recover_time(v_t, times, boundaries, epsilon):
+    if len(boundaries) < 3:
+        return None
+    p3_start = boundaries[2][0]
+    for i in range(p3_start, len(v_t)):
+        if v_t[i] <= epsilon:
+            return times[i]
+    return None
+
+
+def make_combined_plot(st_data, sas_data, hs_data, epsilon, pdf_path,
+                       x_max, load_change_sec):
     st_rows, st_v_t, st_times, st_bounds, st_cold = st_data
+    sas_rows, sas_v_t, sas_times, sas_bounds, sas_cold = sas_data
+    hs_rows, hs_v_t, hs_times, hs_bounds, hs_cold = hs_data
 
-    bg_t_plot, bg_v_plot = insert_nans_for_gaps(bg_times, bg_v_t, bg_cold)
     st_t_plot, st_v_plot = insert_nans_for_gaps(st_times, st_v_t, st_cold)
+    sas_t_plot, sas_v_plot = insert_nans_for_gaps(sas_times, sas_v_t, sas_cold)
+    # Hot-swap keeps service continuous; do not break its line even if
+    # the logger drops a couple of ticks during warmup.
+    hs_t_plot, hs_v_plot = list(hs_times), list(hs_v_t)
 
-    fig, ax = plt.subplots(figsize=(7.0, 4.2))
+    fig, ax = plt.subplots(figsize=(7.2, 4.3))
 
     ax.plot(st_t_plot, st_v_plot, color="#a83232", linewidth=2.0,
             label="Static", zorder=10)
-    ax.plot(bg_t_plot, bg_v_plot, color="#1f4e79", linewidth=2.0,
-            label="BoundGuard", zorder=11)
+    ax.plot(sas_t_plot, sas_v_plot, color="#d98e00", linewidth=2.0,
+            label="Stop-and-restart", zorder=11)
+    ax.plot(hs_t_plot, hs_v_plot, color="#1f4e79", linewidth=2.0,
+            label="BoundGuard", zorder=12)
 
-    # Detection threshold (epsilon).
     ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.1, zorder=4)
     ax.text(-0.012, epsilon, r"$\epsilon$",
             transform=ax.get_yaxis_transform(),
             ha="right", va="center", fontsize=12, color="#333333")
 
-    # Vertical marker for the load-change event.
     ax.axvline(x=load_change_sec, color="#7b3306", linestyle=":",
                linewidth=1.4, zorder=5)
     ax.text(load_change_sec + 0.3, 5,
             "Input rate\nincreases",
             color="#7b3306", fontsize=8.5, ha="left", va="bottom",
-            zorder=12)
+            zorder=13)
 
-    # Cold-start window for the BoundGuard run = the visible reconfiguration
-    # interval. Mark it with a hatched grey vspan so the reader sees the
-    # gap between phase B and phase C.
-    for s, e in bg_cold:
-        ax.axvspan(s, e, color="#aaaaaa", alpha=0.20, hatch="//",
-                   linewidth=0, zorder=1,
-                   label="_nolegend_")
+    _draw_gap_connectors(ax, sas_times, sas_v_t, sas_cold, "#888888")
 
-    # Compute reconfig completion (BoundGuard recovery) marker: first tick
-    # in phase C where windowed V(t) drops back to <= epsilon.
-    bg_recover_sec = None
-    if len(bg_bounds) >= 3:
-        p3_start = bg_bounds[2][0]
-        for i in range(p3_start, len(bg_v_t)):
-            if bg_v_t[i] <= epsilon:
-                bg_recover_sec = bg_times[i]
-                break
-    if bg_recover_sec is not None:
-        ax.axvline(x=bg_recover_sec, color="#155724", linestyle=":",
-                   linewidth=1.2, zorder=5)
-        ax.text(bg_recover_sec + 0.3, epsilon * 0.55,
-                "BoundGuard\n stable",
-                color="#155724", fontsize=8.5, ha="left", va="center",
-                zorder=12)
+    sas_recover = _recover_time(sas_v_t, sas_times, sas_bounds, epsilon)
+    hs_recover = _recover_time(hs_v_t, hs_times, hs_bounds, epsilon)
+    if sas_recover is not None:
+        ax.axvline(x=sas_recover, color="#8a5a00", linestyle=":",
+                   linewidth=1.1, zorder=5)
+    if hs_recover is not None:
+        ax.axvline(x=hs_recover, color="#155724", linestyle=":",
+                   linewidth=1.1, zorder=5)
 
-    # Determine y_max from data, but cap at a reasonable level so the
-    # static curve doesn't run off the top.
-    candidate_max = max(max(bg_v_t), max(st_v_t))
+    candidate_max = max(max(st_v_t), max(sas_v_t), max(hs_v_t))
     y_max = max(epsilon * 2.4, candidate_max * 1.05)
     y_max = min(y_max, 220.0)
     ax.set_ylim(0.0, y_max)
@@ -231,62 +198,111 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
     fig.tight_layout()
     fig.savefig(pdf_path)
     print(f"[Plot] Saved: {pdf_path}")
-    return bg_recover_sec
+    return sas_recover, hs_recover
+
+
+def make_start_and_stop_plot(st_data, sas_data, epsilon, pdf_path,
+                             x_max, load_change_sec):
+    """Focused figure: Static vs Stop-and-restart only. Highlights the
+    visible cold-start gap that the hot-swap mode eliminates."""
+    st_rows, st_v_t, st_times, st_bounds, st_cold = st_data
+    sas_rows, sas_v_t, sas_times, sas_bounds, sas_cold = sas_data
+
+    st_t_plot, st_v_plot = insert_nans_for_gaps(st_times, st_v_t, st_cold)
+    sas_t_plot, sas_v_plot = insert_nans_for_gaps(sas_times, sas_v_t, sas_cold)
+
+    fig, ax = plt.subplots(figsize=(7.0, 4.2))
+    ax.plot(st_t_plot, st_v_plot, color="#a83232", linewidth=2.0,
+            label="Static", zorder=10)
+    ax.plot(sas_t_plot, sas_v_plot, color="#d98e00", linewidth=2.0,
+            label="Stop-and-restart", zorder=11)
+
+    ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.1, zorder=4)
+    ax.text(-0.012, epsilon, r"$\epsilon$",
+            transform=ax.get_yaxis_transform(),
+            ha="right", va="center", fontsize=12, color="#333333")
+
+    ax.axvline(x=load_change_sec, color="#7b3306", linestyle=":",
+               linewidth=1.4, zorder=5)
+    ax.text(load_change_sec + 0.3, 5,
+            "Input rate\nincreases",
+            color="#7b3306", fontsize=8.5, ha="left", va="bottom", zorder=12)
+
+    _draw_gap_connectors(ax, sas_times, sas_v_t, sas_cold, "#888888")
+
+    candidate_max = max(max(st_v_t), max(sas_v_t))
+    y_max = max(epsilon * 2.4, candidate_max * 1.05)
+    y_max = min(y_max, 220.0)
+    ax.set_ylim(0.0, y_max)
+    ax.set_xlim(0.0, x_max)
+
+    ax.set_xlabel("Time (seconds)", fontsize=11)
+    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=11)
+    ax.legend(loc="upper right", framealpha=0.92, fontsize=9)
+    ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    fig.savefig(pdf_path)
+    print(f"[Plot] Saved: {pdf_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--schedule", default=DEFAULT_SCHEDULE)
-    parser.add_argument("--epsilon", type=float, default=50.0)
-    parser.add_argument("--no-run", action="store_true",
-                        help="Skip running the executor; replot only.")
+    parser = argparse.ArgumentParser(
+        description="Plot dynamic-load V(t) curves from three CSVs "
+                    "produced by independent run_dynload_scenarios.sh runs.")
+    parser.add_argument("--epsilon", type=float, default=0.25)
+    # --no-run retained as a no-op for backwards compatibility.
+    parser.add_argument("--no-run", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    if not args.no_run:
-        run_scenario(args.schedule, BG_CSV, mode=0, label="BoundGuard")
-        run_scenario(args.schedule, ST_CSV, mode=3, label="Static")
+    missing = [p for p in (ST_CSV, SAS_CSV, HS_CSV) if not os.path.exists(p)]
+    if missing:
+        print("Missing CSV(s); run ./run_dynload_scenarios.sh first:\n  "
+              + "\n  ".join(missing))
+        return 1
 
-    bg_data = load_curve(BG_CSV)
-    st_data = load_curve(ST_CSV)
+    st_data  = load_curve(ST_CSV)
+    sas_data = load_curve(SAS_CSV)
+    hs_data  = load_curve(HS_CSV)
 
-    bg_times = bg_data[2]
-    st_times = st_data[2]
-    x_max = max(max(bg_times), max(st_times)) + 1.0
+    x_max = max(max(st_data[2]), max(sas_data[2]), max(hs_data[2])) + 1.0
 
-    # The load change is at the start of phase B in the BoundGuard CSV.
-    bg_bounds = bg_data[3]
-    if len(bg_bounds) >= 2:
-        load_change_sec = bg_times[bg_bounds[1][0]]
+    # Load-change wall-clock: use the start of phase_b in the stop-and-
+    # restart CSV (which has clean phase boundaries recorded).
+    sas_bounds = sas_data[3]
+    if len(sas_bounds) >= 2:
+        load_change_sec = sas_data[2][sas_bounds[1][0]]
     else:
         load_change_sec = float(PHASE_A_DURATION)
 
-    bg_recover_sec = make_plot(bg_data, st_data,
-                               epsilon=args.epsilon,
-                               pdf_path=OUT_PDF,
-                               x_max=x_max,
-                               load_change_sec=load_change_sec)
+    sas_recover, hs_recover = make_combined_plot(
+        st_data, sas_data, hs_data,
+        epsilon=args.epsilon, pdf_path=OUT_PDF,
+        x_max=x_max, load_change_sec=load_change_sec)
 
-    # Print summary numbers used to refresh the LaTeX text.
+    make_start_and_stop_plot(
+        st_data, sas_data,
+        epsilon=args.epsilon, pdf_path=OUT_SAS_PDF,
+        x_max=x_max, load_change_sec=load_change_sec)
+
     print()
     print("=" * 70)
     print("  Dynamic load scenario summary")
     print("=" * 70)
-    print(f"  epsilon                    = {args.epsilon}")
-    print(f"  Load-change wall-clock     = {load_change_sec:.2f}s")
-    print(f"  BoundGuard cold-start gaps = "
-          + (", ".join(f"{e - s:.1f}s @ {s:.1f}-{e:.1f}s" for s, e in bg_data[4])
-             if bg_data[4] else "(none)"))
-    print(f"  BoundGuard V(t) max        = {max(bg_data[1]):.2f}")
-    print(f"  BoundGuard V(t) end        = {bg_data[1][-1]:.2f}")
-    if bg_recover_sec is not None:
-        print(f"  BoundGuard t_stable        = {bg_recover_sec:.2f}s "
-              f"(first V(t)<=eps in phase C)")
-    print(f"  Static V(t) max            = {max(st_data[1]):.2f}")
-    print(f"  Static V(t) end            = {st_data[1][-1]:.2f}")
-    print(f"  Static rows                = {len(st_data[0])}")
-    print(f"  BoundGuard rows            = {len(bg_data[0])}")
+    print(f"  epsilon                       = {args.epsilon}")
+    print(f"  Load-change wall-clock        = {load_change_sec:.2f}s")
+    print(f"  Stop-and-restart cold-starts  = "
+          + (", ".join(f"{e - s:.1f}s @ {s:.1f}-{e:.1f}s" for s, e in sas_data[4])
+             if sas_data[4] else "(none)"))
+    print(f"  Static V(t) max/end           = {max(st_data[1]):.2f} / {st_data[1][-1]:.2f}")
+    print(f"  Stop-and-restart V(t) max/end = {max(sas_data[1]):.2f} / {sas_data[1][-1]:.2f}")
+    print(f"  Hot-swap V(t) max/end         = {max(hs_data[1]):.2f} / {hs_data[1][-1]:.2f}")
+    if sas_recover is not None:
+        print(f"  Stop-and-restart t_stable     = {sas_recover:.2f}s")
+    if hs_recover is not None:
+        print(f"  Hot-swap t_stable             = {hs_recover:.2f}s")
 
 
 if __name__ == "__main__":

@@ -216,10 +216,20 @@ class AdaptiveDeployManager:
 
         # --- 4. Incrementally update viewer state (kept views stay intact) ---
         # Update model_settings in-place: overwrite entries for swapped views,
-        # keep existing entries for kept views so handler references stay valid.
+        # keep existing entries for kept views so handler references stay
+        # valid. For kept views we still refresh the per-view `infps` so that
+        # an input-rate-only phase change (same placement, higher rate)
+        # propagates to the V(t) SLO calculation and the feeder dispatch
+        # interval. Without this the handler keeps the previous phase's
+        # infps and V(t) reads ~0 even when the workers are visibly
+        # overloaded.
         for vname in self.NAMED_VIEWS:
             if vname in swapped_views:
                 v.model_settings[vname] = new_settings[vname]
+            elif vname in kept_views and new_settings.get(vname):
+                new_infps = new_settings[vname].get("infps")
+                if new_infps is not None:
+                    v.model_settings[vname]["infps"] = new_infps
         # Update views_without_model
         v.views_without_model = new_views_without
         # Update combination name and schedule label
