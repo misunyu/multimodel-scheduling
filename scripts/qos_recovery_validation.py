@@ -264,7 +264,7 @@ def make_plot(times_sec, v_t, cold_starts,
         if t0_sec <= ((gs + ge) / 2.0) <= t_recover_sec
     ]
 
-    fig, ax = plt.subplots(figsize=(6.6, 4.4))
+    fig, ax = plt.subplots(figsize=(6.6, 3.96))
 
     # ----- shaded phase regions (background, low zorder) ----------------
     # Pale fills so the V(t) curve drawn on top stays clearly readable.
@@ -339,12 +339,8 @@ def make_plot(times_sec, v_t, cold_starts,
     ax.set_ylim(0.0, y_max)
 
     # ----- legend ---------------------------------------------------------
-    # Lowered to roughly V(t) = 80 (the top of the legend box sits at that
-    # height). Keeps the upper area free for the t_xxx markers and the
-    # Redeployment downtime annotation.
     if static_times_sec and static_v_t:
-        ax.legend(loc="upper right",
-                  bbox_to_anchor=(0.985, 80.0 / y_max),
+        ax.legend(loc="upper left",
                   framealpha=0.92, fontsize=7.5)
 
     # ----- top-of-axis event labels --------------------------------------
@@ -422,7 +418,7 @@ def make_plot(times_sec, v_t, cold_starts,
         text_x = t_recover_sec + 1.4
         text_y = 89.0
         ax.annotate(
-            "Redeployment downtime\n(no service)",
+            "Redeployment\ndowntime\n(no service)",
             xy=(gap_mid, empty_center_y),
             xytext=(text_x, text_y),
             arrowprops=dict(arrowstyle="-|>,head_length=0.5,head_width=0.3",
@@ -467,7 +463,7 @@ def make_plot(times_sec, v_t, cold_starts,
     plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------ㅡ래
 # Main
 # ---------------------------------------------------------------------------
 

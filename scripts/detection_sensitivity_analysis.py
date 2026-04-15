@@ -159,7 +159,7 @@ def render_heatmap(ax, data, title, fmt, cmap, lower_is_better=True,
     ax.set_xticklabels([f"$\\epsilon$={e}" for e in EPS_VALUES], fontsize=8)
     ax.set_yticks(range(len(T_VALUES)))
     ax.set_yticklabels([f"T={t}s" for t in T_VALUES], fontsize=8)
-    ax.set_title(title, fontsize=9, pad=4)
+    # ax.set_title removed for paper figure
     # Annotate cells.
     for i in range(arr.shape[0]):
         for j in range(arr.shape[1]):
@@ -209,11 +209,11 @@ def main():
     # ---------- figure layout ------------------------------------------------
     # Top : 2x2 heatmaps
     # Bottom : explanatory text
-    fig = plt.figure(figsize=(8.6, 9.6))
-    gs = GridSpec(3, 2, figure=fig,
-                  height_ratios=[1.0, 1.0, 0.95],
+    fig = plt.figure(figsize=(7.8, 6.0))
+    gs = GridSpec(2, 2, figure=fig,
+                  height_ratios=[1.0, 1.0],
                   hspace=0.55, wspace=0.30,
-                  top=0.94, bottom=0.04, left=0.10, right=0.96)
+                  top=0.97, bottom=0.05, left=0.06, right=0.92)
 
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1])
@@ -237,63 +237,7 @@ def main():
                    fmt="{:.0f}",
                    cmap="Purples")
 
-    fig.suptitle("Detection sensitivity of BoundGuard to $T$ and $\\epsilon$",
-                 fontsize=12, fontweight="bold", y=0.985)
-
-    # ---------- explanatory text below the panels ---------------------------
-    text_ax = fig.add_subplot(gs[2, :])
-    text_ax.axis("off")
-    explanation = (
-        "Each cell in the four heatmaps reports the mean of the listed metric "
-        "over $N=12$ recovery runs (4 background-load scenarios $\\times$ 3 "
-        "repetitions, drawn from \\texttt{results/bounded\\_sweep/run\\_s*\\_rep*.csv}). "
-        "The per-tick $v(\\tau)$ column is fixed; only the windowed $V(t)$ "
-        "computation is replayed for each $(T,\\epsilon)$ combination, so the "
-        "comparison is apples-to-apples and isolates the effect of the two "
-        "detector knobs.\n\n"
-        "$\\bullet$ \\textbf{False triggers (top left).} The healthy phase 1 "
-        "of the recovery scenario has $v(\\tau) \\approx 0.07$, so the windowed "
-        "$V(t)$ never crosses any $\\epsilon \\geq 25$ -- false-positive count "
-        "is $0$ in every cell on this grid. BoundGuard's two-stage rule "
-        "(window-then-threshold) is therefore robust against single-tick "
-        "jitter for any sensible threshold; the failure mode "
-        "\"too-low $\\epsilon$ pollutes steady state\" only kicks in below "
-        "$\\epsilon \\approx 1$.\n\n"
-        "$\\bullet$ \\textbf{Detection latency (top right).} Holding $\\epsilon$ "
-        "fixed, increasing $T$ raises detection latency by exactly the "
-        "additional samples the window has to accumulate before the test fires "
-        "($T-1$ ticks of slack). Holding $T$ fixed, raising $\\epsilon$ from "
-        "25 to 75 also delays detection because $V(t)$ must climb further "
-        "before crossing. Both effects are monotonic and predictable, "
-        "matching the intuition that a more conservative detector (large $T$ "
-        "or large $\\epsilon$) reacts later.\n\n"
-        "$\\bullet$ \\textbf{Recovery latency (bottom left).} The recovery "
-        "phase begins from the moment of failure injection, so longer "
-        "detection delays push the whole recovery later. The bottom-left cell "
-        "($T=1, \\epsilon=25$) is the fastest end-to-end recovery; the "
-        "top-right cell ($T=5, \\epsilon=75$) is the slowest. The spread "
-        "across the grid is $\\approx 4$--$5$ s, which sets the practical "
-        "envelope for the detector tuning.\n\n"
-        "$\\bullet$ \\textbf{Cumulative violation (bottom right).} The "
-        "integral of $\\max(0, V(t)-\\epsilon)$ over the whole run is the "
-        "metric most directly tied to user-visible degradation. It is "
-        "minimised in the bottom-left region (small $T$, small $\\epsilon$) "
-        "because excess violation is detected and clipped earlier. The "
-        "right column ($\\epsilon=75$) accumulates much less because most of "
-        "the over-shoot is below the threshold and therefore does not count.\n\n"
-        "\\textbf{Take-away.} On this workload BoundGuard tolerates a wide "
-        "tuning band: $T \\in [1,5]$ s and $\\epsilon \\in [25,75]$ all yield "
-        "(i) zero false positives in steady state, (ii) detection within at "
-        "most $T$ post-failure samples, and (iii) bounded recovery latency. "
-        "The default ($T=3, \\epsilon=50$) used in the bounded-recovery "
-        "experiment lies in the centre of this band -- a deliberately "
-        "conservative choice that trades $\\sim 1$--$2$ s of extra detection "
-        "delay for a generous safety margin against transient spikes."
-    )
-    text_ax.text(0.0, 1.0, explanation,
-                 ha="left", va="top",
-                 fontsize=8.4, color="#222222",
-                 wrap=True, linespacing=1.32)
+    # fig.suptitle removed for paper figure
 
     fig.savefig(args.out)
     print(f"[Plot] Saved: {args.out}")

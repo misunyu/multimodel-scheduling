@@ -320,15 +320,8 @@ def _render(per_mode, args):
     base_color = "#bdc3c7"
     bar_colors = ["#7f8c8d", "#3498db", "#1f4e79"]
 
-    fig = plt.figure(figsize=(8.6, 9.6))
-    gs = GridSpec(3, 2, figure=fig,
-                  height_ratios=[1.0, 1.0, 0.95],
-                  hspace=0.55, wspace=0.30,
-                  top=0.94, bottom=0.04, left=0.10, right=0.96)
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax3 = fig.add_subplot(gs[1, 0])
-    ax4 = fig.add_subplot(gs[1, 1])
+    fig, (ax2, ax4) = plt.subplots(1, 2, figsize=(8.6, 3.0))
+    fig.subplots_adjust(wspace=0.35, left=0.09, right=0.97, top=0.93, bottom=0.12)
 
     def _bars(ax, mean, sd, ylabel, fmt="{:.1f}"):
         x = np.arange(len(labels))
@@ -346,82 +339,10 @@ def _render(per_mode, args):
         ax.set_axisbelow(True)
         ax.set_ylim(0, max(mean) * 1.25 if max(mean) > 0 else 1.0)
 
-    _bars(ax1, fps_mean, fps_sd,  "Total throughput (fps)",   "{:.1f}")
     _bars(ax2, lat_mean, lat_sd,  "Mean per-view latency (ms)", "{:.0f}")
-    _bars(ax3, drop_mean, drop_sd, "Mean drop rate (fps)",     "{:.2f}")
     _bars(ax4, cpu_mean, cpu_sd,  "Mean process-tree CPU (%)",  "{:.0f}")
 
-    fig.suptitle("Steady-state runtime overhead of the safety layer",
-                 fontsize=12, fontweight="bold", y=0.985)
-
-    text_ax = fig.add_subplot(gs[2, :])
-    text_ax.axis("off")
-
-    # Compute deltas vs Static for the explanatory text.
-    static = per_mode[0]["stats"]
-    adaptive = per_mode[1]["stats"]
-    boundguard = per_mode[2]["stats"]
-
-    def _delta_pct(a, b):
-        if b == 0:
-            return 0.0
-        return 100.0 * (a - b) / b
-
-    fps_delta_a = _delta_pct(adaptive["total_fps"]["mean"],   static["total_fps"]["mean"])
-    fps_delta_b = _delta_pct(boundguard["total_fps"]["mean"], static["total_fps"]["mean"])
-    lat_delta_a = _delta_pct(adaptive["avg_latency_ms"]["mean"],   static["avg_latency_ms"]["mean"])
-    lat_delta_b = _delta_pct(boundguard["avg_latency_ms"]["mean"], static["avg_latency_ms"]["mean"])
-    cpu_delta_a = adaptive["cpu_mean_pct"]["mean"]   - static["cpu_mean_pct"]["mean"]
-    cpu_delta_b = boundguard["cpu_mean_pct"]["mean"] - static["cpu_mean_pct"]["mean"]
-
-    drop_delta_a = _delta_pct(adaptive["drop_fps"]["mean"],   static["drop_fps"]["mean"])
-    drop_delta_b = _delta_pct(boundguard["drop_fps"]["mean"], static["drop_fps"]["mean"])
-    static_cpu = static["cpu_mean_pct"]["mean"]
-    cpu_rel_a = (adaptive["cpu_mean_pct"]["mean"]   - static_cpu) / max(static_cpu, 1e-9) * 100.0
-    cpu_rel_b = (boundguard["cpu_mean_pct"]["mean"] - static_cpu) / max(static_cpu, 1e-9) * 100.0
-
-    explanation = (
-        "We run the same stable workload (\\texttt{tests/steady\\_state\\_views\\_schedule.yaml} "
-        f"-- four view models on CPU at moderate rates, $V(t)\\approx 0$) under each of the "
-        f"three execution modes for {args.duration}~s, repeated {args.reps} times per mode. "
-        f"The first 3~s of every run are dropped as warm-up; the remainder is what "
-        f"the four panels above summarise (mean $\\pm$ 1\\,$\\sigma$). "
-        "Because no placement transitions happen in this scenario, every difference "
-        "between modes comes purely from background monitoring threads.\n\n"
-        "$\\bullet$ \\textbf{Throughput, per-view latency, and drop rate} are "
-        "indistinguishable across the three modes once the run-to-run variance "
-        f"is taken into account. Adaptive hot-swap shows ${fps_delta_a:+.1f}\\%$ "
-        f"throughput vs.\\ Static, BoundGuard shows ${fps_delta_b:+.1f}\\%$, and "
-        f"per-view inference latency moves by ${lat_delta_a:+.1f}\\%$ and "
-        f"${lat_delta_b:+.1f}\\%$ respectively -- every delta overlaps its 1\\,$\\sigma$ "
-        "error bar. Drop rate is in the same regime: a few frames per second "
-        "in every mode, with the inter-mode spread well below the inter-run "
-        "spread. None of the three quality metrics changes in a statistically "
-        "meaningful way when the safety layer is enabled.\n\n"
-        "$\\bullet$ \\textbf{Process-tree CPU} is the most direct view of "
-        f"monitoring cost. Adaptive hot-swap adds ${cpu_delta_a:+.1f}$ "
-        f"percentage points (${cpu_rel_a:+.2f}\\%$ relative) and BoundGuard "
-        f"adds ${cpu_delta_b:+.1f}$ percentage points (${cpu_rel_b:+.2f}\\%$ "
-        "relative) over Static. Because the system is multi-core, the absolute "
-        "baseline is several thousand percent (the sum across the inference "
-        "worker threads), so even BoundGuard's positive delta is well under five "
-        "percent of the total compute footprint. The structural reason is that "
-        "BoundGuard's monitor thread only fires on a placement transition (it "
-        "spawns a 5\\,s validation worker); in a transition-free steady state "
-        "the only background work is the 1\\,Hz CSV writer that all three modes "
-        "share.\n\n"
-        "$\\bullet$ \\textbf{Take-away.} The safety layer (QoS monitoring + "
-        "transition validation + rollback) imposes no measurable tax on "
-        "view-level throughput, latency, or drop rate when no failure is "
-        "happening, and only a sub-five-percent uplift in process-tree CPU. "
-        "Deploying BoundGuard therefore does not impose a continuous tax -- "
-        "the real cost is paid only when the system actually has to react to a "
-        "new placement, which is exactly the right cost model for a safety net."
-    )
-    text_ax.text(0.0, 1.0, explanation,
-                 ha="left", va="top",
-                 fontsize=8.4, color="#222222",
-                 linespacing=1.32)
+    # fig.suptitle removed for paper figure
 
     fig.savefig(args.out)
     print(f"[Plot] Saved: {args.out}")

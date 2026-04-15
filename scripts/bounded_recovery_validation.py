@@ -205,8 +205,7 @@ def main() -> None:
     ax.set_axisbelow(True)
     ax.legend(loc="upper left", fontsize=8, framealpha=0.92)
 
-    ax.set_title("Bounded recovery: observed vs. analytical upper bound",
-                 fontsize=10, pad=8)
+    # ax.set_title removed for paper figure
 
     fig.tight_layout()
     fig.savefig(OUT_PDF)
