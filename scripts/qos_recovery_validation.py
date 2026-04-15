@@ -80,13 +80,13 @@ COLD_START_MIN_GAP = 1.5  # wall-clock seconds: anything bigger between two
 # A value of None suppresses the label entirely (used for the middle/overload
 # phase, which the figure no longer needs to label explicitly).
 PHASE_DISPLAY = {
-    "combination_initial":  "Initial Deployment",
+    "combination_initial":  "Initial deployment",
     "combination_overload": None,
-    "combination_offload":  "Changed Stable\nDeployment",
+    "combination_offload":  "Changed stable\ndeployment",
     # Backward compatibility with the previous scenario YAML
-    "combination_baseline": "Initial Deployment",
+    "combination_baseline": "Initial deployment",
     "combination_failure":  None,
-    "combination_recovery": "Changed Stable\nDeployment",
+    "combination_recovery": "Changed stable\ndeployment",
 }
 
 
@@ -282,11 +282,11 @@ def make_plot(times_sec, v_t, cold_starts,
     # ----- detection threshold (horizontal line, behind V(t)) -----------
     ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.2,
                zorder=2)
-    # epsilon symbol on the left side of the y-axis at the threshold height
-    ax.text(-0.012, epsilon, r"$\epsilon$",
+    # epsilon symbol inside the plot, sitting just above the dashed line
+    ax.text(0.012, epsilon, r"$\epsilon$",
             transform=ax.get_yaxis_transform(),
             fontsize=12, color="#333333",
-            ha="right", va="center")
+            ha="left", va="bottom")
 
     # ----- vertical event markers (behind V(t)) -------------------------
     ax.axvline(x=t0_sec,        color="#c0392b", linestyle="-", linewidth=1.6, alpha=0.85, zorder=2)
@@ -301,7 +301,7 @@ def make_plot(times_sec, v_t, cold_starts,
     if static_times_sec and static_v_t:
         ax.plot(static_times_sec, static_v_t,
                 color="#a02020", linewidth=2.0, linestyle="--",
-                label="static", zorder=20)
+                label="Static", zorder=20)
 
     # The stop-and-start curve is drawn segment by segment, breaking the line
     # at every *relevant* cold-start gap (= the redeployment events inside
@@ -323,10 +323,10 @@ def make_plot(times_sec, v_t, cold_starts,
             plot_x.append(x)
             plot_y.append(y)
         ax.plot(plot_x, plot_y, color="#0f3060", linewidth=2.4,
-                label="stop-and-restart", zorder=21)
+                label="Stop-and-Restart", zorder=21)
     else:
         ax.plot(times_sec, v_t, color="#0f3060", linewidth=2.4,
-                label="stop-and-restart", zorder=21)
+                label="Stop-and-Restart", zorder=21)
 
     # ----- y-axis range ---------------------------------------------------
     # Capped at V(t) = 130 so the figure stays compact: the static curve
@@ -341,16 +341,16 @@ def make_plot(times_sec, v_t, cold_starts,
     # ----- legend ---------------------------------------------------------
     if static_times_sec and static_v_t:
         ax.legend(loc="upper left",
-                  framealpha=0.92, fontsize=7.5)
+                  framealpha=0.92, fontsize=9)
 
     # ----- top-of-axis event labels --------------------------------------
     label_y = y_max * 0.96
     ax.text(t0_sec,        label_y, r"  $t_0$",        color="#c0392b",
-            fontsize=10, fontweight="bold", va="top", ha="left")
+            fontsize=12, fontweight="bold", va="top", ha="left")
     ax.text(t_detect_sec,  label_y, r"  $t_{detect}$", color="#e67e22",
-            fontsize=10, fontweight="bold", va="top", ha="left")
+            fontsize=12, fontweight="bold", va="top", ha="left")
     ax.text(t_recover_sec, label_y, r"  $t_{recovery}$", color="#27ae60",
-            fontsize=10, fontweight="bold", va="top", ha="left")
+            fontsize=12, fontweight="bold", va="top", ha="left")
 
     # ----- phase arrows (sit inside the shaded regions) -----------------
     if detection_phase > 0:
@@ -359,7 +359,8 @@ def make_plot(times_sec, v_t, cold_starts,
                     arrowprops=dict(arrowstyle="<->", color="#7b3306", lw=1.4))
         ax.text((t0_sec + t_detect_sec) / 2.0, y1 + y_max * 0.02,
                 "Detection\nphase",
-                ha="center", va="bottom", fontsize=9, color="#7b3306")
+                ha="center", va="bottom", fontsize=9, color="#7b3306",
+                fontweight="bold")
 
     if recovery_phase > 0:
         # Place the recovery-phase double arrow well below the epsilon line
@@ -369,9 +370,10 @@ def make_plot(times_sec, v_t, cold_starts,
         y2 = 25.0
         ax.annotate("", xy=(t_recover_sec, y2), xytext=(t_detect_sec, y2),
                     arrowprops=dict(arrowstyle="<->", color="#155724", lw=1.4))
-        ax.text((t_detect_sec + t_recover_sec) / 2.0, y2 + y_max * 0.02,
+        ax.text((t_detect_sec + t_recover_sec) / 2.0, y2 - y_max * 0.02,
                 "Recovery\nphase",
-                ha="center", va="bottom", fontsize=9, color="#155724")
+                ha="center", va="top", fontsize=9, color="#155724",
+                fontweight="bold")
 
     # ----- redeployment downtime annotation -----------------------------
     # The dotted ellipse + arrow points at the first "real" redeployment
@@ -392,30 +394,25 @@ def make_plot(times_sec, v_t, cold_starts,
         y_after = float(v_t[g_idx])
         empty_center_y = (y_before + y_after) / 2.0
 
-        # Thin dotted ellipse around the empty (broken) area. Width is
-        # slightly wider than the gap so the broken endpoints sit just
-        # inside the ellipse; height is a small fraction of the y range,
-        # large enough to enclose both endpoints comfortably.
-        ellipse_width = (g_end - g_start) * 1.6
-        ellipse_height = max(y_max * 0.10,
-                             abs(y_before - y_after) + y_max * 0.06)
-        empty_ellipse = Ellipse(
-            (gap_mid, empty_center_y),
-            width=ellipse_width,
-            height=ellipse_height,
+    # Dotted horizontal line bridging each broken stop-and-restart segment.
+    for gs, ge, gi in relevant_cold_starts:
+        if gi <= 0:
+            continue
+        y_mid = (float(v_t[gi - 1]) + float(v_t[gi])) / 2.0
+        ax.plot(
+            [float(times_sec[gi - 1]), float(times_sec[gi])],
+            [y_mid, y_mid],
             linewidth=1.0,
             linestyle=':',
-            edgecolor='#444444',
-            facecolor='none',
-            zorder=10.6,
+            color='#0f3060',
+            zorder=20.5,
         )
-        ax.add_patch(empty_ellipse)
 
         # Text sits just above the legend (whose top is at V(t)≈80) so it
         # doesn't overlap, but as low as possible so the curved arrow to
         # the dotted ellipse stays short. Smaller fontsize keeps the
         # 3-line label compact in the tighter figure.
-        text_x = t_recover_sec + 1.4
+        text_x = t_recover_sec + 1.0
         text_y = 89.0
         ax.annotate(
             "Redeployment\ndowntime\n(no service)",
@@ -426,7 +423,7 @@ def make_plot(times_sec, v_t, cold_starts,
                             lw=1.0, linestyle=':',
                             facecolor="#444444",
                             connectionstyle="arc3,rad=0.25"),
-            fontsize=7.5, color="#333333",
+            fontsize=9, color="#333333",
             ha="left", va="center",
             zorder=11,
         )
@@ -444,7 +441,7 @@ def make_plot(times_sec, v_t, cold_starts,
     if phase_labels:
         for x_center, name in phase_labels:
             x_clamped = max(x_min + 0.5, min(x_max_visible - 0.5, x_center))
-            ax.text(x_clamped, bottom_y, name, fontsize=8, color="#555555",
+            ax.text(x_clamped, bottom_y, name, fontsize=10, color="#555555",
                     ha="center", va="bottom", style="italic")
 
     # ----- axes ----------------------------------------------------------
@@ -454,8 +451,8 @@ def make_plot(times_sec, v_t, cold_starts,
     tick_start = int(x_min)
     tick_end = int(x_max_visible) + 1
     ax.set_xticks(list(range(tick_start, tick_end, 2)))
-    ax.set_xlabel("Time (seconds)", fontsize=11)
-    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=11)
+    ax.set_xlabel("Time (seconds)", fontsize=11, fontweight="bold")
+    ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=11, fontweight="bold")
     ax.grid(True, linestyle="--", alpha=0.4)
 
     fig.tight_layout()
@@ -557,7 +554,7 @@ def main():
                          args.recovery_duration,
                          csv_path,
                          mode=0,
-                         label="stop-and-restart")
+                         label="Stop-and-Restart")
 
         if target is None or target == "static":
             if not args.no_static:
@@ -567,7 +564,7 @@ def main():
                              args.recovery_duration,
                              static_csv_path,
                              mode=3,
-                             label="static")
+                             label="Static")
 
         if target is not None:
             print(f"\n[Done] {target} data saved.")
