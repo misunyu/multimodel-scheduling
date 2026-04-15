@@ -227,8 +227,7 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
     # Determine y_max from data, but cap at a reasonable level so the
     # static curve doesn't run off the top.
     candidate_max = max(max(bg_v_t), max(st_v_t))
-    y_max = max(epsilon * 2.4, candidate_max * 1.05)
-    y_max = min(y_max, 220.0)
+    y_max = 100.0
     ax.set_ylim(0.0, y_max)
     ax.set_xlim(0.0, x_max)
 
@@ -249,20 +248,21 @@ def main():
     parser.add_argument("--epsilon", type=float, default=50.0)
     parser.add_argument("--no-run", action="store_true",
                         help="Skip running the executor; replot only.")
+    parser.add_argument("--run-only", choices=["bg", "st"], default=None,
+                        help="Run only one curve per invocation.")
     args = parser.parse_args()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     if not args.no_run:
-        # mode 1 (AdaptiveDeployManager hot-swap) gives the BoundGuard
-        # line the continuous-service behaviour the figure is meant to
-        # show. Mode 2 has the same hot-swap path but its post-transition
-        # rollback validator misfires on this scenario (the cold-start
-        # tail of the GPU fallback combo is still elevated 5 s after the
-        # swap, which the validator reads as a regression). See
-        # scripts/ml_misprediction_validation.py for the same caveat.
-        run_scenario(args.schedule, BG_CSV, mode=1, label="BoundGuard")
-        run_scenario(args.schedule, ST_CSV, mode=3, label="Static")
+        target = args.run_only
+        if target is None or target == "bg":
+            run_scenario(args.schedule, BG_CSV, mode=1, label="BoundGuard")
+        if target is None or target == "st":
+            run_scenario(args.schedule, ST_CSV, mode=3, label="Static")
+        if target is not None:
+            print(f"\n[Done] {target} data saved.")
+            return 0
 
     bg_data = load_curve(BG_CSV)
     st_data = load_curve(ST_CSV)

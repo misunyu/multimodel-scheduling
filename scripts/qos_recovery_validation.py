@@ -331,7 +331,9 @@ def make_plot(times_sec, v_t, cold_starts,
     # ----- y-axis range ---------------------------------------------------
     # Capped at V(t) = 130 so the figure stays compact: the static curve
     # tail above 130 is cropped (stop-and-start never goes above ~64).
-    y_max = 130.0
+    data_max = max(max(v_t, default=0),
+                   max(static_v_t, default=0) if static_v_t else 0)
+    y_max = max(150.0, data_max * 1.08)
     if y_max <= epsilon:
         y_max = epsilon * 1.5
     ax.set_ylim(0.0, y_max)
@@ -500,6 +502,10 @@ def main():
     parser.add_argument("--epsilon", type=float, default=None,
                         help="Override the detection threshold (default: empirical "
                              "midpoint of baseline and stressed V(t))")
+    parser.add_argument("--run-only", choices=["sar", "static"], default=None,
+                        help="Run only one curve per invocation: "
+                             "sar=stop-and-restart, static=static baseline. "
+                             "Collect data separately then use --no-run to plot.")
     args = parser.parse_args()
 
     results_dir = os.path.join(PROJECT_DIR, "results")
@@ -543,26 +549,36 @@ def main():
             if static_csv_path:
                 print(f"[Info] Reusing static CSV: {static_csv_path}")
     else:
+        target = args.run_only
         csv_path = os.path.join(results_dir, f"qos_recovery_{ts}.csv")
-        run_scenario(args.schedule,
-                     args.baseline_duration,
-                     args.failure_duration,
-                     args.recovery_duration,
-                     csv_path,
-                     mode=0,
-                     label="stop-and-restart")
+        static_csv_path = os.path.join(
+            results_dir, f"qos_recovery_static_{ts}.csv")
 
-        static_csv_path = None
-        if not args.no_static:
-            static_csv_path = os.path.join(
-                results_dir, f"qos_recovery_static_{ts}.csv")
+        if target is None or target == "sar":
             run_scenario(args.schedule,
                          args.baseline_duration,
                          args.failure_duration,
                          args.recovery_duration,
-                         static_csv_path,
-                         mode=3,
-                         label="static")
+                         csv_path,
+                         mode=0,
+                         label="stop-and-restart")
+
+        if target is None or target == "static":
+            if not args.no_static:
+                run_scenario(args.schedule,
+                             args.baseline_duration,
+                             args.failure_duration,
+                             args.recovery_duration,
+                             static_csv_path,
+                             mode=3,
+                             label="static")
+
+        if target is not None:
+            print(f"\n[Done] {target} data saved.")
+            return 0
+
+        if target is None and args.no_static:
+            static_csv_path = None
 
     # ----- Load -----
     rows = load_csv(csv_path)
