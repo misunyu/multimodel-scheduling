@@ -44,7 +44,7 @@ def _create_worker_thread(view_name, cfg, frame_queue, output_queue, shutdown_ev
     model = cfg.get("model", "")
     execution = cfg.get("execution", "cpu")
 
-    if "yolov4" in model:
+    if "yolo" in model:
         if execution == "gpu":
             return Thread(
                 target=run_yolo_gpu_process,
@@ -253,6 +253,33 @@ class AdaptiveDeployManager:
         # --- 6. Update feeder yolo/resnet view-sets --------------------------
         self._update_feeders(old_yolo_views, old_resnet_views, swapped_views, new_settings)
 
+        # --- 6b. Drain kept-view input queues so pre-transition backlog
+        # frames (enqueued during the overloaded phase_b) don't leak their
+        # stale enqueue timestamps into post-transition wait_ms measurements.
+        # Stop-and-restart gets this drain for free by tearing down the
+        # worker and its queue; we mirror that here for kept views only.
+        for vname in kept_views:
+            if self.viewer.model_settings.get(vname, {}).get("model"):
+                self._drain(getattr(self.viewer, f"{vname}_frame_queue", None))
+                self._drain(getattr(self.viewer, _output_queue_attr(vname), None))
+
+        # --- 7. Reset handler running averages across the transition --------
+        # ViewHandler.avg_infer_time / avg_wait_ms are cumulative means since
+        # construction, so pre-swap overloaded samples persist indefinitely
+        # for kept views (and for swapped views since the handler object is
+        # reused with just its result_queue reassigned). That prevents V(t)
+        # from converging to the new placement's steady state. Stop-and-
+        # restart gets this reset for free because it tears down and
+        # recreates every handler. Mirror that here so the two paths are
+        # comparable.
+        for vname in self.NAMED_VIEWS:
+            handler = getattr(v, f"{vname}_handler", None)
+            if handler is not None and hasattr(handler, "reset_stats"):
+                try:
+                    handler.reset_stats()
+                except Exception as e:
+                    print(f"[AdaptiveDeploy] {vname}: reset_stats failed: {e}")
+
         print(f"[AdaptiveDeploy] Transition complete. kept={kept_views}, swapped={swapped_views}")
 
     # ------------------------------------------------------------------
@@ -354,7 +381,7 @@ class AdaptiveDeployManager:
 
         # Update yolo/resnet set
         model = cfg.get("model", "")
-        if "yolov4" in model:
+        if "yolo" in model:
             v.yolo_views.add(vname)
             v.resnet_views.discard(vname)
         else:
@@ -410,7 +437,7 @@ class AdaptiveDeployManager:
             v.headless_processes.append(proc)
 
             model = cfg.get("model", "")
-            if "yolov4" in model:
+            if "yolo" in model:
                 v.yolo_views.add(hid)
             else:
                 v.resnet_views.add(hid)
@@ -427,7 +454,7 @@ class AdaptiveDeployManager:
             model = cfg.get("model", "")
 
             # Update yolo/resnet membership
-            if "yolov4" in model:
+            if "yolo" in model:
                 v.yolo_views.add(vname)
                 v.resnet_views.discard(vname)
             elif model:
@@ -451,7 +478,7 @@ class AdaptiveDeployManager:
     def _swap_feeder_queue(self, vname, cfg, new_frame_q):
         v = self.viewer
         model = cfg.get("model", "")
-        if "yolov4" in model:
+        if "yolo" in model:
             feeder = getattr(v, 'video_feeder', None)
         else:
             feeder = getattr(v, 'resnet_feeder', None)

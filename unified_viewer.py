@@ -609,7 +609,7 @@ class UnifiedViewer(QMainWindow):
     def initialize_processes(self):
         """Initialize and start model workers (single-process, multi-thread)."""
         # Start video reader thread only if any model requires YOLO video (yolov4)
-        need_video = any("yolov4" in (cfg or {}).get("model", "") for cfg in self.model_settings.values())
+        need_video = any("yolo" in (cfg or {}).get("model", "") for cfg in self.model_settings.values())
         self.video_reader_proc = None
         if need_video:
             self.video_reader_proc = Thread(
@@ -647,7 +647,7 @@ class UnifiedViewer(QMainWindow):
             shutdown_event = self.headless_shutdown_events[hid]
 
             # Register into yolo/resnet sets so feeders can send inputs
-            if "yolov4" in model:
+            if "yolo" in model:
                 self.yolo_views.add(hid)
                 if execution == "gpu":
                     process = Thread(
@@ -838,7 +838,7 @@ class UnifiedViewer(QMainWindow):
         output_queue = getattr(self, f"{view_name}_output_queue") if view_name in ["view1", "view2"] else getattr(self, f"{view_name}_result_queue")
         shutdown_event = getattr(self, f"{view_name}_shutdown_event")
         
-        if "yolov4" in model:
+        if "yolo" in model:
             # YOLOv4 model
             self.yolo_views.add(view_name)
             if execution == "gpu":
@@ -986,7 +986,7 @@ class UnifiedViewer(QMainWindow):
         """Initialize and start view handler threads."""
         # View1 handler
         view1_model = self.model_settings.get("view1", {}).get("model", "")
-        if "yolov4" in view1_model:
+        if "yolo" in view1_model:
             self.view1_handler = YoloViewHandler(
                 "view1",
                 self.model_settings,
@@ -1010,7 +1010,7 @@ class UnifiedViewer(QMainWindow):
         
         # View2 handler
         view2_model = self.model_settings.get("view2", {}).get("model", "")
-        if "yolov4" in view2_model:
+        if "yolo" in view2_model:
             self.view2_handler = YoloViewHandler(
                 "view2",
                 self.model_settings,
@@ -1034,7 +1034,7 @@ class UnifiedViewer(QMainWindow):
         
         # View3 handler
         view3_model = self.model_settings.get("view3", {}).get("model", "")
-        if "yolov4" in view3_model:
+        if "yolo" in view3_model:
             self.view3_handler = YoloViewHandler(
                 "view3",
                 self.model_settings,
@@ -1058,7 +1058,7 @@ class UnifiedViewer(QMainWindow):
         
         # View4 handler
         view4_model = self.model_settings.get("view4", {}).get("model", "")
-        if "yolov4" in view4_model:
+        if "yolo" in view4_model:
             self.view4_handler = YoloViewHandler(
                 "view4",
                 self.model_settings,

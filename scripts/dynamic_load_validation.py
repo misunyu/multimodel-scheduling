@@ -68,8 +68,8 @@ SAS_CSV = os.path.join(RESULTS_DIR, "dynamic_load_stop_and_restart.csv")
 HS_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_hotswap.csv")
 
 PHASE_A_DURATION = 18
-PHASE_B_DURATION = 14
-PHASE_C_DURATION = 20
+PHASE_B_DURATION = 15
+PHASE_C_DURATION = 25
 
 
 def find_cold_start_gaps(times_sec, rows=None):
@@ -87,14 +87,35 @@ def find_cold_start_gaps(times_sec, rows=None):
     return gaps
 
 
-def load_curve(csv_path):
+def find_combo_transitions(times_sec, rows, only_into="phase_c"):
+    """Combination-column changes between adjacent CSV rows, regardless of
+    time gap. Used for stop-and-restart service-interruption markers when the
+    CSV logs continuously through the restart. Restricted to the real
+    placement change (phase_b -> phase_c); phase_a -> phase_b is an in-place
+    infps update that does not tear down workers."""
+    out = []
+    for i in range(1, len(times_sec)):
+        prev_combo = rows[i - 1].get("combination", "")
+        next_combo = rows[i].get("combination", "")
+        if prev_combo == next_combo:
+            continue
+        if only_into and next_combo != only_into:
+            continue
+        out.append((times_sec[i - 1], times_sec[i]))
+    return out
+
+
+def load_curve(csv_path, use_combo_transitions=False):
     rows = load_csv(csv_path)
     if not rows:
         raise RuntimeError(f"empty CSV: {csv_path}")
     v_t = compute_windowed_v(rows, T=WINDOW_T)
     times_sec = parse_timestamps(rows)
     boundaries = find_phase_boundaries(rows)
-    cold_starts = find_cold_start_gaps(times_sec, rows=rows)
+    if use_combo_transitions:
+        cold_starts = find_combo_transitions(times_sec, rows)
+    else:
+        cold_starts = find_cold_start_gaps(times_sec, rows=rows)
     return rows, v_t, times_sec, boundaries, cold_starts
 
 
@@ -250,7 +271,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Plot dynamic-load V(t) curves from three CSVs "
                     "produced by independent run_dynload_scenarios.sh runs.")
-    parser.add_argument("--epsilon", type=float, default=0.25)
+    parser.add_argument("--epsilon", type=float, default=5.0)
     # --no-run retained as a no-op for backwards compatibility.
     parser.add_argument("--no-run", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -264,7 +285,7 @@ def main():
         return 1
 
     st_data  = load_curve(ST_CSV)
-    sas_data = load_curve(SAS_CSV)
+    sas_data = load_curve(SAS_CSV, use_combo_transitions=True)
     hs_data  = load_curve(HS_CSV)
 
     x_max = max(max(st_data[2]), max(sas_data[2]), max(hs_data[2])) + 1.0

@@ -30,8 +30,8 @@ RESULTS_DIR="$HERE/results"
 SCHEDULE=tests/dynamic_load_views_schedule_npu.yaml
 
 PHASE_A=18
-PHASE_B=14
-PHASE_C=20
+PHASE_B=15
+PHASE_C=80
 DURATION=$((PHASE_A + PHASE_B + PHASE_C))
 # Generous cap. The scenario itself runs for DURATION seconds of data;
 # we allow NPU init + teardown + margin.
@@ -77,7 +77,8 @@ run_one() {
     echo "=========================================================="
     rm -f "$host_csv"
 
-    local cmd="cd /workspace/multimodel-scheduling && export QT_QPA_PLATFORM=offscreen && python3 -u schedule_executor_main.py --schedule $SCHEDULE --duration $DURATION --adaptive-mode $mode --metrics-csv $csv --auto_start_all --combo-duration phase_a=$PHASE_A --combo-duration phase_b=$PHASE_B --combo-duration phase_c=$PHASE_C"
+    local log_path="results/dynamic_load_${mode}_stdout.log"
+    local cmd="cd /workspace/multimodel-scheduling && export QT_QPA_PLATFORM=offscreen && python3 -u schedule_executor_main.py --schedule $SCHEDULE --duration $DURATION --adaptive-mode $mode --metrics-csv $csv --auto_start_all --combo-duration phase_a=$PHASE_A --combo-duration phase_b=$PHASE_B --combo-duration phase_c=$PHASE_C 2>&1 | tee $log_path"
     local cid
     cid=$(docker_run_detached "$cmd")
     echo "  container: $cid"
@@ -136,6 +137,15 @@ if [[ ${1:-} == "plot" ]]; then
 fi
 
 mkdir -p "$RESULTS_DIR"
+
+echo "=========================================================="
+echo "  Picking phase_c via XGBoost (xgb_model_npu_double, alpha=0.3)"
+echo "=========================================================="
+# Run on host (neubla/antara image lacks xgboost); host venv has it.
+PICK_PY="${PICK_PY:-$HERE/.venv/bin/python3}"
+[[ -x "$PICK_PY" ]] || PICK_PY=python3
+"$PICK_PY" -u "$HERE/scripts/pick_phase_c_via_xgb.py" --schedule "$HERE/$SCHEDULE" --alpha 0.3
+
 run_one 3
 run_one 0
 run_one 1
