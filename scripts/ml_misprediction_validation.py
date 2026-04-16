@@ -191,7 +191,7 @@ def make_plot(ml_data, bg_data, epsilon, pdf_path):
                    linewidth=1.4, zorder=5)
         ax.text(burst_x + 0.3, epsilon * 0.08,
                 "Input rate\nincreases",
-                color="#7b3306", fontsize=8, ha="left", va="bottom", zorder=12)
+                color="#7b3306", fontsize=11, ha="left", va="bottom", zorder=12)
 
     # ML-pick marker (phase 3 in both)
     if len(bg_bounds) >= 3:
@@ -200,7 +200,7 @@ def make_plot(ml_data, bg_data, epsilon, pdf_path):
                    linewidth=1.2, zorder=5)
         ax.text(pick_x + 0.3, epsilon * 1.5,
                 "XGBoost pick\napplied",
-                color="#2c3e50", fontsize=8, ha="left", va="center", zorder=12)
+                color="#2c3e50", fontsize=11, ha="left", va="center", zorder=12)
 
     # BoundGuard fallback marker (phase 4, only in BG)
     if len(bg_bounds) >= 4:
@@ -209,16 +209,17 @@ def make_plot(ml_data, bg_data, epsilon, pdf_path):
                    linewidth=1.2, zorder=5)
         ax.text(fb_x + 0.3, epsilon * 0.45,
                 "BoundGuard\nheuristic fallback",
-                color="#155724", fontsize=8, ha="left", va="center", zorder=12)
+                color="#155724", fontsize=11, ha="left", va="center", zorder=12)
 
     cmax = max(max(ml_v, default=0), max(bg_v, default=0))
     y_max = cmax * 1.08   # show full peaks without capping
     ax.set_ylim(0.0, y_max)
     ax.set_xlim(0.0, max(max(ml_t, default=0), max(bg_t, default=0)) + 1.0)
 
-    ax.set_xlabel("Time (seconds)", fontsize=11)
-    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=11)
-    ax.legend(loc="upper right", framealpha=0.92, fontsize=9)
+    ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
+    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=15, fontweight="bold")
+    ax.tick_params(axis='both', labelsize=13)
+    ax.legend(loc="upper right", framealpha=0.92, fontsize=13)
     ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()

@@ -156,9 +156,9 @@ def render_heatmap(ax, data, title, fmt, cmap, lower_is_better=True,
     im = ax.imshow(arr, cmap=cmap, aspect="auto",
                    vmin=vmin, vmax=vmax, origin="lower")
     ax.set_xticks(range(len(EPS_VALUES)))
-    ax.set_xticklabels([f"$\\epsilon$={e}" for e in EPS_VALUES], fontsize=8)
+    ax.set_xticklabels([f"$\\epsilon$={e}" for e in EPS_VALUES], fontsize=13)
     ax.set_yticks(range(len(T_VALUES)))
-    ax.set_yticklabels([f"T={t}s" for t in T_VALUES], fontsize=8)
+    ax.set_yticklabels([f"T={t}s" for t in T_VALUES], fontsize=13)
     # ax.set_title removed for paper figure
     # Annotate cells.
     for i in range(arr.shape[0]):
@@ -172,7 +172,7 @@ def render_heatmap(ax, data, title, fmt, cmap, lower_is_better=True,
             cell_norm = (v - vmin) / max(vmax - vmin, 1e-9)
             tc = "white" if cell_norm > 0.55 else "black"
             ax.text(j, i, txt, ha="center", va="center",
-                    color=tc, fontsize=8.5, fontweight="bold")
+                    color=tc, fontsize=13, fontweight="bold")
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     return im
 
@@ -209,11 +209,11 @@ def main():
     # ---------- figure layout ------------------------------------------------
     # Top : 2x2 heatmaps
     # Bottom : explanatory text
-    fig = plt.figure(figsize=(7.8, 6.0))
+    fig = plt.figure(figsize=(9.0, 7.0))
     gs = GridSpec(2, 2, figure=fig,
                   height_ratios=[1.0, 1.0],
-                  hspace=0.55, wspace=0.30,
-                  top=0.97, bottom=0.05, left=0.06, right=0.92)
+                  hspace=0.45, wspace=0.35,
+                  top=0.97, bottom=0.05, left=0.07, right=0.92)
 
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1])

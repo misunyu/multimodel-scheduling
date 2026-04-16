@@ -204,7 +204,7 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
                linewidth=1.4, zorder=5)
     ax.text(load_change_sec + 0.3, 5,
             "Input rate\nincreases",
-            color="#7b3306", fontsize=8.5, ha="left", va="bottom", zorder=12)
+            color="#7b3306", fontsize=11, ha="left", va="bottom", zorder=12)
 
     bg_recover_sec = None
     if len(bg_bounds) >= 3:
@@ -218,16 +218,17 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
                    linewidth=1.2, zorder=5)
         ax.text(bg_recover_sec + 0.3, epsilon * 0.55,
                 "BoundGuard\n stable",
-                color="#155724", fontsize=8.5, ha="left", va="center", zorder=12)
+                color="#155724", fontsize=11, ha="left", va="center", zorder=12)
 
     candidate_max = max(max(bg_v_t), max(st_v_t))
     y_max = 100.0
     ax.set_ylim(0.0, y_max)
     ax.set_xlim(0.0, x_max)
 
-    ax.set_xlabel("Time (seconds)", fontsize=11)
-    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=11)
-    ax.legend(loc="upper right", framealpha=0.92, fontsize=9)
+    ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
+    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=15, fontweight="bold")
+    ax.tick_params(axis='both', labelsize=13)
+    ax.legend(loc="upper right", framealpha=0.92, fontsize=13)
     ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()

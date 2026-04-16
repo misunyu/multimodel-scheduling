@@ -320,8 +320,8 @@ def _render(per_mode, args):
     base_color = "#bdc3c7"
     bar_colors = ["#7f8c8d", "#3498db", "#1f4e79"]
 
-    fig, (ax2, ax4) = plt.subplots(1, 2, figsize=(8.6, 3.0))
-    fig.subplots_adjust(wspace=0.35, left=0.09, right=0.97, top=0.93, bottom=0.12)
+    fig, (ax2, ax4) = plt.subplots(1, 2, figsize=(10, 4.2))
+    fig.subplots_adjust(wspace=0.40, left=0.11, right=0.97, top=0.93, bottom=0.18)
 
     def _bars(ax, mean, sd, ylabel, fmt="{:.1f}"):
         x = np.arange(len(labels))
@@ -331,10 +331,11 @@ def _render(per_mode, args):
         for b, v in zip(bars, mean):
             ax.text(b.get_x() + b.get_width() / 2, v + max(mean) * 0.02,
                     fmt.format(v), ha="center", va="bottom",
-                    fontsize=8.5, color="#222222")
+                    fontsize=13, color="#222222")
         ax.set_xticks(x)
-        ax.set_xticklabels(labels, fontsize=8.5)
-        ax.set_ylabel(ylabel, fontsize=9)
+        ax.set_xticklabels(labels, fontsize=13)
+        ax.set_ylabel(ylabel, fontsize=15, fontweight="bold")
+        ax.tick_params(axis='y', labelsize=13)
         ax.yaxis.grid(True, linestyle=":", linewidth=0.5, color="#cccccc")
         ax.set_axisbelow(True)
         ax.set_ylim(0, max(mean) * 1.25 if max(mean) > 0 else 1.0)
