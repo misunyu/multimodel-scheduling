@@ -184,8 +184,10 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
     fig, ax = plt.subplots(figsize=(7.0, 4.2))
 
     ax.plot(st_t_plot, st_v_plot, color="#a83232", linewidth=2.0,
+            linestyle="--",
             label="Static", zorder=10)
-    ax.plot(bg_t_plot, bg_v_plot, color="#1f4e79", linewidth=2.0,
+    ax.plot(bg_t_plot, bg_v_plot, color="#1f4e79", linewidth=2.8,
+            linestyle="-", marker="^", markersize=6, markevery=5,
             label="BoundGuard", zorder=11)
 
     # Detection threshold (epsilon).
@@ -232,9 +234,9 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
     ax.set_xlim(0.0, x_max)
 
     ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
-    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=15, fontweight="bold")
+    ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=15, fontweight="bold")
     ax.tick_params(axis='both', labelsize=13)
-    ax.legend(loc="upper right", framealpha=0.92, fontsize=13)
+    ax.legend(loc="upper left", framealpha=0.92, fontsize=13)
     ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()

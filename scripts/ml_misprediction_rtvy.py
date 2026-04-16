@@ -151,8 +151,11 @@ def main():
     ml_t_clip, ml_v_clip = clip(ml_t, ml_v)
     sr_t_clip, sr_v_clip = clip(sr_t, sr_v)
 
-    ax.plot(st_t, st_v, color="#a83232", lw=2, label="Static", zorder=10)
-    ax.plot(ml_t_clip, ml_v_clip, color="#e67e22", lw=2, label="Adaptive (ML-only)", zorder=11)
+    ax.plot(st_t, st_v, color="#a83232", lw=2, ls="--",
+            label="Static", zorder=10)
+    ax.plot(ml_t_clip, ml_v_clip, color="#e67e22", lw=2, ls="-",
+            marker="o", markersize=5, markevery=5,
+            label="Adaptive (ML-only)", zorder=11)
 
     # Stop-and-restart: break the line at cold-start gaps (service stops
     # during worker teardown/rebuild). Insert NaN to break, then draw
@@ -179,12 +182,16 @@ def main():
             sr_v_nan.append(float("nan"))
         sr_t_nan.append(t)
         sr_v_nan.append(v)
-    ax.plot(sr_t_nan, sr_v_nan, color=sr_color, lw=2, label="Stop-and-restart", zorder=12)
+    ax.plot(sr_t_nan, sr_v_nan, color=sr_color, lw=2, ls="-.",
+            marker="s", markersize=5, markevery=5,
+            label="Stop-and-restart", zorder=12)
     # Draw light grey dotted connectors across each gap
     for gs, vb, ge, va in sr_gap_segments:
         ax.plot([gs, ge], [vb, va], color="#bbbbbb", lw=1.2, ls=":", zorder=9)
 
-    ax.plot(bg_t, bg_v, color="#1f4e79", lw=2, label="BoundGuard", zorder=13)
+    ax.plot(bg_t, bg_v, color="#1f4e79", lw=2.8, ls="-",
+            marker="^", markersize=6, markevery=5,
+            label="BoundGuard", zorder=13)
 
     ax.axhline(y=eps, color="gray", ls="--", lw=1.1, zorder=4)
     # Place ε label inside the plot area (right of y-axis) to avoid
@@ -200,22 +207,22 @@ def main():
     if len(bg_bounds) >= 2:
         bx = bg_t[bg_bounds[1][0]]
         ax.axvline(x=bx, color="#7b3306", ls=":", lw=1.3, zorder=5)
-        ax.text(bx+0.3, eps*0.12, "Input rate\nincreases",
-                color="#7b3306", fontsize=8, ha="left", va="bottom", zorder=12)
+        ax.text(bx+0.3, eps*2.5, "Input rate\nincreases",
+                color="#7b3306", fontsize=11, ha="left", va="bottom", zorder=12)
 
     # XGBoost pick marker (phase 3 start)
     if len(bg_bounds) >= 3:
         px = bg_t[bg_bounds[2][0]]
         ax.axvline(x=px, color="#2c3e50", ls=":", lw=1.2, zorder=5)
-        ax.text(px+0.3, eps*1.8, "XGBoost pick\n(2 GPU + 2 CPU)",
-                color="#2c3e50", fontsize=7.5, ha="left", va="center", zorder=12)
+        ax.text(px+0.3, eps*12, "XGBoost pick\n(2 GPU + 2 CPU)",
+                color="#2c3e50", fontsize=11, ha="left", va="center", zorder=12)
 
     # All-GPU fallback marker (phase 4 start)
     if len(bg_bounds) >= 4:
         fx = bg_t[bg_bounds[3][0]]
         ax.axvline(x=fx, color="#155724", ls=":", lw=1.2, zorder=5)
-        ax.text(fx+0.3, eps*0.55, "All-GPU fallback\n($V(t)>\\epsilon$ after T)",
-                color="#155724", fontsize=7.5, ha="left", va="center", zorder=12)
+        ax.text(fx+0.3, eps*5, "All-GPU fallback\n($V(t)>\\epsilon$ after T)",
+                color="#155724", fontsize=11, ha="left", va="center", zorder=12)
 
     # BoundGuard recovery marker
     bg_recover = None
@@ -229,9 +236,10 @@ def main():
     ax.set_ylim(0, cmax * 1.08)
     # All three curves end at clip_t; set xlim just past that
     ax.set_xlim(0, clip_t + 1)
-    ax.set_xlabel("Time (seconds)", fontsize=10)
-    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=10)
-    ax.legend(loc="upper right", framealpha=0.92, fontsize=8)
+    ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
+    ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=15, fontweight="bold")
+    ax.tick_params(axis='both', labelsize=13)
+    ax.legend(loc="upper left", framealpha=0.92, fontsize=13)
     ax.grid(True, ls=":", lw=0.5, color="#ccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()
