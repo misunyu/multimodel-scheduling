@@ -236,9 +236,9 @@ def main():
     ax.set_ylim(0, cmax * 1.08)
     # All three curves end at clip_t; set xlim just past that
     ax.set_xlim(0, clip_t + 1)
-    ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
-    ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=15, fontweight="bold")
-    ax.tick_params(axis='both', labelsize=13)
+    ax.set_xlabel("Time (seconds)", fontsize=17, fontweight="bold")
+    ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=17, fontweight="bold")
+    ax.tick_params(axis='both', labelsize=15)
     ax.legend(loc="upper left", framealpha=0.92, fontsize=13)
     ax.grid(True, ls=":", lw=0.5, color="#ccc", zorder=0)
     ax.set_axisbelow(True)
