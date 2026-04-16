@@ -1,0 +1,255 @@
+GPU x3 Double 모드 - 추론 최적 배치 vs 실제 최적 배치 성능 차이 분석
+Score 공식: S(x) = T(x) - α·D(x),  α = 0.3
+T(x) = F(x)/F_max (normalized throughput),  D(x) = R(x)/R_max (normalized drop rate)
+========================================================================================================================
+총 29개 스케줄 중 8개에서 추론된 최적 배치가 실제 최적보다 나쁜 성능을 보임
+
+========================================================================================================================
+Rank 1: Score Gap = 0.3862
+  Schedule: model_schedules_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v_y_x3.yaml
+  모델 조합: m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v_y
+  총 배치 수: 128
+
+  추론된 최적 배치           : combination_128
+    S(x) = T(x) - α·D(x) = 0.7262 - 0.3×0.7209 = 0.5100
+  실제 최적 배치            : combination_97
+    S(x) = T(x) - α·D(x) = 1.0000 - 0.3×0.3463 = 0.8961
+
+  --- 추론된 배치 (combination_128) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    mnasnet                   GPU              76.65        13.05      113
+    resnext50                 GPU              79.09        12.64       99
+    resnet50                  GPU              77.60        12.89      111
+    yolov4                    GPU               2.63       379.80      160
+    shufflenet-v2-12          GPU             121.97        12.89        0
+    squeezenet1.0-12          GPU             119.82        13.22        0
+    vgg19                     GPU             118.17        13.27        0
+    Total throughput: 595.92 fps | drop_count: 483
+
+  --- 실제 최적 배치 (combination_97) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    mnasnet                   GPU             323.36         3.09        0
+    resnext50                 GPU             476.30         2.10        0
+    resnet50                  CPU               4.46       224.27       80
+    yolov4                    CPU               0.81      1235.72      152
+    shufflenet-v2-12          CPU               5.05       333.41        0
+    squeezenet1.0-12          CPU               4.72       362.83        0
+    vgg19                     CPU               5.86       288.90        0
+    Total throughput: 820.56 fps | drop_count: 232
+
+  --- 디바이스 할당 차이 ---
+    resnet50                 : 추론=GPU  → 실제최적=CPU 
+    yolov4                   : 추론=GPU  → 실제최적=CPU 
+    shufflenet-v2-12         : 추론=GPU  → 실제최적=CPU 
+    squeezenet1.0-12         : 추론=GPU  → 실제최적=CPU 
+    vgg19                    : 추론=GPU  → 실제최적=CPU 
+
+========================================================================================================================
+Rank 2: Score Gap = 0.1997
+  Schedule: model_schedules_g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v_x3.yaml
+  모델 조합: g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v
+  총 배치 수: 256
+
+  추론된 최적 배치           : combination_256
+    S(x) = T(x) - α·D(x) = 0.8026 - 0.3×0.0074 = 0.8003
+  실제 최적 배치            : combination_105
+    S(x) = T(x) - α·D(x) = 1.0000 - 0.3×0.0000 = 1.0000
+
+  --- 추론된 배치 (combination_256) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    mnasnet                   GPU             160.32         6.24        2
+    resnet50                  GPU             161.80         6.18        2
+    resnext50                 GPU             163.15         6.13        1
+    gpt2                      GPU               3.26        13.76        0
+    shufflenet-v2-12          GPU             124.27         7.29        0
+    squeezenet1.0-12          GPU             124.87         5.88        0
+    tiny-llama-chat-onnx      GPU               3.26        17.07        0
+    vgg19                     GPU             124.57         6.67        0
+    Total throughput: 865.50 fps | drop_count: 5
+
+  --- 실제 최적 배치 (combination_105) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    mnasnet                   GPU             351.05         2.85        0
+    resnet50                  GPU             339.73         2.94        0
+    resnext50                 GPU             364.97         2.74        0
+    gpt2                      CPU               3.01       304.03        0
+    shufflenet-v2-12          CPU               6.46       239.11        0
+    squeezenet1.0-12          CPU               5.02       307.13        0
+    tiny-llama-chat-onnx      CPU               3.01       354.51        0
+    vgg19                     CPU               5.17       292.34        0
+    Total throughput: 1078.42 fps | drop_count: 0
+
+  --- 디바이스 할당 차이 ---
+    gpt2                     : 추론=GPU  → 실제최적=CPU 
+    shufflenet-v2-12         : 추론=GPU  → 실제최적=CPU 
+    squeezenet1.0-12         : 추론=GPU  → 실제최적=CPU 
+    tiny-llama-chat-onnx     : 추론=GPU  → 실제최적=CPU 
+    vgg19                    : 추론=GPU  → 실제최적=CPU 
+
+========================================================================================================================
+Rank 3: Score Gap = 0.1126
+  Schedule: model_schedules_r_t_v_y_x3.yaml
+  모델 조합: r_t_v_y
+  총 배치 수: 16
+
+  추론된 최적 배치           : combination_13
+    S(x) = T(x) - α·D(x) = 0.8998 - 0.3×0.2527 = 0.8240
+  실제 최적 배치            : combination_9
+    S(x) = T(x) - α·D(x) = 1.0000 - 0.3×0.2113 = 0.9366
+
+  --- 추론된 배치 (combination_13) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    resnet50                  GPU             472.62         2.12        9
+    yolov4                    CPU               1.72       582.19      156
+    tiny-llama-chat-onnx      GPU               3.14         6.13        0
+    vgg19                     CPU              18.55        82.25        0
+    Total throughput: 496.03 fps | drop_count: 165
+
+  --- 실제 최적 배치 (combination_9) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    resnet50                  GPU             535.32         1.87        4
+    yolov4                    CPU               1.46       686.09      134
+    tiny-llama-chat-onnx      CPU               3.46       184.12        0
+    vgg19                     CPU              11.05       152.36        0
+    Total throughput: 551.29 fps | drop_count: 138
+
+  --- 디바이스 할당 차이 ---
+    tiny-llama-chat-onnx     : 추론=GPU  → 실제최적=CPU 
+
+========================================================================================================================
+Rank 4: Score Gap = 0.0665
+  Schedule: model_schedules_gpt2_x3.yaml
+  모델 조합: gpt2
+  총 배치 수: 2
+
+  추론된 최적 배치           : combination_2
+    S(x) = T(x) - α·D(x) = 0.9335 - 0.3×0.0000 = 0.9335
+  실제 최적 배치            : combination_1
+    S(x) = T(x) - α·D(x) = 1.0000 - 0.3×0.0000 = 1.0000
+
+  --- 추론된 배치 (combination_2) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    gpt2                      GPU               3.37         9.46        0
+    Total throughput: 3.37 fps | drop_count: 0
+
+  --- 실제 최적 배치 (combination_1) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    gpt2                      CPU               3.61         8.70        0
+    Total throughput: 3.61 fps | drop_count: 0
+
+  --- 디바이스 할당 차이 ---
+    gpt2                     : 추론=GPU  → 실제최적=CPU 
+
+========================================================================================================================
+Rank 5: Score Gap = 0.0663
+  Schedule: model_schedules_tiny-llama-chat-onnx_x3.yaml
+  모델 조합: tiny-llama-chat-onnx
+  총 배치 수: 2
+
+  추론된 최적 배치           : combination_2
+    S(x) = T(x) - α·D(x) = 0.9337 - 0.3×0.0000 = 0.9337
+  실제 최적 배치            : combination_1
+    S(x) = T(x) - α·D(x) = 1.0000 - 0.3×0.0000 = 1.0000
+
+  --- 추론된 배치 (combination_2) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    tiny-llama-chat-onnx      GPU               3.38         9.02        0
+    Total throughput: 3.38 fps | drop_count: 0
+
+  --- 실제 최적 배치 (combination_1) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    tiny-llama-chat-onnx      CPU               3.62         7.30        0
+    Total throughput: 3.62 fps | drop_count: 0
+
+  --- 디바이스 할당 차이 ---
+    tiny-llama-chat-onnx     : 추론=GPU  → 실제최적=CPU 
+
+========================================================================================================================
+Rank 6: Score Gap = 0.0376
+  Schedule: model_schedules_g_m_t_x3.yaml
+  모델 조합: g_m_t
+  총 배치 수: 7
+
+  추론된 최적 배치           : combination_4
+    S(x) = T(x) - α·D(x) = 0.9624 - 0.3×0.0000 = 0.9624
+  실제 최적 배치            : combination_3
+    S(x) = T(x) - α·D(x) = 1.0000 - 0.3×0.0000 = 1.0000
+
+  --- 추론된 배치 (combination_4) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    mnasnet                   GPU             616.00         1.62        0
+    gpt2                      CPU               3.29        14.59        0
+    tiny-llama-chat-onnx      GPU               3.29         5.58        0
+    Total throughput: 622.59 fps | drop_count: 0
+
+  --- 실제 최적 배치 (combination_3) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    mnasnet                   GPU             640.28         1.56        0
+    gpt2                      CPU               3.33        78.17        0
+    tiny-llama-chat-onnx      CPU               3.33        87.68        0
+    Total throughput: 646.94 fps | drop_count: 0
+
+  --- 디바이스 할당 차이 ---
+    tiny-llama-chat-onnx     : 추론=GPU  → 실제최적=CPU 
+
+========================================================================================================================
+Rank 7: Score Gap = 0.0177
+  Schedule: model_schedules_g_t_x3.yaml
+  모델 조합: g_t
+  총 배치 수: 4
+
+  추론된 최적 배치           : combination_4
+    S(x) = T(x) - α·D(x) = 0.9823 - 0.3×0.0000 = 0.9823
+  실제 최적 배치            : combination_3
+    S(x) = T(x) - α·D(x) = 1.0000 - 0.3×0.0000 = 1.0000
+
+  --- 추론된 배치 (combination_4) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    gpt2                      GPU               3.33         3.81        0
+    tiny-llama-chat-onnx      GPU               3.33         3.56        0
+    Total throughput: 6.65 fps | drop_count: 0
+
+  --- 실제 최적 배치 (combination_3) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    gpt2                      CPU               3.39        12.45        0
+    tiny-llama-chat-onnx      GPU               3.39         3.42        0
+    Total throughput: 6.77 fps | drop_count: 0
+
+  --- 디바이스 할당 차이 ---
+    gpt2                     : 추론=GPU  → 실제최적=CPU 
+
+========================================================================================================================
+Rank 8: Score Gap = 0.0103
+  Schedule: model_schedules_g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_x3.yaml
+  모델 조합: g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t
+  총 배치 수: 128
+
+  추론된 최적 배치           : combination_128
+    S(x) = T(x) - α·D(x) = 0.9887 - 0.3×0.0016 = 0.9883
+  실제 최적 배치            : combination_126
+    S(x) = T(x) - α·D(x) = 1.0000 - 0.3×0.0047 = 0.9986
+
+  --- 추론된 배치 (combination_128) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    mnasnet                   GPU             187.98         5.32        0
+    resnet50                  GPU             252.82         3.96        1
+    resnext50                 GPU             184.18         5.43        0
+    gpt2                      GPU               3.38        18.87        0
+    shufflenet-v2-12          GPU             146.75         6.53        0
+    squeezenet1.0-12          GPU             147.06         5.75        0
+    tiny-llama-chat-onnx      GPU               3.38        16.67        0
+    Total throughput: 925.55 fps | drop_count: 1
+
+  --- 실제 최적 배치 (combination_126) 모델별 디바이스 할당 및 성능 ---
+    Model                     Device Throughput(fps)  Latency(ms)  Dropped
+    mnasnet                   GPU             283.32         3.53        0
+    resnet50                  GPU             266.68         3.75        0
+    resnext50                 GPU             216.41         4.62        3
+    gpt2                      GPU               3.65        22.69        0
+    shufflenet-v2-12          CPU              72.77        21.99        0
+    squeezenet1.0-12          GPU              89.62         5.99        0
+    tiny-llama-chat-onnx      GPU               3.65        20.56        0
+    Total throughput: 936.10 fps | drop_count: 3
+
+  --- 디바이스 할당 차이 ---
+    shufflenet-v2-12         : 추론=GPU  → 실제최적=CPU 
