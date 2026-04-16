@@ -176,10 +176,12 @@ def make_combined_plot(st_data, sas_data, hs_data, epsilon, pdf_path,
     fig, ax = plt.subplots(figsize=(7.2, 4.3))
 
     ax.plot(st_t_plot, st_v_plot, color="#a83232", linewidth=2.0,
-            label="Static", zorder=10)
-    ax.plot(sas_t_plot, sas_v_plot, color="#d98e00", linewidth=2.0,
+            linestyle="--", label="Static", zorder=10)
+    ax.plot(sas_t_plot, sas_v_plot, color="#7b2d8e", linewidth=2.0,
+            linestyle="-.", marker="s", markersize=5, markevery=8,
             label="Stop-and-restart", zorder=11)
     ax.plot(hs_t_plot, hs_v_plot, color="#1f4e79", linewidth=2.0,
+            marker="^", markersize=5, markevery=8,
             label="BoundGuard", zorder=12)
 
     ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.1, zorder=4)
@@ -191,7 +193,7 @@ def make_combined_plot(st_data, sas_data, hs_data, epsilon, pdf_path,
                linewidth=1.4, zorder=5)
     ax.text(load_change_sec + 0.3, 5,
             "Input rate\nincreases",
-            color="#7b3306", fontsize=8.5, ha="left", va="bottom",
+            color="#7b3306", fontsize=11, ha="left", va="bottom",
             zorder=13)
 
     _draw_gap_connectors(ax, sas_times, sas_v_t, sas_cold, "#888888")
@@ -211,9 +213,10 @@ def make_combined_plot(st_data, sas_data, hs_data, epsilon, pdf_path,
     ax.set_ylim(0.0, y_max)
     ax.set_xlim(0.0, x_max)
 
-    ax.set_xlabel("Time (seconds)", fontsize=11)
-    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=11)
-    ax.legend(loc="upper right", framealpha=0.92, fontsize=9)
+    ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
+    ax.set_ylabel("QoS Violation Score V(t)", fontsize=15, fontweight="bold")
+    ax.tick_params(axis='both', labelsize=13)
+    ax.legend(loc="upper right", framealpha=0.92, fontsize=13)
     ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()
@@ -234,8 +237,9 @@ def make_start_and_stop_plot(st_data, sas_data, epsilon, pdf_path,
 
     fig, ax = plt.subplots(figsize=(7.0, 4.2))
     ax.plot(st_t_plot, st_v_plot, color="#a83232", linewidth=2.0,
-            label="Static", zorder=10)
-    ax.plot(sas_t_plot, sas_v_plot, color="#d98e00", linewidth=2.0,
+            linestyle="--", label="Static", zorder=10)
+    ax.plot(sas_t_plot, sas_v_plot, color="#7b2d8e", linewidth=2.0,
+            linestyle="-.", marker="s", markersize=5, markevery=8,
             label="Stop-and-restart", zorder=11)
 
     ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.1, zorder=4)
@@ -247,7 +251,7 @@ def make_start_and_stop_plot(st_data, sas_data, epsilon, pdf_path,
                linewidth=1.4, zorder=5)
     ax.text(load_change_sec + 0.3, 5,
             "Input rate\nincreases",
-            color="#7b3306", fontsize=8.5, ha="left", va="bottom", zorder=12)
+            color="#7b3306", fontsize=11, ha="left", va="bottom", zorder=12)
 
     _draw_gap_connectors(ax, sas_times, sas_v_t, sas_cold, "#888888")
 
@@ -257,9 +261,10 @@ def make_start_and_stop_plot(st_data, sas_data, epsilon, pdf_path,
     ax.set_ylim(0.0, y_max)
     ax.set_xlim(0.0, x_max)
 
-    ax.set_xlabel("Time (seconds)", fontsize=11)
-    ax.set_ylabel(r"QoS Violation Score $V(t)$", fontsize=11)
-    ax.legend(loc="upper right", framealpha=0.92, fontsize=9)
+    ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
+    ax.set_ylabel("QoS Violation Score V(t)", fontsize=15, fontweight="bold")
+    ax.tick_params(axis='both', labelsize=13)
+    ax.legend(loc="upper right", framealpha=0.92, fontsize=13)
     ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()
