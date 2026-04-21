@@ -372,26 +372,27 @@ def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=
     except Exception as e:
         print(f"[ResNet CPU Process ERROR] {e}")
 
-def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, view_name=None, model_name="yolov3_small"):
+def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, view_name=None, model_name="yolov3_small", ready_event=None):
     """
     Process for running YOLO model on NPU.
-    
+
     Args:
         input_queue: Queue to get input frames from
         output_queue: Queue to put output results into
         shutdown_event: Event to signal shutdown
         npu_id: NPU device ID
         view_name: Optional view identifier for logging
+        ready_event: multiprocessing.Event signalled after Init+LoadModel complete
     """
     try:
         # Import NPU-specific functions only when needed
         from npu import (
-            initialize_driver, 
-            close_driver, 
-            send_receive_data_npu, 
+            initialize_driver,
+            close_driver,
+            send_receive_data_npu,
             yolo_prepare_onnx_model
         )
-        
+
         driver = None
         try:
             host_load_s = time.time()
@@ -414,6 +415,11 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
         except Exception as e:
             print(f"[YOLO NPU INIT ERROR] NPU driver initialization failed: {e}")
             raise
+
+        # Signal ready after successful Init + LoadModel
+        if ready_event is not None:
+            ready_event.set()
+            print(f"[YOLO NPU] npu_id={npu_id}: ready_event signalled")
 
         # Log model load (host + NPU memory)
         log_model_load(
@@ -531,16 +537,17 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, vi
         except:
             pass
 
-def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, view_name=None, model_name="resnet50_small"):
+def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, view_name=None, model_name="resnet50_small", ready_event=None):
     """
     Process for running ResNet model on NPU.
 
     Args:
-        image_dir: Directory containing images to process
+        input_queue: Queue to get input images from
         output_queue: Queue to put output results into
         shutdown_event: Event to signal shutdown
         npu_id: NPU device ID
         view_name: Optional view identifier for logging
+        ready_event: multiprocessing.Event signalled after Init+LoadModel complete
     """
     try:
         from npu import initialize_driver, close_driver, send_receive_data_npu
@@ -578,6 +585,11 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, 
         except Exception as e:
             print(f"[ResNet NPU INIT ERROR] NPU driver initialization failed: {e}")
             raise
+
+        # Signal ready after successful Init + LoadModel
+        if ready_event is not None:
+            ready_event.set()
+            print(f"[ResNet NPU] npu_id={npu_id}: ready_event signalled")
 
         log_model_load(
             pipeline="resnet50",

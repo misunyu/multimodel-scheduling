@@ -57,7 +57,6 @@ def _create_worker_thread(view_name, cfg, frame_queue, output_queue, shutdown_ev
             return mp.Process(
                 target=run_yolo_npu_process,
                 args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
-                daemon=True,
             )
         else:
             return Thread(
@@ -79,7 +78,6 @@ def _create_worker_thread(view_name, cfg, frame_queue, output_queue, shutdown_ev
             return mp.Process(
                 target=run_resnet_npu_process,
                 args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
-                daemon=True,
             )
         else:
             return Thread(
@@ -286,7 +284,14 @@ class AdaptiveDeployManager:
     # Internal: hot-swap a single named view
     # ------------------------------------------------------------------
     def _hot_swap_view(self, vname, old_cfg, new_cfg):
-        """Start new worker in background; once ready, switch queues and stop old worker."""
+        """Start new worker in background; once ready, switch queues and stop old worker.
+
+        For NPU workers: stop old worker FIRST (NPU requires exclusive
+        process-level access and proper Close() before re-Init()), then
+        start the new NPU process and wait for it to be ready via a
+        multiprocessing.Event signalled from inside the worker after
+        Init + LoadModel complete.
+        """
         v = self.viewer
 
         # References to old resources
@@ -301,49 +306,117 @@ class AdaptiveDeployManager:
         new_frame_q = mp.Queue(maxsize=2) if _is_npu else Queue(maxsize=2)
         new_output_q = mp.Queue(maxsize=1) if _is_npu else Queue(maxsize=1)
         new_shutdown = mp.Event() if _is_npu else Event()
-        ready_event = Event()  # watcher is always a thread
 
-        new_process = _create_worker_thread(vname, new_cfg, new_frame_q, new_output_q, new_shutdown, ready_event)
-        new_process.start()
+        if _is_npu:
+            # NPU path: start new NPU process, wait for init (~8s),
+            # then swap queues and stop old worker.
+            # If same NPU core: must stop old worker first (Close before Init).
+            old_execution = old_cfg.get("execution", "cpu")
+            same_npu_core = (old_execution == new_execution)
+            NPU_INIT_WAIT = 8  # seconds — NPU Init+LoadModel takes ~4-5s
 
-        # Watcher thread: waits for ready, then atomically swaps queues
-        def _watcher():
-            if _is_npu:
-                # NPU Process doesn't support ready_event; wait for process to start
+            def _npu_swap():
                 import time as _tw
-                _tw.sleep(3.0)
-            else:
+
+                # If same NPU core: must Close old before Init new
+                if same_npu_core:
+                    print(f"[AdaptiveDeploy] {vname}: same NPU core ({new_execution}) "
+                          f"— stopping old worker first (Close before Init)")
+                    if old_shutdown is not None:
+                        old_shutdown.set()
+                    if old_process is not None and old_process.is_alive():
+                        old_process.join(timeout=5.0)
+                        if old_process.is_alive():
+                            try:
+                                old_process.terminate()
+                                old_process.join(timeout=2.0)
+                            except Exception:
+                                pass
+                    for q in (old_frame_q, old_output_q):
+                        self._drain(q)
+                    _tw.sleep(0.5)
+
+                # Start new NPU worker
+                print(f"[AdaptiveDeploy] {vname}: starting NPU worker ({new_execution})")
+                new_process = _create_worker_thread(
+                    vname, new_cfg, new_frame_q, new_output_q,
+                    new_shutdown, None)
+                new_process.start()
+
+                # Wait for NPU Init + LoadModel to complete
+                _tw.sleep(NPU_INIT_WAIT)
+                if new_process.is_alive():
+                    print(f"[AdaptiveDeploy] {vname}: NPU worker running after {NPU_INIT_WAIT}s")
+                else:
+                    print(f"[AdaptiveDeploy] {vname}: NPU worker died during init!")
+
+                # Swap feeder/handler queues
+                self._swap_feeder_queue(vname, new_cfg, new_frame_q)
+                handler = getattr(v, f"{vname}_handler", None)
+                if handler is not None:
+                    handler.result_queue = new_output_q
+
+                # Stop old worker (if not already stopped for same-core case)
+                if not same_npu_core:
+                    if old_shutdown is not None:
+                        old_shutdown.set()
+                    if old_process is not None and old_process.is_alive():
+                        old_process.join(timeout=3.0)
+                    for q in (old_frame_q, old_output_q):
+                        self._drain(q)
+
+                # Install new resources on the viewer
+                setattr(v, f"{vname}_frame_queue", new_frame_q)
+                setattr(v, _output_queue_attr(vname), new_output_q)
+                setattr(v, f"{vname}_shutdown_event", new_shutdown)
+                setattr(v, f"{vname}_process", new_process)
+
+                print(f"[AdaptiveDeploy] {vname}: NPU hot-swap complete")
+
+            watcher = Thread(target=_npu_swap,
+                             name=f"adaptive_npu_swap_{vname}", daemon=True)
+            watcher.start()
+        else:
+            # CPU/GPU path: start new first, then swap (original hot-swap)
+            ready_event = Event()
+            new_process = _create_worker_thread(
+                vname, new_cfg, new_frame_q, new_output_q,
+                new_shutdown, ready_event)
+            new_process.start()
+
+            def _watcher():
                 ready_event.wait()  # blocks until model loaded
-            print(f"[AdaptiveDeploy] {vname}: new worker ready, switching queues")
+                print(f"[AdaptiveDeploy] {vname}: new worker ready, switching queues")
 
-            # 1. Swap feeder input queue (thread-safe via lock)
-            self._swap_feeder_queue(vname, new_cfg, new_frame_q)
+                # 1. Swap feeder input queue
+                self._swap_feeder_queue(vname, new_cfg, new_frame_q)
 
-            # 2. Swap handler output queue (atomic under GIL)
-            handler = getattr(v, f"{vname}_handler", None)
-            if handler is not None:
-                handler.result_queue = new_output_q
+                # 2. Swap handler output queue
+                handler = getattr(v, f"{vname}_handler", None)
+                if handler is not None:
+                    handler.result_queue = new_output_q
 
-            # 3. Stop old worker
-            if old_shutdown is not None:
-                old_shutdown.set()
-            if old_process is not None and old_process.is_alive():
-                old_process.join(timeout=3.0)
+                # 3. Stop old worker
+                if old_shutdown is not None:
+                    old_shutdown.set()
+                if old_process is not None and old_process.is_alive():
+                    old_process.join(timeout=3.0)
 
-            # 4. Drain old queues
-            for q in (old_frame_q, old_output_q):
-                self._drain(q)
+                # 4. Drain old queues
+                for q in (old_frame_q, old_output_q):
+                    self._drain(q)
 
-            # 5. Install new resources on the viewer
-            setattr(v, f"{vname}_frame_queue", new_frame_q)
-            setattr(v, _output_queue_attr(vname), new_output_q)
-            setattr(v, f"{vname}_shutdown_event", new_shutdown)
-            setattr(v, f"{vname}_process", new_process)
+                # 5. Install new resources on the viewer
+                setattr(v, f"{vname}_frame_queue", new_frame_q)
+                setattr(v, _output_queue_attr(vname), new_output_q)
+                setattr(v, f"{vname}_shutdown_event", new_shutdown)
+                setattr(v, f"{vname}_process", new_process)
 
-            print(f"[AdaptiveDeploy] {vname}: hot-swap complete")
+                print(f"[AdaptiveDeploy] {vname}: hot-swap complete")
 
-        watcher = Thread(target=_watcher, name=f"adaptive_watcher_{vname}", daemon=True)
-        watcher.start()
+            watcher = Thread(target=_watcher,
+                             name=f"adaptive_watcher_{vname}", daemon=True)
+            watcher.start()
 
     # ------------------------------------------------------------------
     # Internal: stop a view worker (view becomes unused)
