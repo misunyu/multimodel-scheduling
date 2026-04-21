@@ -210,13 +210,19 @@ def main():
                         help="repetitions per mode (default 2)")
     parser.add_argument("--cooldown-sec", type=float, default=4.0)
     parser.add_argument("--out", default=OUT_PDF)
+    parser.add_argument("--sweep-json", default=None,
+                        help="Path to an existing overhead_sweep.json to replot "
+                             "(e.g. results/runtime_overhead_antara/overhead_sweep.json). "
+                             "Defaults to results/runtime_overhead/overhead_sweep.json.")
+    parser.add_argument("--latency-label", default="Mean per-view latency (ms)",
+                        help="Y-axis label for the latency subplot.")
     parser.add_argument("--replot", action="store_true",
                         help="Skip running experiments; reload last sweep "
                              "from overhead_sweep.json and just regenerate the PDF.")
     args = parser.parse_args()
 
     os.makedirs(OVERHEAD_DIR, exist_ok=True)
-    json_path = os.path.join(OVERHEAD_DIR, "overhead_sweep.json")
+    json_path = args.sweep_json or os.path.join(OVERHEAD_DIR, "overhead_sweep.json")
 
     if args.replot:
         if not os.path.exists(json_path):
@@ -328,8 +334,9 @@ def _render(per_mode, args):
         bars = ax.bar(x, mean, 0.55,
                       yerr=sd, capsize=4,
                       color=bar_colors, edgecolor="#222222", linewidth=0.7)
-        for b, v in zip(bars, mean):
-            ax.text(b.get_x() + b.get_width() / 2, v + max(mean) * 0.02,
+        pad = max(mean) * 0.03 if max(mean) > 0 else 0.1
+        for b, v, e in zip(bars, mean, sd):
+            ax.text(b.get_x() + b.get_width() / 2, v + e + pad,
                     fmt.format(v), ha="center", va="bottom",
                     fontsize=13, color="#222222")
         ax.set_xticks(x)
@@ -338,9 +345,10 @@ def _render(per_mode, args):
         ax.tick_params(axis='y', labelsize=13)
         ax.yaxis.grid(True, linestyle=":", linewidth=0.5, color="#cccccc")
         ax.set_axisbelow(True)
-        ax.set_ylim(0, max(mean) * 1.25 if max(mean) > 0 else 1.0)
+        top = max(v + e for v, e in zip(mean, sd)) if len(mean) else 1.0
+        ax.set_ylim(0, top * 1.22 if top > 0 else 1.0)
 
-    _bars(ax2, lat_mean, lat_sd,  "Mean per-view latency (ms)", "{:.0f}")
+    _bars(ax2, lat_mean, lat_sd,  args.latency_label,           "{:.0f}")
     _bars(ax4, cpu_mean, cpu_sd,  "Mean process-tree CPU (%)",  "{:.0f}")
 
     # fig.suptitle removed for paper figure
