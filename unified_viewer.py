@@ -409,7 +409,8 @@ class UnifiedViewer(QMainWindow):
                                 "model": mval,
                                 "model_path": _resolve_model_path(mval),
                                 "execution": model_config.get("execution", "cpu"),
-                                "infps": model_config.get("infps", None)
+                                "infps": model_config.get("infps", None),
+                                "slo_ms": model_config.get("slo_ms", None),
                             }
                             continue
                         # Only allow known view labels
@@ -1870,8 +1871,13 @@ class UnifiedViewer(QMainWindow):
                             # View has no measurement yet (cold-starting worker).
                             # Skip so it doesn't dilute v(t) toward zero.
                             continue
-                        _infps = float((_h.model_settings or {}).get(_vn, {}).get('infps', 10.0) or 10.0) if hasattr(_h, 'model_settings') else 10.0
-                        _lslo = 1000.0 / _infps if _infps > 0 else 100.0
+                        _msettings = (_h.model_settings or {}).get(_vn, {}) if hasattr(_h, 'model_settings') else {}
+                        _slo_ms_raw = _msettings.get('slo_ms', None)
+                        if _slo_ms_raw is not None:
+                            _lslo = float(_slo_ms_raw)
+                        else:
+                            _infps = float(_msettings.get('infps', 10.0) or 10.0)
+                            _lslo = 1000.0 / _infps if _infps > 0 else 100.0
                         _v_sum += max(0.0, (_li / _lslo) - 1.0)
                         _n_act += 1
                 _v_t = (_v_sum / _n_act) if _n_act > 0 else 0.0

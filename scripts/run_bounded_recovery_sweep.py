@@ -269,8 +269,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reps", type=int, default=3,
                         help="repetitions per scenario (default 3)")
-    parser.add_argument("--epsilon", type=float, default=50.0,
-                        help="V(t) detection threshold (default 50)")
+    parser.add_argument("--epsilon", type=float, default=1.0,
+                        help="V(t) detection threshold (default 1.0)")
     parser.add_argument("--baseline-duration", type=int, default=8)
     parser.add_argument("--failure-duration",  type=int, default=14)
     parser.add_argument("--recovery-duration", type=int, default=16)

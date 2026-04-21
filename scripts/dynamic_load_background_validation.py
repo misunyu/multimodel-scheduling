@@ -21,6 +21,15 @@ import subprocess
 import sys
 import time
 
+
+def reap_lingering_executors(cooldown_sec: float = 5.0) -> None:
+    """Kill any leftover executor/worker processes from the previous scenario
+    and wait for the OS/GPU to settle before launching the next one."""
+    for patt in ("schedule_executor_main.py", "headless_inference_worker.py"):
+        subprocess.run(["pkill", "-9", "-f", patt], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(cooldown_sec)
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -51,7 +60,7 @@ ST_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_bg_static.csv")
 
 PHASE_A_DURATION = 22
 PHASE_B_DURATION = 6
-PHASE_C_DURATION = 22
+PHASE_C_DURATION = 50
 
 NOISE_WORKERS = [
     {"model": "models_onnx/squeezenet1.0-12.onnx",           "device": "cpu", "rate": 30},
@@ -202,11 +211,19 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
             transform=ax.get_yaxis_transform(),
             ha="right", va="center", fontsize=12, color="#333333")
 
+    candidate_max = max(max(bg_v_t), max(st_v_t), epsilon)
+    y_max = candidate_max * 1.15
+    ax.set_ylim(0.0, y_max)
+
     ax.axvline(x=load_change_sec, color="#7b3306", linestyle=":",
                linewidth=1.4, zorder=5)
-    ax.text(load_change_sec + 0.3, 5,
-            "Input rate\nincreases",
-            color="#7b3306", fontsize=11, ha="left", va="bottom", zorder=12)
+    ax.annotate("Input rate\nincreases",
+                xy=(load_change_sec, y_max * 0.55),
+                xytext=(5.0, y_max * 0.55),
+                color="#7b3306", fontsize=11, ha="left", va="center",
+                arrowprops=dict(arrowstyle="->", color="#7b3306",
+                                lw=1.2, shrinkA=2, shrinkB=4),
+                zorder=12)
 
     bg_recover_sec = None
     if len(bg_bounds) >= 3:
@@ -218,13 +235,9 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
     if bg_recover_sec is not None:
         ax.axvline(x=bg_recover_sec, color="#155724", linestyle=":",
                    linewidth=1.2, zorder=5)
-        ax.text(bg_recover_sec + 0.3, epsilon * 0.55,
+        ax.text(bg_recover_sec + 0.3, y_max * 0.25,
                 "BoundGuard\n stable",
                 color="#155724", fontsize=11, ha="left", va="center", zorder=12)
-
-    candidate_max = max(max(bg_v_t), max(st_v_t))
-    y_max = 100.0
-    ax.set_ylim(0.0, y_max)
     ax.set_xlim(0.0, x_max)
 
     ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
@@ -242,7 +255,7 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--schedule", default=DEFAULT_SCHEDULE)
-    parser.add_argument("--epsilon", type=float, default=50.0)
+    parser.add_argument("--epsilon", type=float, default=1.0)
     parser.add_argument("--no-run", action="store_true")
     parser.add_argument("--out", default=OUT_PDF)
     parser.add_argument("--run-only", choices=["bg", "st"], default=None,
@@ -255,8 +268,10 @@ def main():
         target = args.run_only
         if target is None or target == "bg":
             run_scenario(args.schedule, BG_CSV, mode=1, label="BoundGuard")
+            reap_lingering_executors()
         if target is None or target == "st":
             run_scenario(args.schedule, ST_CSV, mode=3, label="Static")
+            reap_lingering_executors()
         if target is not None:
             print(f"\n[Done] {target} data saved.")
             return 0

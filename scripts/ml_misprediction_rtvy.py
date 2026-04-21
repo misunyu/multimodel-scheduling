@@ -21,6 +21,13 @@ import argparse, os, subprocess, sys, time
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+
+def reap_lingering_executors(cooldown_sec: float = 5.0) -> None:
+    for patt in ("schedule_executor_main.py", "headless_inference_worker.py"):
+        subprocess.run(["pkill", "-9", "-f", patt], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(cooldown_sec)
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
@@ -87,7 +94,7 @@ def load_curve(csv_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epsilon", type=float, default=50.0)
+    parser.add_argument("--epsilon", type=float, default=1.0)
     parser.add_argument("--no-run", action="store_true")
     parser.add_argument("--out", default=OUT_PDF)
     parser.add_argument("--run-only", choices=["bg", "ml", "sr", "st"],
@@ -106,6 +113,7 @@ def main():
                     "combination_xgb_pick": P_XGB,
                     "combination_all_gpu":  P_ALL_GPU,
                 })
+            reap_lingering_executors()
         if target is None or target == "ml":
             run(ML_CSV, mode=1, label="Adaptive (ML-only)",
                 combo_durations={
@@ -113,6 +121,7 @@ def main():
                     "combination_burst":    P_BURST,
                     "combination_xgb_pick": P_XGB + P_ALL_GPU,
                 })
+            reap_lingering_executors()
         if target is None or target == "sr":
             run(SR_CSV, mode=0, label="Stop-and-restart",
                 combo_durations={
@@ -121,6 +130,7 @@ def main():
                     "combination_xgb_pick": P_XGB,
                     "combination_all_gpu":  P_ALL_GPU,
                 })
+            reap_lingering_executors()
         if target is None or target == "st":
             run(ST_CSV, mode=3, label="Static",
                 combo_durations={
@@ -129,6 +139,7 @@ def main():
                     "combination_xgb_pick": P_XGB,
                     "combination_all_gpu":  P_ALL_GPU,
                 })
+            reap_lingering_executors()
         # If running one at a time, exit after data collection
         if target is not None:
             print(f"\n[Done] {target} data saved. Run other curves separately, "

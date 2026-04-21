@@ -41,10 +41,20 @@ import datetime
 import os
 import subprocess
 import sys
+import time
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+
+def reap_lingering_executors(cooldown_sec: float = 5.0) -> None:
+    """Kill any leftover executor/worker processes from the previous scenario
+    and wait for the OS/GPU to settle before launching the next one."""
+    for patt in ("schedule_executor_main.py", "headless_inference_worker.py"):
+        subprocess.run(["pkill", "-9", "-f", patt], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(cooldown_sec)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
@@ -73,7 +83,7 @@ ST_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_static.csv")
 # at t = 20 s on the figure x-axis.
 PHASE_A_DURATION = 22
 PHASE_B_DURATION = 6
-PHASE_C_DURATION = 22
+PHASE_C_DURATION = 50
 
 
 def run_scenario(schedule, csv_path, mode, label):
@@ -196,18 +206,22 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
             transform=ax.get_yaxis_transform(),
             ha="right", va="center", fontsize=12, color="#333333")
 
-    # Vertical marker for the load-change event.
+    # y-axis: slightly above the observed maximum across both curves.
+    candidate_max = max(max(bg_v_t), max(st_v_t), epsilon)
+    y_max = candidate_max * 1.15
+    ax.set_ylim(0.0, y_max)
+
+    # Vertical marker for the load-change event, with a left-side label
+    # connected by an arrow so the text does not overlap the curves.
     ax.axvline(x=load_change_sec, color="#7b3306", linestyle=":",
                linewidth=1.4, zorder=5)
-    ax.text(load_change_sec + 0.3, 5,
-            "Input rate\nincreases",
-            color="#7b3306", fontsize=11, ha="left", va="bottom",
-            zorder=12)
-
-    # No cold-start vspan for the BoundGuard run: mode 1's hot-swap
-    # keeps the service continuous, so we deliberately do not draw the
-    # "Rollback in progress" hatching that the stop-and-restart figure
-    # used.
+    ax.annotate("Input rate\nincreases",
+                xy=(load_change_sec, y_max * 0.55),
+                xytext=(5.0, y_max * 0.55),
+                color="#7b3306", fontsize=11, ha="left", va="center",
+                arrowprops=dict(arrowstyle="->", color="#7b3306",
+                                lw=1.2, shrinkA=2, shrinkB=4),
+                zorder=12)
 
     # Compute reconfig completion (BoundGuard recovery) marker: first tick
     # in phase C where windowed V(t) drops back to <= epsilon.
@@ -221,16 +235,10 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
     if bg_recover_sec is not None:
         ax.axvline(x=bg_recover_sec, color="#155724", linestyle=":",
                    linewidth=1.2, zorder=5)
-        ax.text(bg_recover_sec + 0.3, epsilon * 0.55,
+        ax.text(bg_recover_sec + 0.3, y_max * 0.25,
                 "BoundGuard\n stable",
                 color="#155724", fontsize=11, ha="left", va="center",
                 zorder=12)
-
-    # Determine y_max from data, but cap at a reasonable level so the
-    # static curve doesn't run off the top.
-    candidate_max = max(max(bg_v_t), max(st_v_t))
-    y_max = 100.0
-    ax.set_ylim(0.0, y_max)
     ax.set_xlim(0.0, x_max)
 
     ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
@@ -248,7 +256,7 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--schedule", default=DEFAULT_SCHEDULE)
-    parser.add_argument("--epsilon", type=float, default=50.0)
+    parser.add_argument("--epsilon", type=float, default=1.0)
     parser.add_argument("--no-run", action="store_true",
                         help="Skip running the executor; replot only.")
     parser.add_argument("--run-only", choices=["bg", "st"], default=None,
@@ -261,8 +269,10 @@ def main():
         target = args.run_only
         if target is None or target == "bg":
             run_scenario(args.schedule, BG_CSV, mode=1, label="BoundGuard")
+            reap_lingering_executors()
         if target is None or target == "st":
             run_scenario(args.schedule, ST_CSV, mode=3, label="Static")
+            reap_lingering_executors()
         if target is not None:
             print(f"\n[Done] {target} data saved.")
             return 0

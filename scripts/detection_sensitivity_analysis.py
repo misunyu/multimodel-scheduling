@@ -15,11 +15,13 @@ Approach:
     grid:
 
         T   in {1, 3, 5}    seconds (sliding-window length)
-        eps in {25, 50, 75}         (threshold)
+        eps in {0.5, 1.0, 2.0}      (threshold, centered on the
+                                     operating ε = 1.0 used by the
+                                     bounded-recovery sweep)
 
-    For every cell we compute four metrics, averaged over all 12 CSV
-    runs (= 4 scenarios x 3 reps), and plot them as four 3x3 heatmaps
-    in a single figure.
+    For every cell we compute four metrics, averaged over all CSV
+    runs from the sweep (6 scenarios x 3 reps = 18 runs), and plot
+    them as four 3x3 heatmaps in a single figure.
 
 Usage:
     python scripts/detection_sensitivity_analysis.py
@@ -45,7 +47,7 @@ SWEEP_DIR = os.path.join(RESULTS_DIR, "bounded_sweep")
 OUT_PDF = os.path.join(RESULTS_DIR, "detection_sensitivity.pdf")
 
 T_VALUES   = [1, 3, 5]
-EPS_VALUES = [25, 50, 75]
+EPS_VALUES = [0.5, 1.0, 2.0]
 
 
 def load_run(csv_path):
