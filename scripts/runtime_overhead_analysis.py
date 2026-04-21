@@ -347,7 +347,7 @@ def _render(per_mode, args):
         ax.set_axisbelow(True)
         ax.set_ylim(0, max(mean) * 1.25 if max(mean) > 0 else 1.0)
 
-    _bars(ax2, lat_mean, lat_sd,  "Mean per-view latency (ms)", "{:.0f}")
+    _bars(ax2, lat_mean, lat_sd,  "Mean per-model\ninference latency (ms)", "{:.0f}")
     _bars(ax4, cpu_mean, cpu_sd,  "Mean process-tree CPU (%)",  "{:.0f}")
 
     # fig.suptitle removed for paper figure
