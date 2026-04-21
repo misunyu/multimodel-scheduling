@@ -210,6 +210,13 @@ def main():
                         help="repetitions per mode (default 2)")
     parser.add_argument("--cooldown-sec", type=float, default=4.0)
     parser.add_argument("--out", default=OUT_PDF)
+    parser.add_argument("--drop-first-rep", action="store_true", default=True,
+                        help="Discard the first rep of each mode when "
+                             "aggregating (it absorbs cold-start penalties). "
+                             "Default: true.")
+    parser.add_argument("--keep-first-rep", dest="drop_first_rep",
+                        action="store_false",
+                        help="Use all reps including the first one.")
     parser.add_argument("--replot", action="store_true",
                         help="Skip running experiments; reload last sweep "
                              "from overhead_sweep.json and just regenerate the PDF.")
@@ -249,8 +256,45 @@ def main():
         print()
         print(f"[Overhead] JSON: {json_path}")
 
+    if args.drop_first_rep:
+        per_mode = _reaggregate_drop_first(per_mode)
+        print("[Overhead] Aggregation: first rep of each mode dropped (warmup).")
+
     _render(per_mode, args)
     return 0
+
+
+def _reaggregate_drop_first(per_mode):
+    """Recompute each mode's stats from runs[1:] (skip the first rep)."""
+    out = []
+    for m in per_mode:
+        runs = m.get("runs", [])
+        if len(runs) <= 1:
+            out.append(m)
+            continue
+        kept = runs[1:]
+        out.append({
+            **m,
+            "runs": kept,
+            "stats": {
+                "total_fps":      stats([r["metrics"]["total_fps"]      for r in kept]),
+                "avg_latency_ms": stats([r["metrics"]["avg_latency_ms"] for r in kept]),
+                "drop_fps":       stats([r["metrics"]["drop_fps"]       for r in kept]),
+                "cpu_mean_pct":   stats([r["cpu_mean_pct"]              for r in kept]),
+            },
+        })
+    return out
+
+
+def _reap(settle_sec=6.0):
+    """Kill any lingering schedule_executor_main.py / worker processes so
+    the next mode starts from a clean slate (no residual CUDA contexts,
+    ONNX sessions, or Qt windows)."""
+    for patt in ("schedule_executor_main.py",
+                 "headless_inference_worker.py"):
+        subprocess.run(["pkill", "-9", "-f", patt], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(settle_sec)
 
 
 def _run_sweep(args):
@@ -261,6 +305,9 @@ def _run_sweep(args):
         print("=" * 70)
         print(f"  Mode {mi + 1}/{len(MODES)}: {label_flat} (adaptive_mode={m['mode']})")
         print("=" * 70)
+        # Fresh slate before every mode: kill any leftover executor/worker
+        # processes so each technique starts from a cold baseline.
+        _reap()
         runs = []
         for rep in range(args.reps):
             print(f"  -- run {rep + 1}/{args.reps}")
@@ -347,7 +394,7 @@ def _render(per_mode, args):
         ax.set_axisbelow(True)
         ax.set_ylim(0, max(mean) * 1.25 if max(mean) > 0 else 1.0)
 
-    _bars(ax2, lat_mean, lat_sd,  "Mean per-model\ninference latency (ms)", "{:.0f}")
+    _bars(ax2, lat_mean, lat_sd,  "Mean per-app.\ninference latency (ms)", "{:.0f}")
     _bars(ax4, cpu_mean, cpu_sd,  "Mean process-tree CPU (%)",  "{:.0f}")
 
     # fig.suptitle removed for paper figure

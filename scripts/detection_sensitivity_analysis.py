@@ -176,7 +176,8 @@ def render_heatmap(ax, data, title, fmt, cmap, lower_is_better=True,
     ax.set_xticklabels([f"$\\epsilon$={e}" for e in EPS_VALUES], fontsize=13)
     ax.set_yticks(range(len(T_VALUES)))
     ax.set_yticklabels([f"T={t}s" for t in T_VALUES], fontsize=13)
-    # ax.set_title removed for paper figure
+    if title:
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=8)
     # Annotate cells.
     for i in range(arr.shape[0]):
         for j in range(arr.shape[1]):
@@ -224,33 +225,26 @@ def main():
     agg = aggregate(grid_runs)
 
     # ---------- figure layout ------------------------------------------------
-    # Top : 2x2 heatmaps
-    # Bottom : explanatory text
-    fig = plt.figure(figsize=(9.0, 7.0))
-    gs = GridSpec(2, 2, figure=fig,
-                  height_ratios=[1.0, 1.0],
-                  hspace=0.45, wspace=0.35,
-                  top=0.97, bottom=0.05, left=0.07, right=0.92)
+    # 1x3 heatmaps (Detection latency, Recovery latency, Cumulative violation)
+    fig = plt.figure(figsize=(12.0, 3.8))
+    gs = GridSpec(1, 3, figure=fig,
+                  wspace=0.40,
+                  top=0.85, bottom=0.17, left=0.06, right=0.96)
 
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax3 = fig.add_subplot(gs[1, 0])
-    ax4 = fig.add_subplot(gs[1, 1])
+    ax2 = fig.add_subplot(gs[0, 0])
+    ax3 = fig.add_subplot(gs[0, 1])
+    ax4 = fig.add_subplot(gs[0, 2])
 
-    render_heatmap(ax1, agg["false_triggers"],
-                   "False triggers in healthy phase\n(count of windowed V(t) > $\\epsilon$ in phase 1)",
-                   fmt="{:.1f}",
-                   cmap="pastel_red")
     render_heatmap(ax2, agg["detect_lat"],
-                   "Detection latency\n(ticks from failure to first V(t) > $\\epsilon$)",
+                   "Detection latency (ticks)",
                    fmt="{:.1f}",
                    cmap="pastel_blue")
     render_heatmap(ax3, agg["recover_lat"],
-                   "Recovery latency\n(ticks from failure to first V(t) $\\leq \\epsilon$ after rollback)",
+                   "Recovery latency (ticks)",
                    fmt="{:.1f}",
                    cmap="pastel_peach")
     render_heatmap(ax4, agg["cum_violation"],
-                   "Cumulative violation\n($\\sum_t \\max(0, V(t)-\\epsilon)$ across the run)",
+                   r"Cumulative violation $\sum_t (V(t)-\epsilon)^+$",
                    fmt="{:.0f}",
                    cmap="pastel_purple")
 
