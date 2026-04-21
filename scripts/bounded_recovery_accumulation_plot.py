@@ -59,27 +59,31 @@ def main() -> None:
     x = np.arange(len(labels))
     width = 0.55
 
+    plt.rcParams["hatch.linewidth"] = 0.4
+
     fig, ax = plt.subplots(figsize=(10, 4.5))
 
-    # T_detect (bottom, orange)
+    # T_detect (bottom, pastel peach, cross hatch)
     bars_detect = ax.bar(
         x, td_mean, width,
-        color="#e8870e",
-        edgecolor="#c06a00",
-        linewidth=0.8,
+        color="#fad7a8",
+        edgecolor="#555555",
+        linewidth=0.5,
+        hatch="xxx",
         label=r"$T_{detect}$",
         zorder=2,
     )
 
-    # T_post (top, dark blue) stacked on T_detect
+    # T_post (top, pastel blue, solid) stacked on T_detect
     bars_post = ax.bar(
         x, tp_mean, width,
         bottom=td_mean,
         yerr=total_sd,
         capsize=4,
-        color="#1a4e7a",
-        edgecolor="#0d2a44",
-        linewidth=0.8,
+        color="#b9d0e8",
+        edgecolor="#555555",
+        linewidth=0.5,
+        ecolor="#555555",
         label=r"$T_{post}$",
         zorder=2,
     )
@@ -90,7 +94,7 @@ def main() -> None:
                 val + 0.3,
                 f"{val:.1f}",
                 ha="center", va="bottom",
-                fontsize=13, color="#0d2a44")
+                fontsize=13, color="#333333")
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=13)

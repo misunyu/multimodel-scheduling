@@ -234,11 +234,11 @@ def main():
         ax.text(px+0.3, y_max*0.93, "XGBoost pick\n(2 GPU + 2 CPU)",
                 color="#2c3e50", fontsize=11, ha="left", va="center", zorder=12)
 
-    # All-GPU fallback marker (phase 4 start)
+    # 2nd placement marker (phase 4 start)
     if len(bg_bounds) >= 4:
         fx = bg_t[bg_bounds[3][0]]
         ax.axvline(x=fx, color="#155724", ls=":", lw=1.2, zorder=5)
-        ax.text(fx+0.3, y_max*0.39, "All-GPU fallback\n($V(t)>\\epsilon$ after T)",
+        ax.text(fx+0.3, y_max*0.39, "2nd placement\n($V(t)>\\epsilon$ after T)",
                 color="#155724", fontsize=11, ha="left", va="center", zorder=12)
 
     # BoundGuard recovery marker

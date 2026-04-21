@@ -38,6 +38,20 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import LinearSegmentedColormap
+
+# Pastel heatmap palettes — white ramps toward the q13 pastel endpoints
+# (pink, peach, blue, purple) so heatmap tones match the other paper figures.
+_PASTEL_CMAPS = {
+    "pastel_red":    LinearSegmentedColormap.from_list("pastel_red",
+                        ["#ffffff", "#f4b5b5", "#c96b6b"]),
+    "pastel_peach":  LinearSegmentedColormap.from_list("pastel_peach",
+                        ["#ffffff", "#fad7a8", "#c88a44"]),
+    "pastel_blue":   LinearSegmentedColormap.from_list("pastel_blue",
+                        ["#ffffff", "#b9d0e8", "#5d87b5"]),
+    "pastel_purple": LinearSegmentedColormap.from_list("pastel_purple",
+                        ["#ffffff", "#d8c2ea", "#8a6aae"]),
+}
 from matplotlib.gridspec import GridSpec
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -155,7 +169,8 @@ def render_heatmap(ax, data, title, fmt, cmap, lower_is_better=True,
         vmax = np.nanmax(arr)
     if vmax - vmin < 1e-9:
         vmax = vmin + 1.0
-    im = ax.imshow(arr, cmap=cmap, aspect="auto",
+    cmap_obj = _PASTEL_CMAPS.get(cmap, cmap) if isinstance(cmap, str) else cmap
+    im = ax.imshow(arr, cmap=cmap_obj, aspect="auto",
                    vmin=vmin, vmax=vmax, origin="lower")
     ax.set_xticks(range(len(EPS_VALUES)))
     ax.set_xticklabels([f"$\\epsilon$={e}" for e in EPS_VALUES], fontsize=13)
@@ -225,19 +240,19 @@ def main():
     render_heatmap(ax1, agg["false_triggers"],
                    "False triggers in healthy phase\n(count of windowed V(t) > $\\epsilon$ in phase 1)",
                    fmt="{:.1f}",
-                   cmap="Reds")
+                   cmap="pastel_red")
     render_heatmap(ax2, agg["detect_lat"],
                    "Detection latency\n(ticks from failure to first V(t) > $\\epsilon$)",
                    fmt="{:.1f}",
-                   cmap="Blues")
+                   cmap="pastel_blue")
     render_heatmap(ax3, agg["recover_lat"],
                    "Recovery latency\n(ticks from failure to first V(t) $\\leq \\epsilon$ after rollback)",
                    fmt="{:.1f}",
-                   cmap="Greens")
+                   cmap="pastel_peach")
     render_heatmap(ax4, agg["cum_violation"],
                    "Cumulative violation\n($\\sum_t \\max(0, V(t)-\\epsilon)$ across the run)",
                    fmt="{:.0f}",
-                   cmap="Purples")
+                   cmap="pastel_purple")
 
     # fig.suptitle removed for paper figure
 

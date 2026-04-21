@@ -317,8 +317,12 @@ def _render(per_mode, args):
     cpu_mean   = np.array([m["stats"]["cpu_mean_pct"]["mean"]   for m in per_mode])
     cpu_sd     = np.array([m["stats"]["cpu_mean_pct"]["std"]    for m in per_mode])
 
-    base_color = "#bdc3c7"
-    bar_colors = ["#7f8c8d", "#3498db", "#1f4e79"]
+    base_color = "#d6d6d6"
+    # Pastel palette matching q13_failure_persistence.pdf:
+    # Static (pink), Adaptive hot-swap (peach), BoundGuard (blue)
+    bar_colors   = ["#f4b5b5", "#fad7a8", "#b9d0e8"]
+    bar_hatches  = ["///",     "xxx",     ""]
+    plt.rcParams["hatch.linewidth"] = 0.4
 
     fig, (ax2, ax4) = plt.subplots(1, 2, figsize=(10, 4.2))
     fig.subplots_adjust(wspace=0.40, left=0.11, right=0.97, top=0.93, bottom=0.18)
@@ -327,11 +331,14 @@ def _render(per_mode, args):
         x = np.arange(len(labels))
         bars = ax.bar(x, mean, 0.55,
                       yerr=sd, capsize=4,
-                      color=bar_colors, edgecolor="#222222", linewidth=0.7)
+                      color=bar_colors, edgecolor="#555555", linewidth=0.5,
+                      ecolor="#555555")
+        for b, h in zip(bars, bar_hatches):
+            b.set_hatch(h)
         for b, v in zip(bars, mean):
             ax.text(b.get_x() + b.get_width() / 2, v + max(mean) * 0.02,
                     fmt.format(v), ha="center", va="bottom",
-                    fontsize=13, color="#222222")
+                    fontsize=13, color="#333333")
         ax.set_xticks(x)
         ax.set_xticklabels(labels, fontsize=13)
         ax.set_ylabel(ylabel, fontsize=15, fontweight="bold")
