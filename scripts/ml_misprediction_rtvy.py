@@ -162,16 +162,22 @@ def main():
     ml_t_clip, ml_v_clip = clip(ml_t, ml_v)
     sr_t_clip, sr_v_clip = clip(sr_t, sr_v)
 
-    ax.plot(st_t, st_v, color="#a83232", lw=2, ls="--",
-            label="Static", zorder=10)
-    ax.plot(ml_t_clip, ml_v_clip, color="#e67e22", lw=2, ls="-",
+    ax.plot(st_t, st_v, color="#8b2e2e", lw=2, ls="--",
             marker="o", markersize=5, markevery=5,
-            label="Adaptive (ML-only)", zorder=11)
+            markerfacecolor="#f4b5b5", markeredgecolor="#8b2e2e",
+            markeredgewidth=0.7,
+            label="Static", zorder=10)
+    ax.plot(ml_t_clip, ml_v_clip, color="#8e5a1c", lw=2, ls="-",
+            marker="D", markersize=5, markevery=5,
+            markerfacecolor="#fad7a8", markeredgecolor="#8e5a1c",
+            markeredgewidth=0.7,
+            label="Adaptive hot-swap", zorder=11)
 
     # Stop-and-restart: break the line at cold-start gaps (service stops
     # during worker teardown/rebuild). Insert NaN to break, then draw
     # light grey dotted lines across each gap to show the connection.
-    sr_color = "#8e44ad"
+    sr_color = "#5a3e7c"
+    sr_fill  = "#d8c2ea"
     sr_t_plot = list(sr_t_clip)
     sr_v_plot = list(sr_v_clip)
     # Collect gap endpoints before inserting NaN (for dotted connectors)
@@ -195,13 +201,17 @@ def main():
         sr_v_nan.append(v)
     ax.plot(sr_t_nan, sr_v_nan, color=sr_color, lw=2, ls="-.",
             marker="s", markersize=5, markevery=5,
+            markerfacecolor=sr_fill, markeredgecolor=sr_color,
+            markeredgewidth=0.6,
             label="Stop-and-restart", zorder=12)
     # Draw light grey dotted connectors across each gap
     for gs, vb, ge, va in sr_gap_segments:
         ax.plot([gs, ge], [vb, va], color="#bbbbbb", lw=1.2, ls=":", zorder=9)
 
-    ax.plot(bg_t, bg_v, color="#1f4e79", lw=2.8, ls="-",
+    ax.plot(bg_t, bg_v, color="#2c5984", lw=2.2, ls="-",
             marker="^", markersize=6, markevery=5,
+            markerfacecolor="#b9d0e8", markeredgecolor="#2c5984",
+            markeredgewidth=0.7,
             label="BoundGuard", zorder=13)
 
     ax.axhline(y=eps, color="gray", ls="--", lw=1.1, zorder=4)
@@ -223,23 +233,23 @@ def main():
     # Burst marker (phase 2 start)
     if len(bg_bounds) >= 2:
         bx = bg_t[bg_bounds[1][0]]
-        ax.axvline(x=bx, color="#7b3306", ls=":", lw=1.3, zorder=5)
+        ax.axvline(x=bx, color="#b03a2e", ls="-.", lw=1.0, zorder=5)
         ax.text(bx+0.3, y_max*0.19, "Input rate\nincreases",
-                color="#7b3306", fontsize=11, ha="left", va="bottom", zorder=12)
+                color="#b03a2e", fontsize=11, ha="left", va="bottom", zorder=12)
 
     # XGBoost pick marker (phase 3 start)
     if len(bg_bounds) >= 3:
         px = bg_t[bg_bounds[2][0]]
-        ax.axvline(x=px, color="#2c3e50", ls=":", lw=1.2, zorder=5)
+        ax.axvline(x=px, color="#c88a44", ls=":", lw=1.0, zorder=5)
         ax.text(px+0.3, y_max*0.93, "XGBoost pick\n(2 GPU + 2 CPU)",
-                color="#2c3e50", fontsize=11, ha="left", va="center", zorder=12)
+                color="#c88a44", fontsize=11, ha="left", va="center", zorder=12)
 
     # 2nd placement marker (phase 4 start)
     if len(bg_bounds) >= 4:
         fx = bg_t[bg_bounds[3][0]]
-        ax.axvline(x=fx, color="#155724", ls=":", lw=1.2, zorder=5)
+        ax.axvline(x=fx, color="#5d87b5", ls=":", lw=1.0, zorder=5)
         ax.text(fx+0.3, y_max*0.39, "2nd placement\n($V(t)>\\epsilon$ after T)",
-                color="#155724", fontsize=11, ha="left", va="center", zorder=12)
+                color="#5d87b5", fontsize=11, ha="left", va="center", zorder=12)
 
     # BoundGuard recovery marker
     bg_recover = None

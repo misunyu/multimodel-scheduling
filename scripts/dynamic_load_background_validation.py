@@ -199,11 +199,15 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
 
     fig, ax = plt.subplots(figsize=(7.0, 4.2))
 
-    ax.plot(st_t_plot, st_v_plot, color="#a83232", linewidth=2.0,
-            linestyle="--",
+    ax.plot(st_t_plot, st_v_plot, color="#8b2e2e", linewidth=2.0,
+            linestyle="--", marker="o", markersize=5, markevery=5,
+            markerfacecolor="#f4b5b5", markeredgecolor="#8b2e2e",
+            markeredgewidth=0.7,
             label="Static", zorder=10)
-    ax.plot(bg_t_plot, bg_v_plot, color="#1f4e79", linewidth=2.8,
-            linestyle="-", marker="^", markersize=6, markevery=5,
+    ax.plot(bg_t_plot, bg_v_plot, color="#2c5984", linewidth=2.2,
+            linestyle="-", marker="s", markersize=6, markevery=5,
+            markerfacecolor="#b9d0e8", markeredgecolor="#2c5984",
+            markeredgewidth=0.7,
             label="BoundGuard", zorder=11)
 
     ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.1, zorder=4)
@@ -215,14 +219,14 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
     y_max = candidate_max * 1.15
     ax.set_ylim(0.0, y_max)
 
-    ax.axvline(x=load_change_sec, color="#7b3306", linestyle=":",
-               linewidth=1.4, zorder=5)
+    ax.axvline(x=load_change_sec, color="#b03a2e", linestyle="-.",
+               linewidth=1.0, zorder=5)
     ax.annotate("Input rate\nincreases",
                 xy=(load_change_sec, y_max * 0.55),
                 xytext=(5.0, y_max * 0.55),
-                color="#7b3306", fontsize=11, ha="left", va="center",
-                arrowprops=dict(arrowstyle="->", color="#7b3306",
-                                lw=1.2, shrinkA=2, shrinkB=4),
+                color="#b03a2e", fontsize=11, ha="left", va="center",
+                arrowprops=dict(arrowstyle="->", color="#b03a2e",
+                                lw=0.8, shrinkA=2, shrinkB=4),
                 zorder=12)
 
     bg_recover_sec = None
@@ -233,11 +237,11 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
                 bg_recover_sec = bg_times[i]
                 break
     if bg_recover_sec is not None:
-        ax.axvline(x=bg_recover_sec, color="#155724", linestyle=":",
-                   linewidth=1.2, zorder=5)
+        ax.axvline(x=bg_recover_sec, color="#5d87b5", linestyle=":",
+                   linewidth=1.0, zorder=5)
         ax.text(bg_recover_sec + 0.3, y_max * 0.25,
                 "BoundGuard\n stable",
-                color="#155724", fontsize=11, ha="left", va="center", zorder=12)
+                color="#5d87b5", fontsize=11, ha="left", va="center", zorder=12)
     ax.set_xlim(0.0, x_max)
 
     ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
