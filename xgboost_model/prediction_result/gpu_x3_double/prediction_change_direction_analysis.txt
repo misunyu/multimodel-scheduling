@@ -1,0 +1,117 @@
+================================================================================================================================================================
+XGBoost (xgb_model_x3_double) 추론 최적배치 변경의 실제 성능 방향성 분석
+Score: S(x) = T(x) - 0.3·D(x)
+질문: 입력률이 변할 때 XGBoost가 최적배치를 바꾸는 것이 실제 성능 향상 방향인가?
+================================================================================================================================================================
+
+■ 전체 요약
+  총 배치 변경 전환(transition) 수: 61
+  개선 (변경 후 실제 S 향상): 31 (50.8%)
+  악화 (변경 후 실제 S 하락): 1 (1.6%)
+  동등 (차이 < 0.001):         0 (0.0%)
+  N/A  (이전 배치 데이터 없음): 29
+
+■ 상세: 각 전환별 실제 성능 변화
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  모델조합                                         Rate변화 | 이전추론배치               현재추론배치               실제최적                 |     이전배치S     변경배치S     실제최적S       ΔS       판정
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  g_m_r                                     x1.0→x1.5 | combination_6        combination_8        combination_8        |    0.5349    1.0000    1.0000  +0.4651     개선 ✓
+  g_m_r                                     x2.0→x2.5 | combination_8        combination_6        combination_4        |       N/A    0.6014    1.0000     N/A       N/A
+  g_m_r                                     x2.5→x3.0 | combination_6        combination_8        combination_8        |    0.5130    1.0000    1.0000  +0.4870     개선 ✓
+  g_m_r                                     x3.5→x4.0 | combination_8        combination_5        combination_5        |       N/A   -0.2685   -0.2685     N/A       N/A
+  g_m_r_t                                   x1.0→x1.5 | combination_12       combination_16       combination_16       |    0.6138    1.0000    1.0000  +0.3862     개선 ✓
+  g_m_r_t                                   x1.5→x2.0 | combination_16       combination_5        combination_5        |       N/A    0.3523    0.3523     N/A       N/A
+  g_m_r_t                                   x2.0→x2.5 | combination_5        combination_16       combination_16       |    0.3544    1.0000    1.0000  +0.6456     개선 ✓
+  g_m_r_t                                   x3.5→x4.0 | combination_16       combination_8        combination_8        |       N/A    0.9525    0.9525     N/A       N/A
+  g_m_resnet50_resnext50                    x3.5→x4.0 | combination_16       combination_9        combination_11       |       N/A   -0.2461    0.2554     N/A       N/A
+  g_m_resnet50_resnext50_s_t                x1.0→x1.5 | combination_38       combination_64       combination_64       |   -0.1054    1.0000    1.0000  +1.1054     개선 ✓
+  g_m_resnet50_resnext50_s_t                x1.5→x2.0 | combination_64       combination_48       combination_32       |       N/A    0.5741    0.6909     N/A       N/A
+  g_m_resnet50_resnext50_s_t                x2.0→x2.5 | combination_48       combination_64       combination_64       |    0.5928    1.0000    1.0000  +0.4072     개선 ✓
+  g_m_resnet50_resnext50_s_t                x3.5→x4.0 | combination_64       combination_60       combination_60       |       N/A    0.7305    0.7305     N/A       N/A
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t  x1.0→x1.5 | combination_112      combination_128      combination_128      |    0.5348    1.0000    1.0000  +0.4652     개선 ✓
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t  x1.5→x2.0 | combination_128      combination_126      combination_101      |       N/A    0.6179    0.7687     N/A       N/A
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t  x2.0→x2.5 | combination_126      combination_128      combination_128      |    0.6503    0.9554    0.9554  +0.3051     개선 ✓
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t  x3.5→x4.0 | combination_128      combination_112      combination_120      |       N/A    0.6104    0.7352     N/A       N/A
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v  x1.0→x1.5 | combination_152      combination_256      combination_256      |   -0.1331    0.9989    0.9989  +1.1320     개선 ✓
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v  x1.5→x2.0 | combination_256      combination_248      combination_89       |       N/A    0.6009    0.8816     N/A       N/A
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v  x2.0→x2.5 | combination_248      combination_256      combination_256      |    0.5919    0.9963    0.9963  +0.4044     개선 ✓
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v  x3.5→x4.0 | combination_256      combination_128      combination_217      |       N/A    0.7245    0.8584     N/A       N/A
+  g_m_resnet50_resnext50_t                  x1.0→x1.5 | combination_22       combination_32       combination_32       |    0.4383    1.0000    1.0000  +0.5617     개선 ✓
+  g_m_resnet50_resnext50_t                  x1.5→x2.0 | combination_32       combination_17       combination_14       |       N/A   -0.2225    0.4449     N/A       N/A
+  g_m_resnet50_resnext50_t                  x2.0→x2.5 | combination_17       combination_32       combination_32       |   -0.2011    1.0000    1.0000  +1.2011     개선 ✓
+  g_m_resnet50_resnext50_t                  x3.5→x4.0 | combination_32       combination_28       combination_28       |       N/A    0.5672    0.5672     N/A       N/A
+  g_m_t                                     x1.0→x1.5 | combination_8        combination_7        combination_7        |       N/A    1.0000    1.0000     N/A       N/A
+  g_m_t                                     x3.0→x3.5 | combination_7        combination_8        combination_8        |    0.9410    1.0000    1.0000  +0.0590     개선 ✓
+  g_r_v                                     x1.0→x1.5 | combination_4        combination_6        combination_3        |    0.8134    0.2929    0.9990  -0.5205     악화 ✗
+  g_r_v                                     x2.0→x2.5 | combination_6        combination_8        combination_7        |    0.3050    0.9522    0.9995  +0.6472     개선 ✓
+  g_r_v                                     x3.0→x3.5 | combination_8        combination_6        combination_3        |       N/A    0.3098    0.9989     N/A       N/A
+  g_r_y                                     x1.0→x1.5 | combination_3        combination_8        combination_8        |    0.9462    0.9820    0.9820  +0.0358     개선 ✓
+  g_r_y                                     x1.5→x2.0 | combination_8        combination_6        combination_7        |       N/A    0.1200    0.8452     N/A       N/A
+  g_r_y                                     x2.0→x2.5 | combination_6        combination_8        combination_8        |    0.0868    0.9679    0.9679  +0.8811     개선 ✓
+  g_t                                       x3.5→x4.0 | combination_4        combination_3        combination_3        |       N/A    1.0000    1.0000     N/A       N/A
+  g_t_y                                     x1.0→x1.5 | combination_5        combination_8        combination_8        |   -0.1841    1.0000    1.0000  +1.1841     개선 ✓
+  g_t_y                                     x3.5→x4.0 | combination_8        combination_1        combination_1        |       N/A   -0.1848   -0.1848     N/A       N/A
+  gpt2                                      x1.0→x1.5 | combination_1        combination_2        combination_2        |    0.9472    1.0000    1.0000  +0.0528     개선 ✓
+  m_r_t_y                                   x1.0→x1.5 | combination_6        combination_16       combination_16       |    0.0986    1.0000    1.0000  +0.9014     개선 ✓
+  m_r_t_y                                   x1.5→x2.0 | combination_16       combination_8        combination_7        |       N/A    0.3803    0.5260     N/A       N/A
+  m_r_t_y                                   x2.0→x2.5 | combination_8        combination_16       combination_16       |    0.4006    1.0000    1.0000  +0.5994     개선 ✓
+  m_resnet50_resnext50                      x1.0→x1.5 | combination_5        combination_4        combination_4        |    0.4797    0.9929    0.9929  +0.5133     개선 ✓
+  m_resnet50_resnext50                      x1.5→x2.0 | combination_4        combination_7        combination_7        |       N/A    0.6240    0.6240     N/A       N/A
+  m_resnet50_resnext50                      x2.0→x2.5 | combination_7        combination_8        combination_8        |    0.6305    1.0000    1.0000  +0.3695     개선 ✓
+  m_resnet50_resnext50                      x3.5→x4.0 | combination_8        combination_7        combination_7        |       N/A    0.6232    0.6232     N/A       N/A
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v  x1.0→x1.5 | combination_64       combination_128      combination_128      |    0.5180    1.0000    1.0000  +0.4820     개선 ✓
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v  x1.5→x2.0 | combination_128      combination_120      combination_127      |       N/A    0.5663    0.6173     N/A       N/A
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v  x2.0→x2.5 | combination_120      combination_128      combination_128      |    0.6270    1.0000    1.0000  +0.3730     개선 ✓
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v  x3.0→x4.0 | combination_128      combination_112      combination_112      |       N/A    0.5831    0.5831     N/A       N/A
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v_y  x1.0→x1.5 | combination_224      combination_256      combination_256      |    0.4160    0.9991    0.9991  +0.5831     개선 ✓
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v  x1.5→x2.0 | combination_64       combination_48       combination_63       |       N/A    0.5630    0.7639     N/A       N/A
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v  x2.0→x2.5 | combination_48       combination_64       combination_64       |    0.5961    1.0000    1.0000  +0.4039     개선 ✓
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v_y  x1.0→x1.5 | combination_96       combination_128      combination_97       |    0.4750    0.6426    0.8944  +0.1677     개선 ✓
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v_y  x1.5→x2.0 | combination_128      combination_9        combination_97       |       N/A   -0.0944    0.8932     N/A       N/A
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v_y  x2.0→x2.5 | combination_9        combination_128      combination_113      |   -0.1947    0.5332    0.9049  +0.7279     개선 ✓
+  r_t_v_y                                   x1.0→x1.5 | combination_12       combination_16       combination_9        |    0.5494    0.7040    0.9369  +0.1546     개선 ✓
+  r_t_v_y                                   x3.5→x4.0 | combination_16       combination_9        combination_9        |       N/A    0.8667    0.8667     N/A       N/A
+  resnet50                                  x1.5→x2.0 | combination_2        combination_1        combination_1        |       N/A   -0.0860   -0.0860     N/A       N/A
+  resnet50                                  x2.0→x2.5 | combination_1        combination_2        combination_2        |   -0.0742    1.0000    1.0000  +1.0742     개선 ✓
+  resnet50                                  x3.5→x4.0 | combination_2        combination_1        combination_1        |       N/A   -0.0797   -0.0797     N/A       N/A
+  vgg19                                     x1.5→x2.0 | combination_2        combination_1        combination_1        |       N/A    0.4068    0.4068     N/A       N/A
+  vgg19                                     x2.0→x2.5 | combination_1        combination_2        combination_2        |    0.5254    1.0000    1.0000  +0.4746     개선 ✓
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+■ 모델조합별 요약
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  모델조합                                            배치수 |   전환수    개선    악화    동등 |      평균ΔS     개선율
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  g_m_r                                             8 |     4     2     0     0 |   +0.4761     50%
+  g_m_r_t                                          16 |     4     2     0     0 |   +0.5159     50%
+  g_m_resnet50_resnext50                           16 |     1     0     0     0 |       N/A      0%
+  g_m_resnet50_resnext50_s_t                       64 |     4     2     0     0 |   +0.7563     50%
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t   128 |     4     2     0     0 |   +0.3851     50%
+  g_m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v   256 |     4     2     0     0 |   +0.7682     50%
+  g_m_resnet50_resnext50_t                         32 |     4     2     0     0 |   +0.8814     50%
+  g_m_t                                             8 |     2     1     0     0 |   +0.0590     50%
+  g_r_v                                             8 |     3     1     1     0 |   +0.0634     33%
+  g_r_y                                             8 |     3     2     0     0 |   +0.4585     67%
+  g_t                                               4 |     1     0     0     0 |       N/A      0%
+  g_t_y                                             8 |     2     1     0     0 |   +1.1841     50%
+  gpt2                                              2 |     1     1     0     0 |   +0.0528    100%
+  m_r_t_y                                          16 |     3     2     0     0 |   +0.7504     67%
+  m_resnet50_resnext50                              8 |     4     2     0     0 |   +0.4414     50%
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v   128 |     4     2     0     0 |   +0.4275     50%
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_t_v_y   256 |     1     1     0     0 |   +0.5831    100%
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v    64 |     2     1     0     0 |   +0.4039     50%
+  m_resnet50_resnext50_shufflenet-v2-12_squeezenet1.0-12_v_y   128 |     3     2     0     0 |   +0.4478     67%
+  r_t_v_y                                          16 |     2     1     0     0 |   +0.1546     50%
+  resnet50                                          2 |     3     1     0     0 |   +1.0742     33%
+  vgg19                                             2 |     2     1     0     0 |   +0.4746     50%
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+■ 결론
+  - 총 61번의 배치 전환 중 31번(50.8%) 개선, 1번(1.6%) 악화
+  - 전환 시 평균 실제 S 변화량: +0.5228
+  → XGBoost의 배치 전환이 개선/악화가 비슷하여, 입력률에 따른 적응이 불안정함
+
+  [참고] 만약 x3.0에서의 추론 배치를 모든 입력률에 고정했다면?
+    x3 고정이 더 좋은 경우: 0, 적응형이 더 좋은 경우: 1, 동등: 30

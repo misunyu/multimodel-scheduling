@@ -50,7 +50,7 @@ if not os.path.exists(PYTHON):
 
 EXECUTOR = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
 WORKER   = os.path.join(SCRIPT_DIR, "headless_inference_worker.py")
-SCHEDULE = os.path.join(PROJECT_DIR, "tests", "bounded_recovery_views_schedule_npu.yaml")
+SCHEDULE = os.path.join(PROJECT_DIR, "tests", "bounded_recovery_views_schedule.yaml")
 
 RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
 SWEEP_DIR   = os.path.join(RESULTS_DIR, "bounded_sweep")
@@ -64,9 +64,8 @@ SWEEP_DIR   = os.path.join(RESULTS_DIR, "bounded_sweep")
 # (the metric is computed only over view handlers).
 #
 # Background spec : list of dicts {model, device, rate}
-#   model  : ONNX file path under the project directory
-#   device : "cpu" (NPU background load is intentionally not supported —
-#            both NPU cores are owned by the foreground recovery deployment)
+#   model  : path under models_onnx/
+#   device : "cpu" or "gpu"
 #   rate   : target inferences per second (0 = unbounded)
 # ---------------------------------------------------------------------------
 SCENARIOS = [
@@ -77,22 +76,41 @@ SCENARIOS = [
     {
         "label": "+1 light\nCPU bg",
         "background": [
-            {"model": "models/resnet50_small/model/resnet50_small.onnx", "device": "cpu", "rate": 5},
+            {"model": "models_onnx/squeezenet1.0-12.onnx", "device": "cpu", "rate": 30},
         ],
     },
     {
-        "label": "+2 CPU bg\n(rs+ys)",
+        "label": "+2 CPU bg\n(squeeze+shuf)",
         "background": [
-            {"model": "models/resnet50_small/model/resnet50_small.onnx", "device": "cpu", "rate": 5},
-            {"model": "models/yolov3_small/model/yolov3_small.onnx",     "device": "cpu", "rate": 5},
+            {"model": "models_onnx/squeezenet1.0-12.onnx", "device": "cpu", "rate": 30},
+            {"model": "models_onnx/shufflenet-v2-12.onnx", "device": "cpu", "rate": 30},
         ],
     },
     {
-        "label": "+heavy CPU\n(rs+ys+yb)",
+        "label": "+heavy CPU\n(squeeze+shuf+vgg)",
         "background": [
-            {"model": "models/resnet50_small/model/resnet50_small.onnx", "device": "cpu", "rate": 5},
-            {"model": "models/yolov3_small/model/yolov3_small.onnx",     "device": "cpu", "rate": 5},
-            {"model": "models/yolov3_big/model/yolov3_big.onnx",         "device": "cpu", "rate": 2},
+            {"model": "models_onnx/squeezenet1.0-12.onnx", "device": "cpu", "rate": 30},
+            {"model": "models_onnx/shufflenet-v2-12.onnx", "device": "cpu", "rate": 30},
+            {"model": "models_onnx/vgg19.onnx",            "device": "cpu", "rate": 5},
+        ],
+    },
+    {
+        "label": "+GPT-2\n(+gpt2 CPU)",
+        "background": [
+            {"model": "models_onnx/squeezenet1.0-12.onnx", "device": "cpu", "rate": 30},
+            {"model": "models_onnx/shufflenet-v2-12.onnx", "device": "cpu", "rate": 30},
+            {"model": "models_onnx/vgg19.onnx",            "device": "cpu", "rate": 5},
+            {"model": "models_onnx/gpt2.onnx",             "device": "cpu", "rate": 1},
+        ],
+    },
+    {
+        "label": "+TinyLlama\n(+llama CPU)",
+        "background": [
+            {"model": "models_onnx/squeezenet1.0-12.onnx",            "device": "cpu", "rate": 30},
+            {"model": "models_onnx/shufflenet-v2-12.onnx",            "device": "cpu", "rate": 30},
+            {"model": "models_onnx/vgg19.onnx",                       "device": "cpu", "rate": 5},
+            {"model": "models_onnx/gpt2.onnx",                        "device": "cpu", "rate": 1},
+            {"model": "models_onnx/tiny-llama-chat-onnx/model.onnx",  "device": "cpu", "rate": 0},
         ],
     },
 ]
@@ -251,8 +269,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reps", type=int, default=3,
                         help="repetitions per scenario (default 3)")
-    parser.add_argument("--epsilon", type=float, default=50.0,
-                        help="V(t) detection threshold (default 50)")
+    parser.add_argument("--epsilon", type=float, default=1.0,
+                        help="V(t) detection threshold (default 1.0)")
     parser.add_argument("--baseline-duration", type=int, default=8)
     parser.add_argument("--failure-duration",  type=int, default=14)
     parser.add_argument("--recovery-duration", type=int, default=16)

@@ -28,7 +28,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
-DEFAULT_SCHEDULE = os.path.join(PROJECT_DIR, "tests", "model_schedules_test_npu.yaml")
+DEFAULT_SCHEDULE = os.path.join(PROJECT_DIR, "tests", "model_schedules_test.yaml")
 PYTHON = os.path.join(PROJECT_DIR, ".venv", "bin", "python3")
 if not os.path.exists(PYTHON):
     PYTHON = sys.executable

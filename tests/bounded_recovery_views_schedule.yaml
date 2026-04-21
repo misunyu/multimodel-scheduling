@@ -1,0 +1,115 @@
+# bounded_recovery_views_schedule.yaml
+#
+# Three-phase recovery scenario for the bounded-recovery validation sweep.
+# All six scenarios in scripts/run_bounded_recovery_sweep.py reuse this
+# YAML; only the *background* (headless) inference workers differ per
+# scenario. The view models are fixed:
+#
+#   view1 = mnasnet     (light CNN classifier)
+#   view2 = resnet50    (medium CNN classifier)
+#   view3 = resnext50   (medium CNN classifier)
+#   view4 = yolov4      (object detection -- run as yolo CPU/GPU pipeline)
+#
+# SLO definition:
+#   L_SLO = 5 * (GPU isolated latency) for each model.
+#   The slo_ms field is used directly for QoS violation computation
+#   instead of deriving L_SLO from infps. The 5x headroom accounts for
+#   inter-model contention observed in heterogeneous concurrent execution.
+#
+#   mnasnet   : 1.10ms * 5 =  5.50ms
+#   resnet50  : 2.13ms * 5 = 10.65ms
+#   resnext50 : 3.17ms * 5 = 15.85ms
+#   yolov4    : 6.91ms * 5 = 34.55ms
+#
+# Phase 1 (initial)  : all four view models on GPU at moderate input rates.
+#                      GPU utilization ~30%, latencies stay well under SLO,
+#                      so V(t) sits near 0.
+# Phase 2 (overload) : all four view models moved to CPU (simulating a bad
+#                      placement decision). CPU latencies are 100-1000ms,
+#                      far exceeding the GPU-based SLOs, causing V(t) to
+#                      spike immediately.
+# Phase 3 (offload)  : all four view models return to GPU. This is the
+#                      reconfiguration that bounded-recovery analysis
+#                      measures: the system detects the failure and
+#                      recovers by restoring the correct placement.
+#
+# infps values are kept identical across all three phases so that
+# only the device placement changes between phases.
+
+combination_initial:
+  mnasnet_gpu:
+    display: view1
+    execution: gpu
+    infps: 100
+    slo_ms: 5.50
+    model: mnasnet
+  resnet50_gpu:
+    display: view2
+    execution: gpu
+    infps: 30
+    slo_ms: 10.65
+    model: resnet50
+  resnext50_gpu:
+    display: view3
+    execution: gpu
+    infps: 30
+    slo_ms: 15.85
+    model: resnext50
+  yolov4_gpu:
+    display: view4
+    execution: gpu
+    infps: 8
+    slo_ms: 34.55
+    model: yolov4
+
+combination_overload:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 100
+    slo_ms: 5.50
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 30
+    slo_ms: 10.65
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 30
+    slo_ms: 15.85
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 8
+    slo_ms: 34.55
+    model: yolov4
+
+combination_offload:
+  mnasnet_gpu:
+    display: view1
+    execution: gpu
+    infps: 100
+    slo_ms: 5.50
+    model: mnasnet
+  resnet50_gpu:
+    display: view2
+    execution: gpu
+    infps: 30
+    slo_ms: 10.65
+    model: resnet50
+  resnext50_gpu:
+    display: view3
+    execution: gpu
+    infps: 30
+    slo_ms: 15.85
+    model: resnext50
+  yolov4_gpu:
+    display: view4
+    execution: gpu
+    infps: 8
+    slo_ms: 34.55
+    model: yolov4

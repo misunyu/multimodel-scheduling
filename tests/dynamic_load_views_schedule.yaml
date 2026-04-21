@@ -1,0 +1,97 @@
+# dynamic_load_views_schedule.yaml
+#
+# Three-phase scenario for the dynamic load adaptation figure
+# (results/dynamic_load_adaptation.pdf in the paper).
+#
+# Same four view models as the bounded-recovery experiment
+# (mnasnet, resnet50, resnext50, yolov4) so the two figures share a
+# consistent workload baseline.
+#
+# Phase A (combination_p1_low):    "before the load change"
+#   * placement P1 = all four models on CPU
+#   * input rates low enough that V(t) ~ 0
+#   * lasts ~20s of wall-clock time so the load-change event lands at t = 20s
+#
+# Phase B (combination_p1_high):   "right after the load change"
+#   * SAME placement P1 (still all CPU)
+#   * input rates jump high enough to overwhelm the CPU
+#   * processed by schedule_executor's same-placement detection as an
+#     in-place infps swap (no worker restart, no cold-start spike)
+#   * V(t) starts climbing immediately
+#
+# Phase C (combination_p2_high):   "BoundGuard's new placement"
+#   * placement P2 = all four models offloaded to GPU
+#   * SAME high input rates as phase B
+#   * the cold-start gap between phase B and phase C is the
+#     reconfiguration window measured by the figure
+#   * V(t) settles back to ~0 once the new GPU placement stabilises
+#
+# The paper compares two execution modes against this YAML:
+#   * mode 0 (stop-and-restart) — labelled "BoundGuard" in the figure
+#   * mode 3 (static)            — labelled "Static" in the figure
+
+combination_p1_low:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 2
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 2
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 2
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 0.3
+    model: yolov4
+
+combination_p1_high:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 8
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 8
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 8
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 1.2
+    model: yolov4
+
+combination_p2_high:
+  mnasnet_gpu:
+    display: view1
+    execution: gpu
+    infps: 8
+    model: mnasnet
+  resnet50_gpu:
+    display: view2
+    execution: gpu
+    infps: 8
+    model: resnet50
+  resnext50_gpu:
+    display: view3
+    execution: gpu
+    infps: 8
+    model: resnext50
+  yolov4_gpu:
+    display: view4
+    execution: gpu
+    infps: 1.2
+    model: yolov4

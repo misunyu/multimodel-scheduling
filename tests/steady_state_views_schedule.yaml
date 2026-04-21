@@ -1,0 +1,40 @@
+# steady_state_views_schedule.yaml
+#
+# Single-combination "stable workload" schedule used by
+# scripts/runtime_overhead_analysis.py to compare the steady-state
+# overhead of three execution modes:
+#
+#   Static            (mode 3) -- placement frozen, no monitoring threads
+#   Adaptive hot-swap (mode 1) -- monitor for transitions, hot-swap on change
+#   BoundGuard        (mode 2) -- mode 1 + post-transition validation/rollback
+#
+# In steady state there are no placement transitions, so any difference in
+# throughput / latency / drop rate between the three modes is attributable
+# to the monitoring infrastructure they keep running in the background.
+#
+# View models are kept identical to the bounded-recovery and dynamic-load
+# experiments so the steady-state numbers are comparable across figures.
+# Input rates are picked moderate enough that the system stays well below
+# capacity (V(t) ~ 0).
+
+combination_stable:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 5
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 4
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 4
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 1
+    model: yolov4

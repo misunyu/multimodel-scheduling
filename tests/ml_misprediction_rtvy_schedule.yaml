@@ -1,0 +1,100 @@
+# ml_misprediction_rtvy_schedule.yaml
+#
+# Unseen 4-model combination (NOT in XGBoost training data):
+#   view1=resnet50, view2=resnext50, view3=vgg19, view4=yolov4
+# OOD input rates: 1500/1500/1000/500
+#
+# XGBoost pick (combination_ggcc, S_hat=0.874):
+#   resnet50 GPU, resnext50 GPU, vgg19 CPU, yolov4 CPU
+#   → vgg19+yolov4 on CPU at high rates = massively overloaded
+#
+# All-GPU (combination_gggg, S_hat=0.787):
+#   All 4 on GPU → handles everything with low latency
+
+combination_stable:
+  resnet50_cpu:
+    display: view1
+    execution: cpu
+    infps: 2
+    model: resnet50
+  resnext50_cpu:
+    display: view2
+    execution: cpu
+    infps: 2
+    model: resnext50
+  vgg19_cpu:
+    display: view3
+    execution: cpu
+    infps: 1
+    model: vgg19
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 0.3
+    model: yolov4
+
+combination_burst:
+  resnet50_cpu:
+    display: view1
+    execution: cpu
+    infps: 10
+    model: resnet50
+  resnext50_cpu:
+    display: view2
+    execution: cpu
+    infps: 10
+    model: resnext50
+  vgg19_cpu:
+    display: view3
+    execution: cpu
+    infps: 5
+    model: vgg19
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 1.5
+    model: yolov4
+
+combination_xgb_pick:
+  resnet50_gpu:
+    display: view1
+    execution: gpu
+    infps: 10
+    model: resnet50
+  resnext50_gpu:
+    display: view2
+    execution: gpu
+    infps: 10
+    model: resnext50
+  vgg19_cpu:
+    display: view3
+    execution: cpu
+    infps: 5
+    model: vgg19
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 1.5
+    model: yolov4
+
+combination_all_gpu:
+  resnet50_gpu:
+    display: view1
+    execution: gpu
+    infps: 10
+    model: resnet50
+  resnext50_gpu:
+    display: view2
+    execution: gpu
+    infps: 10
+    model: resnext50
+  vgg19_gpu:
+    display: view3
+    execution: gpu
+    infps: 5
+    model: vgg19
+  yolov4_gpu:
+    display: view4
+    execution: gpu
+    infps: 1.5
+    model: yolov4

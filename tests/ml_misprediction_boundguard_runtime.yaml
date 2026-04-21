@@ -1,0 +1,66 @@
+# ml_misprediction_boundguard_runtime.yaml
+#
+# Two-combination runtime schedule used by
+# scripts/ml_misprediction_validation.py for the "BoundGuard" run in
+# results/ml_misprediction_fallback.pdf.
+#
+# Phase 1 (combination_overload)  : the predicted CPU placement that
+#                                    cannot keep up with the runtime
+#                                    workload. Identical to the
+#                                    single-combo ML-only YAML so the
+#                                    two runs are directly comparable
+#                                    up to the moment of fallback.
+# Phase 2 (combination_offload)   : the heuristic GPU-offload fallback
+#                                    that BoundGuard hands over to once
+#                                    it has decided that the ML-driven
+#                                    placement is not improving V(t).
+#
+# Mode 2 (ReactiveDeployManager) hot-swaps between the two combos,
+# so the BoundGuard line in the figure stays continuous through the
+# reconfiguration. The post-transition rollback validation does NOT
+# fire because the fallback decreases V(t) (rollback only triggers
+# when V(t) rises after a hot-swap by >= ROLLBACK_DELTA = 5).
+
+combination_overload:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 400
+    model: mnasnet
+  resnet50_cpu:
+    display: view2
+    execution: cpu
+    infps: 60
+    model: resnet50
+  resnext50_cpu:
+    display: view3
+    execution: cpu
+    infps: 60
+    model: resnext50
+  yolov4_cpu:
+    display: view4
+    execution: cpu
+    infps: 10
+    model: yolov4
+
+combination_offload:
+  mnasnet_gpu:
+    display: view1
+    execution: gpu
+    infps: 400
+    model: mnasnet
+  resnet50_gpu:
+    display: view2
+    execution: gpu
+    infps: 60
+    model: resnet50
+  resnext50_gpu:
+    display: view3
+    execution: gpu
+    infps: 60
+    model: resnext50
+  yolov4_gpu:
+    display: view4
+    execution: gpu
+    infps: 10
+    model: yolov4

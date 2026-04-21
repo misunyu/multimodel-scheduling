@@ -1,0 +1,91 @@
+# qos_recovery_schedule.yaml
+# Three-phase scenario for the bounded-recovery validation figure
+# (qos_score_validation.pdf in the paper).
+#
+# Scenario: 4 models running concurrently. The system starts under a verified,
+# all-CPU placement at a low input rate. The input rate then jumps so that
+# the all-CPU placement can no longer keep up (V(t) > epsilon). The system
+# detects the failure and switches the two heaviest models to the GPU,
+# leaving the two lightweight models on CPU. The new placement absorbs the
+# higher load and V(t) returns below epsilon.
+#
+#   combination_initial   : INITIAL  — all CPU at low input rate (V ≈ 0)
+#   combination_overload  : FAILURE  — same models, all CPU, but the input
+#                                       rate jumps to a level the CPU cannot
+#                                       sustain (V grows large)
+#   combination_offload   : RECOVERY — same high input rate, but all four
+#                                       models are offloaded to the GPU.
+#                                       (We tried "two on CPU + two on GPU"
+#                                       first; even with the heavy models
+#                                       moved off the CPU, the GPU workers'
+#                                       pre/postprocess still saturates the
+#                                       CPU enough to keep mnasnet/squeezenet
+#                                       above SLO. Moving all four to the
+#                                       GPU is the cleanest verified stable
+#                                       configuration for this load level.)
+
+combination_initial:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 3
+    model: mnasnet
+  squeezenet_cpu:
+    display: view2
+    execution: cpu
+    infps: 3
+    model: squeezenet1.0-12
+  resnet50_cpu:
+    display: view3
+    execution: cpu
+    infps: 4
+    model: resnet50
+  resnext50_cpu:
+    display: view4
+    execution: cpu
+    infps: 4
+    model: resnext50
+
+combination_overload:
+  mnasnet_cpu:
+    display: view1
+    execution: cpu
+    infps: 400
+    model: mnasnet
+  squeezenet_cpu:
+    display: view2
+    execution: cpu
+    infps: 400
+    model: squeezenet1.0-12
+  resnet50_cpu:
+    display: view3
+    execution: cpu
+    infps: 50
+    model: resnet50
+  resnext50_cpu:
+    display: view4
+    execution: cpu
+    infps: 40
+    model: resnext50
+
+combination_offload:
+  mnasnet_gpu:
+    display: view1
+    execution: gpu
+    infps: 400
+    model: mnasnet
+  squeezenet_gpu:
+    display: view2
+    execution: gpu
+    infps: 400
+    model: squeezenet1.0-12
+  resnet50_gpu:
+    display: view3
+    execution: gpu
+    infps: 50
+    model: resnet50
+  resnext50_gpu:
+    display: view4
+    execution: gpu
+    infps: 40
+    model: resnext50

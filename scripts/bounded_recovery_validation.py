@@ -46,6 +46,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
 OUT_PDF = os.path.join(RESULTS_DIR, "bounded_recovery_analysis.pdf")
+OUT_PDF_ACCUM = os.path.join(RESULTS_DIR, "bounded_recovery_analysis_accumulation.pdf")
 
 # ---------------------------------------------------------------------------
 # Per-scenario measurements.
@@ -140,6 +141,10 @@ def main() -> None:
         bound_sd = np.array([row[8] for row in extended])
     else:
         labels = [row[0] for row in SCENARIOS]
+        td_mean = np.array([row[1] for row in SCENARIOS], dtype=float)
+        td_sd   = np.array([row[2] for row in SCENARIOS], dtype=float)
+        tp_mean = np.array([row[3] for row in SCENARIOS], dtype=float)
+        tp_sd   = np.array([row[4] for row in SCENARIOS], dtype=float)
         obs = np.array([row[5] for row in SCENARIOS], dtype=float)
         obs_sd = np.array([row[6] for row in SCENARIOS], dtype=float)
         bound = np.array([_bound_value(row[1], row[3]) for row in SCENARIOS])
@@ -205,8 +210,7 @@ def main() -> None:
     ax.set_axisbelow(True)
     ax.legend(loc="upper left", fontsize=8, framealpha=0.92)
 
-    ax.set_title("Bounded recovery: observed vs. analytical upper bound",
-                 fontsize=10, pad=8)
+    # ax.set_title removed for paper figure
 
     fig.tight_layout()
     fig.savefig(OUT_PDF)
@@ -216,6 +220,43 @@ def main() -> None:
     for label, o, b in zip(labels, obs, bound):
         flat = label.replace("\n", " ")
         print(f"  {flat:<22} {o:>10.2f} {b:>10.2f} {b - o:>8.2f}")
+
+
+    # --- Accumulation chart: stacked T_detect + T_post ----------------------
+    fig2, ax2 = plt.subplots(figsize=(7.4, 4.0))
+    width2 = 0.5
+
+    bars_td = ax2.bar(
+        x, td_mean, width2,
+        yerr=td_sd, capsize=3,
+        color="#e67e22", edgecolor="#c0610a", linewidth=0.8,
+        label=r"$T_{detect}$", zorder=2,
+    )
+    bars_tp = ax2.bar(
+        x, tp_mean, width2, bottom=td_mean,
+        yerr=tp_sd, capsize=3,
+        color="#1f4e79", edgecolor="#0d2a44", linewidth=0.8,
+        label=r"$T_{post}$", zorder=2,
+    )
+
+    # Numeric labels: T_recovery total above bar
+    for i, (td, tp) in enumerate(zip(td_mean, tp_mean)):
+        total = td + tp
+        ax2.text(x[i], total + 0.15, f"{total:.1f}",
+                 ha="center", va="bottom", fontsize=7.5, color="#222222")
+
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(labels, fontsize=8)
+    ax2.set_ylabel("Recovery latency (seconds)", fontsize=10)
+    ax2.set_xlabel("Workload scenario", fontsize=10)
+    ax2.set_ylim(0, (td_mean + tp_mean).max() * 1.30)
+    ax2.yaxis.grid(True, linestyle=":", linewidth=0.6, color="#bbbbbb", zorder=0)
+    ax2.set_axisbelow(True)
+    ax2.legend(loc="upper left", fontsize=8, framealpha=0.92)
+
+    fig2.tight_layout()
+    fig2.savefig(OUT_PDF_ACCUM)
+    print(f"[Plot] Saved: {OUT_PDF_ACCUM}")
 
 
 if __name__ == "__main__":
