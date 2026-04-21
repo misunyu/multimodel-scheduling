@@ -211,28 +211,34 @@ def main():
             fontsize=11, color="#555555", fontstyle="italic")
     # Remove the y-tick at eps value so it doesn't collide
     from matplotlib.ticker import FixedLocator
-    yticks = [t for t in ax.get_yticks() if abs(t - eps) > 30]
+    tick_tol = max(0.1, eps * 0.15)
+    yticks = [t for t in ax.get_yticks() if abs(t - eps) > tick_tol]
     ax.yaxis.set_major_locator(FixedLocator(yticks))
+
+    cmax = max(max(bg_v, default=0), max(ml_v, default=0),
+               max(sr_v, default=0), max(st_v, default=0))
+    y_max = cmax * 1.08
+    ax.set_ylim(0, y_max)
 
     # Burst marker (phase 2 start)
     if len(bg_bounds) >= 2:
         bx = bg_t[bg_bounds[1][0]]
         ax.axvline(x=bx, color="#7b3306", ls=":", lw=1.3, zorder=5)
-        ax.text(bx+0.3, eps*2.5, "Input rate\nincreases",
+        ax.text(bx+0.3, y_max*0.19, "Input rate\nincreases",
                 color="#7b3306", fontsize=11, ha="left", va="bottom", zorder=12)
 
     # XGBoost pick marker (phase 3 start)
     if len(bg_bounds) >= 3:
         px = bg_t[bg_bounds[2][0]]
         ax.axvline(x=px, color="#2c3e50", ls=":", lw=1.2, zorder=5)
-        ax.text(px+0.3, eps*12, "XGBoost pick\n(2 GPU + 2 CPU)",
+        ax.text(px+0.3, y_max*0.93, "XGBoost pick\n(2 GPU + 2 CPU)",
                 color="#2c3e50", fontsize=11, ha="left", va="center", zorder=12)
 
     # All-GPU fallback marker (phase 4 start)
     if len(bg_bounds) >= 4:
         fx = bg_t[bg_bounds[3][0]]
         ax.axvline(x=fx, color="#155724", ls=":", lw=1.2, zorder=5)
-        ax.text(fx+0.3, eps*5, "All-GPU fallback\n($V(t)>\\epsilon$ after T)",
+        ax.text(fx+0.3, y_max*0.39, "All-GPU fallback\n($V(t)>\\epsilon$ after T)",
                 color="#155724", fontsize=11, ha="left", va="center", zorder=12)
 
     # BoundGuard recovery marker
@@ -241,10 +247,6 @@ def main():
         for i in range(bg_bounds[3][0], len(bg_v)):
             if bg_v[i] <= eps:
                 bg_recover = bg_t[i]; break
-
-    cmax = max(max(bg_v, default=0), max(ml_v, default=0),
-               max(sr_v, default=0), max(st_v, default=0))
-    ax.set_ylim(0, cmax * 1.08)
     # All three curves end at clip_t; set xlim just past that
     ax.set_xlim(0, clip_t + 1)
     ax.set_xlabel("Time (seconds)", fontsize=17, fontweight="bold")
