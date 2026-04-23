@@ -264,7 +264,7 @@ def make_plot(bg_data, ml_data, sr_data, st_data, epsilon, pdf_path, x_max,
     ax.set_xlabel("Time (seconds)", fontsize=17, fontweight="bold")
     ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=17, fontweight="bold")
     ax.tick_params(axis='both', labelsize=15)
-    ax.legend(loc="upper left", framealpha=0.92, fontsize=13)
+    ax.legend(loc="upper right", framealpha=0.92, fontsize=13)
     ax.grid(True, ls=":", lw=0.5, color="#ccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()
