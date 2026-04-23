@@ -162,18 +162,32 @@ def insert_nans_for_gaps(times_sec, v_t, cold_starts):
     return out_t, out_v
 
 
+def _trim_to_cutoff(times, values, cutoff):
+    if cutoff is None:
+        return list(times), list(values)
+    out_t, out_v = [], []
+    for t, v in zip(times, values):
+        if t <= cutoff:
+            out_t.append(t)
+            out_v.append(v)
+    return out_t, out_v
+
+
 def make_plot(bg_data, ml_data, sr_data, st_data, epsilon, pdf_path, x_max,
-              load_change_sec):
+              load_change_sec, data_cutoff=None):
     bg_rows, bg_v_t, bg_times, bg_bounds, bg_cold = bg_data
     ml_rows, ml_v_t, ml_times, ml_bounds, ml_cold = ml_data
     sr_rows, sr_v_t, sr_times, sr_bounds, sr_cold = sr_data
     st_rows, st_v_t, st_times, st_bounds, st_cold = st_data
 
-    # Prepare plot data
-    bg_t_plot, bg_v_plot = list(bg_times), list(bg_v_t)
-    ml_t_plot, ml_v_plot = list(ml_times), list(ml_v_t)
-    sr_t_plot, sr_v_plot = insert_nans_for_gaps(sr_times, sr_v_t, sr_cold)
-    st_t_plot, st_v_plot = insert_nans_for_gaps(st_times, st_v_t, st_cold)
+    # Prepare plot data (optionally truncated to `data_cutoff` seconds so the
+    # curves stop drawing at `data_cutoff` even though the axis extends to x_max)
+    bg_t_plot, bg_v_plot = _trim_to_cutoff(bg_times, bg_v_t, data_cutoff)
+    ml_t_plot, ml_v_plot = _trim_to_cutoff(ml_times, ml_v_t, data_cutoff)
+    sr_t_plot_full, sr_v_plot_full = insert_nans_for_gaps(sr_times, sr_v_t, sr_cold)
+    st_t_plot_full, st_v_plot_full = insert_nans_for_gaps(st_times, st_v_t, st_cold)
+    sr_t_plot, sr_v_plot = _trim_to_cutoff(sr_t_plot_full, sr_v_plot_full, data_cutoff)
+    st_t_plot, st_v_plot = _trim_to_cutoff(st_t_plot_full, st_v_plot_full, data_cutoff)
 
     fig, ax = plt.subplots(figsize=(9.6, 4.8))
 
@@ -264,7 +278,7 @@ def make_plot(bg_data, ml_data, sr_data, st_data, epsilon, pdf_path, x_max,
     ax.set_xlabel("Time (seconds)", fontsize=17, fontweight="bold")
     ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=17, fontweight="bold")
     ax.tick_params(axis='both', labelsize=15)
-    ax.legend(loc="upper right", framealpha=0.92, fontsize=13)
+    ax.legend(loc="upper left", framealpha=0.92, fontsize=13)
     ax.grid(True, ls=":", lw=0.5, color="#ccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()
@@ -280,6 +294,13 @@ def main():
     parser.add_argument("--run-only", choices=["bg", "ml", "sr", "st"], default=None)
     parser.add_argument("--output", default=OUT_PDF,
                         help="Output PDF path (default: %(default)s)")
+    parser.add_argument("--x-max", type=float, default=None,
+                        help="Override the x-axis upper bound (seconds). "
+                             "Defaults to the latest sample across all curves.")
+    parser.add_argument("--data-cutoff", type=float, default=None,
+                        help="Truncate each curve at t<=CUTOFF (seconds). "
+                             "Independent of --x-max so the axis can extend "
+                             "beyond the last drawn point.")
     args = parser.parse_args()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -361,14 +382,15 @@ def main():
     st_data = load_curve(ST_CSV)
 
     all_times = [bg_data[2], ml_data[2], sr_data[2], st_data[2]]
-    x_max = max(max(t) for t in all_times) + 1.0
+    x_max = args.x_max if args.x_max is not None else (max(max(t) for t in all_times) + 1.0)
 
     bg_bounds = bg_data[3]
     load_change_sec = bg_data[2][bg_bounds[1][0]] if len(bg_bounds) >= 2 else float(PHASE_A_DURATION)
 
     make_plot(bg_data, ml_data, sr_data, st_data,
               epsilon=args.epsilon, pdf_path=args.output,
-              x_max=x_max, load_change_sec=load_change_sec)
+              x_max=x_max, load_change_sec=load_change_sec,
+              data_cutoff=args.data_cutoff)
 
     # Summary
     print()
