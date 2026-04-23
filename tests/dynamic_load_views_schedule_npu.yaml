@@ -76,15 +76,19 @@ phase_c:
     model: resnet50_small
 
 phase_d:
+  # infps chosen to match today's NPU service rate for yolov3 on NPU
+  # (~0.87 fps for NPU0; NPU1 yields 0 fps so view2 is excluded from V(t)).
+  # Keeping infps near device capacity prevents runaway queue build-up that
+  # would otherwise keep V(t) above epsilon even after the correct placement.
   yolov3_big_npu0:
     display: view1
     execution: npu0
-    infps: 8
+    infps: 1
     model: yolov3_big
   yolov3_small_npu1:
     display: view2
     execution: npu1
-    infps: 8
+    infps: 1
     model: yolov3_small
   resnet50_big_cpu:
     display: view3

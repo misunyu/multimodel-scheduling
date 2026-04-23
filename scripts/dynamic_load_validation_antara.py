@@ -57,11 +57,12 @@ ML_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_antara_adaptive.csv")
 SR_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_antara_stoprestart.csv")
 ST_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_antara_static.csv")
 
-PHASE_A_DURATION = 22
-PHASE_B_DURATION = 6
-PHASE_C_DURATION = 10   # ~5s NPU init + 3s validation + 2s buffer
-PHASE_D_DURATION = 40   # BoundGuard fallback
-NPU_INIT_SEC = 5        # approximate NPU initialization time
+PHASE_A_DURATION = 22   # warm-up (low infps, V(t)=0 throughout)
+PHASE_B_MAX = 30        # max cap; phase_b ends on V(t)>ε (usually ≤ ~10s)
+PHASE_C_MAX = 20        # max cap; phase_c ends on V(t)>ε after hold + T window
+PHASE_D_DURATION = 40   # BoundGuard final observation (fixed, last combo)
+NPU_INIT_SEC = 5        # NPU initialization / stabilization (excluded from T/T_v)
+TV_WINDOW_SEC = 3       # validation window T_v (fill time before V(t) check)
 
 
 def reap_lingering_executors(cooldown_sec: float = 5.0) -> None:
@@ -71,7 +72,14 @@ def reap_lingering_executors(cooldown_sec: float = 5.0) -> None:
     time.sleep(cooldown_sec)
 
 
-def run_scenario(schedule, csv_path, mode, label, combo_durations):
+def run_scenario(schedule, csv_path, mode, label, combo_durations,
+                  trigger_epsilon=None, trigger_hold=None):
+    """Run one scenario via schedule_executor_main.py.
+
+    When `trigger_epsilon` is set, phase transitions fire on windowed V(t) > ε
+    (after `trigger_hold[combo]` seconds of NPU-init stabilization that are
+    excluded from T). `combo_durations` acts as the MAX cap per phase.
+    """
     if os.path.exists(csv_path):
         os.remove(csv_path)
     total = sum(combo_durations.values())
@@ -85,13 +93,19 @@ def run_scenario(schedule, csv_path, mode, label, combo_durations):
     ]
     for combo, dur in combo_durations.items():
         cmd += ["--combo-duration", f"{combo}={dur}"]
+    if trigger_epsilon is not None:
+        cmd += ["--phase-trigger-vscore", str(trigger_epsilon)]
+    for combo, hold in (trigger_hold or {}).items():
+        cmd += ["--phase-trigger-hold", f"{combo}={hold}"]
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
     timeout = total * 6 + 120
 
     print("=" * 70)
     print(f"  Dynamic load scenario [{label}, mode={mode}]")
-    print(f"  Durations: {combo_durations}")
+    print(f"  Durations (max cap): {combo_durations}")
+    if trigger_epsilon is not None:
+        print(f"  V(t)-trigger: ε={trigger_epsilon}  hold={trigger_hold}")
     print("=" * 70)
     print(f"  cmd: {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, env=env, cwd=PROJECT_DIR,
@@ -264,41 +278,77 @@ def main():
     parser.add_argument("--epsilon", type=float, default=2.0)
     parser.add_argument("--no-run", action="store_true")
     parser.add_argument("--run-only", choices=["bg", "ml", "sr", "st"], default=None)
+    parser.add_argument("--output", default=OUT_PDF,
+                        help="Output PDF path (default: %(default)s)")
     args = parser.parse_args()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
+    # With V(t)-triggered transitions, combo_durations become MAX caps.
+    # BoundGuard: a → b (V(t)>ε) → c (V(t)>ε after hold+T_v) → d (fixed obs)
     bg_durations = {
         "phase_a": PHASE_A_DURATION,
-        "phase_b": PHASE_B_DURATION,
-        "phase_c": PHASE_C_DURATION,
+        "phase_b": PHASE_B_MAX,
+        "phase_c": PHASE_C_MAX,
         "phase_d": PHASE_D_DURATION,
     }
-    # Adaptive stays with ML pick (phase_c for the rest, no fallback)
+    # Adaptive / Stop-restart: phase_c is the last combo → fixed observation.
     ml_durations = {
         "phase_a": PHASE_A_DURATION,
-        "phase_b": PHASE_B_DURATION,
-        "phase_c": PHASE_C_DURATION + PHASE_D_DURATION,
+        "phase_b": PHASE_B_MAX,
+        "phase_c": PHASE_D_DURATION,
     }
-    sr_durations = dict(bg_durations)
-    st_durations = dict(bg_durations)
+    # Static uses the 3-phase MLONLY schedule so the high-load infps in
+    # phase_b is preserved through phase_c (phase_d in npu.yaml drops infps to
+    # match NPU service rate for the BoundGuard recovery, which would
+    # unrealistically drop Static's V(t) too). mode=3 ignores any placement
+    # change, so what matters is that the infps stays high after the load bump.
+    st_durations = {
+        "phase_a": PHASE_A_DURATION,
+        "phase_b": 6,
+        "phase_c": PHASE_D_DURATION,
+    }
+
+    # Per-combo hold = NPU-init/stabilization time that is excluded from T / T_v.
+    # phase_b has no placement change, but we still give T_v time (3s) for the
+    # windowed V(t) to fill cleanly after the input-rate jump.
+    bg_trigger_hold = {
+        "phase_a": 0,
+        "phase_b": 0,                 # no NPU init; V(t) window fills naturally
+        "phase_c": NPU_INIT_SEC,      # NPU1 init
+    }
+    ml_trigger_hold = {
+        "phase_a": 0,
+        "phase_b": 0,
+    }
+    sr_trigger_hold = dict(ml_trigger_hold)
 
     if not args.no_run:
         target = args.run_only
         if target is None or target == "bg":
             run_scenario(args.schedule, BG_CSV, mode=1, label="BoundGuard",
-                         combo_durations=bg_durations)
+                         combo_durations=bg_durations,
+                         trigger_epsilon=args.epsilon,
+                         trigger_hold=bg_trigger_hold)
             reap_lingering_executors()
         if target is None or target == "ml":
             run_scenario(MLONLY_SCHEDULE, ML_CSV, mode=1, label="Adaptive (ML-only)",
-                         combo_durations=ml_durations)
+                         combo_durations=ml_durations,
+                         trigger_epsilon=args.epsilon,
+                         trigger_hold=ml_trigger_hold)
             reap_lingering_executors()
         if target is None or target == "sr":
             run_scenario(MLONLY_SCHEDULE, SR_CSV, mode=0, label="Stop-and-restart",
-                         combo_durations=ml_durations)
+                         combo_durations=ml_durations,
+                         trigger_epsilon=args.epsilon,
+                         trigger_hold=sr_trigger_hold)
             reap_lingering_executors()
         if target is None or target == "st":
-            run_scenario(args.schedule, ST_CSV, mode=3, label="Static",
+            # Static ignores the trigger — keep fixed durations to let V(t)
+            # accumulate without adaptation. Use the MLONLY schedule so the
+            # sustained-overload infps from phase_b carries into phase_c
+            # (see st_durations comment above).
+            run_scenario(MLONLY_SCHEDULE, ST_CSV, mode=3, label="Static",
                          combo_durations=st_durations)
             reap_lingering_executors()
         if target is not None:
@@ -317,7 +367,7 @@ def main():
     load_change_sec = bg_data[2][bg_bounds[1][0]] if len(bg_bounds) >= 2 else float(PHASE_A_DURATION)
 
     make_plot(bg_data, ml_data, sr_data, st_data,
-              epsilon=args.epsilon, pdf_path=OUT_PDF,
+              epsilon=args.epsilon, pdf_path=args.output,
               x_max=x_max, load_change_sec=load_change_sec)
 
     # Summary

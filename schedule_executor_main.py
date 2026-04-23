@@ -26,7 +26,9 @@ class ScheduleExecutor:
 
     def __init__(self, schedule_file: str, duration: int, info_window: InfoWindow,
                  selected_combo: str = None, adaptive_mode: int = 0, metrics_csv: str = None,
-                 combo_durations: dict = None):
+                 combo_durations: dict = None,
+                 phase_trigger_vscore: float = None,
+                 phase_trigger_hold: dict = None):
         self.schedule_file = schedule_file
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
@@ -36,6 +38,15 @@ class ScheduleExecutor:
         # Optional per-combo duration override: {combo_name: int_seconds}
         # When a combo is not in this map, default_duration is used.
         self.combo_durations = dict(combo_durations or {})
+        # V(t) trigger: when set, a phase ends as soon as V(t) > epsilon
+        # (after an NPU-init/settle hold per-combo and a T=3s window fill).
+        # combo_durations acts as the MAX cap if the trigger never fires.
+        self.phase_trigger_vscore = phase_trigger_vscore
+        self.phase_trigger_hold = dict(phase_trigger_hold or {})
+        # Internal V(t) polling state (owned by QTimer). Reset per-phase.
+        self._vs_timer = None
+        self._vs_combo = None
+        self._vs_samples = 0
 
         self._viewer: UnifiedViewer = None
         self._index: int = 0
@@ -363,6 +374,26 @@ class ScheduleExecutor:
         except Exception:
             self._prev_stable_vscore = None
 
+        # V(t) trigger: advance to next phase as soon as windowed V(t) > epsilon,
+        # after a per-combo stabilization hold (NPU init) that is excluded from T.
+        # Skipped for static (mode=3), the last combo, and when no epsilon set.
+        is_last_combo = (self._index + 1 >= len(self._combinations))
+        if (self.phase_trigger_vscore is not None
+                and not static
+                and not is_last_combo):
+            hold_sec = int(self.phase_trigger_hold.get(combo, 0))
+            max_ms = max(1000, (run_duration - 1) * 1000)
+            print(f"[Executor] V(t)-trigger armed for '{combo}': "
+                  f"hold={hold_sec}s, ε={self.phase_trigger_vscore}, max={max_ms/1000:.0f}s")
+            QTimer.singleShot(
+                max(0, hold_sec) * 1000,
+                lambda c=combo, m=max_ms - hold_sec * 1000:
+                    self._begin_vscore_polling(c, m),
+            )
+            # Safety cap: still fire _after_stop if polling never triggers.
+            QTimer.singleShot(max_ms, lambda c=combo: self._vscore_cap_fire(c))
+            return
+
         # Schedule moving to the next combination.
         # For adaptive/reactive/static: fire BEFORE timed_shutdown so we can
         # cancel it and keep the viewer alive across phase transitions.
@@ -378,6 +409,78 @@ class ScheduleExecutor:
         else:
             buffer_ms = 1000
             QTimer.singleShot((run_duration * 1000) + buffer_ms, self._after_stop)
+
+    # ---- V(t) polling helpers (used when --phase-trigger-vscore is set) ----
+    def _begin_vscore_polling(self, combo, remaining_ms):
+        """Start per-second V(t) polling for `combo`.
+
+        The first T=3 samples after the hold period fill the windowed average;
+        once the window is full and V(t) > epsilon, advance to the next combo.
+        The hold period models NPU-init/settle time that should be excluded
+        from T (and T_v), per the paper's definition.
+        """
+        if self._vs_combo == combo:
+            return  # already polling
+        self._vs_combo = combo
+        self._vs_samples = 0
+        # Reset viewer's V(t) sliding window so prior-phase / NPU-init samples
+        # do not leak into the T-window average.
+        try:
+            if self._viewer is not None:
+                self._viewer._v_history_mode2 = []
+        except Exception:
+            pass
+        if self._vs_timer is not None:
+            try:
+                self._vs_timer.stop()
+            except Exception:
+                pass
+        self._vs_timer = QTimer()
+        self._vs_timer.setInterval(1000)
+        self._vs_timer.timeout.connect(self._vscore_poll_tick)
+        self._vs_timer.start()
+        print(f"[Executor] V(t) polling started for '{combo}' "
+              f"(ε={self.phase_trigger_vscore}, budget={remaining_ms/1000:.0f}s)")
+
+    def _vscore_poll_tick(self):
+        if self._vs_combo is None:
+            return
+        try:
+            from reactive_deploy import _collect_vscore
+            v = _collect_vscore(self._viewer, window_T=3)
+        except Exception as e:
+            print(f"[Executor] V(t) poll error: {e}")
+            return
+        self._vs_samples += 1
+        # Need T=3 samples before the windowed average is meaningful.
+        if self._vs_samples < 3:
+            print(f"[Executor] V(t) filling window ({self._vs_samples}/3): V={v:.2f} "
+                  f"combo={self._vs_combo}")
+            return
+        print(f"[Executor] V(t) poll [{self._vs_combo}]: V={v:.2f}  ε={self.phase_trigger_vscore}")
+        if v > float(self.phase_trigger_vscore):
+            print(f"[Executor] TRIGGER fired: V(t)={v:.2f} > ε={self.phase_trigger_vscore} "
+                  f"→ advancing from '{self._vs_combo}'")
+            self._stop_vscore_polling()
+            self._after_stop()
+
+    def _vscore_cap_fire(self, combo):
+        """Max-duration safety cap — advance even if V(t) never crossed ε."""
+        if self._vs_combo != combo:
+            return  # already advanced
+        print(f"[Executor] V(t) max-duration cap reached for '{combo}' → advancing")
+        self._stop_vscore_polling()
+        self._after_stop()
+
+    def _stop_vscore_polling(self):
+        if self._vs_timer is not None:
+            try:
+                self._vs_timer.stop()
+            except Exception:
+                pass
+        self._vs_timer = None
+        self._vs_combo = None
+        self._vs_samples = 0
 
     def _after_stop(self):
         if not self._running:
@@ -660,6 +763,19 @@ def main():
                         help='Per-combination duration override. Repeatable. '
                              'Combos not listed here use --duration. '
                              'Example: --combo-duration combination_failure=5')
+    parser.add_argument('--phase-trigger-vscore', type=float, default=None,
+                        metavar='EPSILON',
+                        help='When set, advance to the next combo as soon as the '
+                             'windowed V(t) exceeds EPSILON (after a per-combo '
+                             'hold and a T=3s window fill). --combo-duration '
+                             'still caps the per-combo maximum. Ignored for '
+                             'static (mode=3) and the last combo.')
+    parser.add_argument('--phase-trigger-hold', action='append', default=[],
+                        metavar='COMBO=SECONDS',
+                        help='Per-combo hold applied before V(t) polling starts, '
+                             'modelling NPU-init/stabilization time that must be '
+                             'excluded from T and T_v. Repeatable. '
+                             'Example: --phase-trigger-hold phase_c=5')
     args = parser.parse_args()
 
     # Parse --combo-duration overrides into a {combo_name: seconds} dict
@@ -674,6 +790,19 @@ def main():
             combo_durations[name] = max(1, int(val.strip()))
         except ValueError:
             print(f"[Main] WARNING: ignoring --combo-duration '{spec}' (seconds must be int)")
+
+    # Parse --phase-trigger-hold into {combo_name: seconds}
+    phase_trigger_hold: dict = {}
+    for spec in (args.phase_trigger_hold or []):
+        if "=" not in spec:
+            print(f"[Main] WARNING: ignoring malformed --phase-trigger-hold '{spec}'")
+            continue
+        name, _, val = spec.partition("=")
+        name = name.strip()
+        try:
+            phase_trigger_hold[name] = max(0, int(val.strip()))
+        except ValueError:
+            print(f"[Main] WARNING: ignoring --phase-trigger-hold '{spec}' (seconds must be int)")
 
     # Resolve schedule path: if given path doesn't exist, try tests/<basename>
     schedule_path = args.schedule
@@ -735,7 +864,9 @@ def main():
                                         selected_combo=args.schedule_name,
                                         adaptive_mode=getattr(args, 'adaptive_mode', 0),
                                         metrics_csv=getattr(args, 'metrics_csv', None),
-                                        combo_durations=combo_durations)
+                                        combo_durations=combo_durations,
+                                        phase_trigger_vscore=getattr(args, 'phase_trigger_vscore', None),
+                                        phase_trigger_hold=phase_trigger_hold)
         except ValueError as e:
             print(f"[Main] ERROR: {e}")
             return 1
@@ -778,7 +909,9 @@ def main():
         executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info,
                                     adaptive_mode=getattr(args, 'adaptive_mode', 0),
                                     metrics_csv=getattr(args, 'metrics_csv', None),
-                                    combo_durations=combo_durations)
+                                    combo_durations=combo_durations,
+                                    phase_trigger_vscore=getattr(args, 'phase_trigger_vscore', None),
+                                    phase_trigger_hold=phase_trigger_hold)
     except ValueError as e:
         print(f"[Main] ERROR: {e}")
         return 1
