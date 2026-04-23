@@ -225,15 +225,16 @@ def main():
     agg = aggregate(grid_runs)
 
     # ---------- figure layout ------------------------------------------------
-    # 1x3 heatmaps (Detection latency, Recovery latency, Cumulative violation)
-    fig = plt.figure(figsize=(12.0, 3.8))
-    gs = GridSpec(1, 3, figure=fig,
-                  wspace=0.40,
-                  top=0.85, bottom=0.17, left=0.06, right=0.96)
+    # Row 1: Detection latency + Recovery latency (side-by-side)
+    # Row 2: Cumulative violation (centered on the second row)
+    fig = plt.figure(figsize=(9.0, 6.6))
+    gs = GridSpec(2, 4, figure=fig,
+                  hspace=0.30, wspace=0.60,
+                  top=0.94, bottom=0.07, left=0.08, right=0.95)
 
-    ax2 = fig.add_subplot(gs[0, 0])
-    ax3 = fig.add_subplot(gs[0, 1])
-    ax4 = fig.add_subplot(gs[0, 2])
+    ax2 = fig.add_subplot(gs[0, 0:2])
+    ax3 = fig.add_subplot(gs[0, 2:4])
+    ax4 = fig.add_subplot(gs[1, 1:3])
 
     render_heatmap(ax2, agg["detect_lat"],
                    "Detection latency (ticks)",

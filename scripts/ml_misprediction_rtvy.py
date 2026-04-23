@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ML-misprediction (r_t_v_y variant): produces ml_misprediction_fallback.pdf.
+ML-misprediction (r_t_v_y variant): produces ml_misprediction_alternative.pdf.
 
 Models: resnet50 (view1), yolov4 (view2), tiny-llama (headless), vgg19 (headless)
 
@@ -41,7 +41,7 @@ if not os.path.exists(PYTHON): PYTHON = sys.executable
 EXECUTOR = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
 SCHEDULE = os.path.join(PROJECT_DIR, "tests", "ml_misprediction_rtvy_schedule.yaml")
 RESULTS  = os.path.join(PROJECT_DIR, "results")
-OUT_PDF  = os.path.join(RESULTS, "ml_misprediction_fallback.pdf")
+OUT_PDF  = os.path.join(RESULTS, "ml_misprediction_alternative.pdf")
 BG_CSV   = os.path.join(RESULTS, "ml_mis_rtvy_bg.csv")
 ML_CSV   = os.path.join(RESULTS, "ml_mis_rtvy_ml.csv")
 SR_CSV   = os.path.join(RESULTS, "ml_mis_rtvy_sr.csv")  # stop-and-restart
