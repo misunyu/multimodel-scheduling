@@ -74,39 +74,67 @@ if not os.path.exists(PYTHON):
     PYTHON = sys.executable
 
 DEFAULT_SCHEDULE = os.path.join(PROJECT_DIR, "tests", "dynamic_load_views_schedule.yaml")
+STATIC_SCHEDULE  = os.path.join(PROJECT_DIR, "tests", "dynamic_load_static_schedule.yaml")
 RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
-OUT_PDF = os.path.join(RESULTS_DIR, "dynamic_load_adaptation.pdf")
 BG_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_boundguard.csv")
 ST_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_static.csv")
 
-# Phase 1 wall-clock budget. Setting this to 20 puts the load-change event
-# at t = 20 s on the figure x-axis.
+# Phase budget. p1_low = stable, p1_high = burst-detection window,
+# cand_1..cand_4 = BoundGuard candidate cycle (T_v each), cand_tail = stay
+# on the last candidate. Static runs p1_low + a long p1_high so wall-clock
+# matches BoundGuard.
 PHASE_A_DURATION = 22
 PHASE_B_DURATION = 6
-PHASE_C_DURATION = 50
+T_V              = 3
+N_CANDIDATES     = 4
+TAIL_DURATION    = 38
+STATIC_TAIL_BURST = (PHASE_B_DURATION
+                     + N_CANDIDATES * T_V
+                     + TAIL_DURATION)
+
+
+def _cmd_for(mode, label, schedule, csv_path):
+    """Build executor command. BoundGuard (mode 1) runs the full candidate
+    cycle; Static (mode 3) runs only p1_low + an extended p1_high so that
+    its wall-clock matches BoundGuard's run."""
+    common = [
+        PYTHON, os.path.join(PROJECT_DIR, "schedule_executor_main.py"),
+        "--schedule", schedule,
+        "--adaptive-mode", str(mode),
+        "--metrics-csv", csv_path,
+        "--auto_start_all",
+    ]
+    if label == "BoundGuard":
+        durations = [
+            ("combination_p1_low",  PHASE_A_DURATION),
+            ("combination_p1_high", PHASE_B_DURATION),
+            ("combination_cand_1",  T_V),
+            ("combination_cand_2",  T_V),
+            ("combination_cand_3",  T_V),
+            ("combination_p2_high", T_V + TAIL_DURATION),  # cand_4 + tail
+        ]
+    else:  # Static
+        durations = [
+            ("combination_p1_low",  PHASE_A_DURATION),
+            ("combination_p1_high", STATIC_TAIL_BURST),
+        ]
+    total = sum(d for _, d in durations)
+    cmd = common + ["--duration", str(total)]
+    for name, d in durations:
+        cmd += ["--combo-duration", f"{name}={d}"]
+    return cmd, total
 
 
 def run_scenario(schedule, csv_path, mode, label):
     if os.path.exists(csv_path):
         os.remove(csv_path)
-    cmd = [
-        PYTHON, os.path.join(PROJECT_DIR, "schedule_executor_main.py"),
-        "--schedule", schedule,
-        "--duration", str(PHASE_A_DURATION + PHASE_B_DURATION + PHASE_C_DURATION),
-        "--adaptive-mode", str(mode),
-        "--metrics-csv", csv_path,
-        "--auto_start_all",
-        "--combo-duration", f"combination_p1_low={PHASE_A_DURATION}",
-        "--combo-duration", f"combination_p1_high={PHASE_B_DURATION}",
-        "--combo-duration", f"combination_p2_high={PHASE_C_DURATION}",
-    ]
+    cmd, total = _cmd_for(mode, label, schedule, csv_path)
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
-    timeout = (PHASE_A_DURATION + PHASE_B_DURATION + PHASE_C_DURATION) * 4 + 90
+    timeout = total * 4 + 90
 
     print("=" * 70)
-    print(f"  Dynamic load scenario [{label}, mode={mode}]")
-    print(f"  Phases: A={PHASE_A_DURATION}s  B={PHASE_B_DURATION}s  C={PHASE_C_DURATION}s")
+    print(f"  Dynamic load scenario [{label}, mode={mode}, total={total}s]")
     print("=" * 70)
     print(f"  cmd: {' '.join(cmd)}")
     proc = subprocess.run(cmd, env=env, cwd=PROJECT_DIR,
@@ -194,21 +222,23 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
     fig, ax = plt.subplots(figsize=(7.0, 4.2))
 
     ax.plot(st_t_plot, st_v_plot, color="#8b2e2e", linewidth=2.0,
-            linestyle="--", marker="o", markersize=5, markevery=5,
+            linestyle="--", marker="o", markersize=5, markevery=8,
             markerfacecolor="#f4b5b5", markeredgecolor="#8b2e2e",
-            markeredgewidth=0.7,
+            markeredgewidth=0.6,
             label="Static", zorder=10)
     ax.plot(bg_t_plot, bg_v_plot, color="#2c5984", linewidth=2.2,
-            linestyle="-", marker="s", markersize=6, markevery=5,
+            linestyle="-", marker="s", markersize=6, markevery=8,
             markerfacecolor="#b9d0e8", markeredgecolor="#2c5984",
-            markeredgewidth=0.7,
+            markeredgewidth=0.6,
             label="BoundGuard", zorder=11)
 
-    # Detection threshold (epsilon).
+    # Detection threshold (epsilon). Label sits inside the plot, just above
+    # the dashed line.
     ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.1, zorder=4)
-    ax.text(-0.012, epsilon, r"$\epsilon$",
+    ax.text(0.015, epsilon, r"$\epsilon$",
             transform=ax.get_yaxis_transform(),
-            ha="right", va="center", fontsize=12, color="#333333")
+            ha="left", va="bottom", fontsize=12, color="#333333",
+            zorder=5)
 
     # y-axis: slightly above the observed maximum across both curves.
     candidate_max = max(max(bg_v_t), max(st_v_t), epsilon)
@@ -248,13 +278,20 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max,
     ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
     ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=15, fontweight="bold")
     ax.tick_params(axis='both', labelsize=13)
-    ax.legend(loc="upper left", framealpha=0.92, fontsize=13)
+    ax.legend(loc="center right", framealpha=0.92, fontsize=13)
     ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()
     fig.savefig(pdf_path)
     print(f"[Plot] Saved: {pdf_path}")
     return bg_recover_sec
+
+
+def _eps_tag(eps):
+    """File-safe epsilon tag, e.g., 1.0 -> '1', 0.5 -> '0p5'."""
+    if eps == int(eps):
+        return str(int(eps))
+    return str(eps).replace(".", "p")
 
 
 def main():
@@ -265,17 +302,48 @@ def main():
                         help="Skip running the executor; replot only.")
     parser.add_argument("--run-only", choices=["bg", "st"], default=None,
                         help="Run only one curve per invocation.")
+    parser.add_argument("--skip-warmup", action="store_true",
+                        help="Skip the warmup pass before the measured runs.")
+    parser.add_argument("--out", default=None,
+                        help="Output PDF path (defaults to "
+                             "results/dynamic_load_adaptation_epsilon_<eps>.pdf)")
     args = parser.parse_args()
+
+    if args.out is None:
+        args.out = os.path.join(
+            RESULTS_DIR,
+            f"dynamic_load_adaptation_epsilon_{_eps_tag(args.epsilon)}.pdf",
+        )
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     if not args.no_run:
         target = args.run_only
+        # Warmup pass before the measured runs so BoundGuard and Static start
+        # from the same warm state (ONNX sessions, CUDA context, page cache).
+        # Without this, whichever method runs first absorbs a cold-start
+        # penalty that shifts its pre-burst V(t) baseline.
+        if target is None and not args.skip_warmup:
+            warm_csv = os.path.join(RESULTS_DIR, "dynamic_load_warmup.csv")
+            print()
+            print("=" * 70)
+            print("  Warmup pass (results discarded)")
+            print("=" * 70)
+            run_scenario(STATIC_SCHEDULE, warm_csv, mode=3, label="Warmup")
+            reap_lingering_executors()
+
         if target is None or target == "bg":
+            # Mode 1 (Adaptive hot-swap) is the underlying transition primitive
+            # for BoundGuard in this codebase; the candidate-cycle scripted via
+            # --combo-duration (cand_1..cand_3 + p2_high) realises BoundGuard's
+            # bounded-validation probing (T_v = 3 s per candidate).
             run_scenario(args.schedule, BG_CSV, mode=1, label="BoundGuard")
             reap_lingering_executors()
         if target is None or target == "st":
-            run_scenario(args.schedule, ST_CSV, mode=3, label="Static")
+            # Static uses a trimmed yaml with only p1_low + p1_high, so the
+            # executor has no candidate combos to iterate into and placement
+            # truly never changes.
+            run_scenario(STATIC_SCHEDULE, ST_CSV, mode=3, label="Static")
             reap_lingering_executors()
         if target is not None:
             print(f"\n[Done] {target} data saved.")
@@ -286,7 +354,7 @@ def main():
 
     bg_times = bg_data[2]
     st_times = st_data[2]
-    x_max = max(max(bg_times), max(st_times)) + 1.0
+    x_max = min(100.0, max(max(bg_times), max(st_times)) + 1.0)
 
     # The load change is at the start of phase B in the BoundGuard CSV.
     bg_bounds = bg_data[3]
@@ -297,7 +365,7 @@ def main():
 
     bg_recover_sec = make_plot(bg_data, st_data,
                                epsilon=args.epsilon,
-                               pdf_path=OUT_PDF,
+                               pdf_path=args.out,
                                x_max=x_max,
                                load_change_sec=load_change_sec)
 

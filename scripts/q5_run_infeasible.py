@@ -67,6 +67,52 @@ EDGE_ADAPTIVE    = "#8e5a1c"
 EDGE_BOUNDGUARD  = "#2c5984"
 
 
+def _run_method_vt_triggered(yaml_path, csv_path, mode, seq, combo_triggers,
+                             stop_after=None, epsilon=1.0, tv=3.0):
+    """Variant of q13.run_method that also passes V(t)-triggered advancement
+    options (--combo-trigger, --stop-after, --qos-trigger-*)."""
+    import subprocess
+    PYTHON = q13.PYTHON
+    EXECUTOR = q13.EXECUTOR
+    if os.path.exists(csv_path):
+        os.remove(csv_path)
+    total = sum(d for _, _, d in seq)
+    cmd = [
+        PYTHON, EXECUTOR,
+        "--schedule", yaml_path,
+        "--duration", str(total),
+        "--adaptive-mode", str(mode),
+        "--metrics-csv", csv_path,
+        "--auto_start_all",
+        "--qos-trigger-epsilon", str(epsilon),
+        "--qos-trigger-tv",      str(tv),
+    ]
+    for name, _blob, d in seq:
+        cmd += ["--combo-duration", f"{name}={d}"]
+    for name, pol in (combo_triggers or {}).items():
+        cmd += ["--combo-trigger", f"{name}={pol}"]
+    if stop_after:
+        cmd += ["--stop-after", stop_after]
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    timeout = total * 4 + 120
+    started = time.time()
+    proc = subprocess.run(cmd, env=env, cwd=PROJECT_DIR,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          timeout=timeout)
+    return {
+        "cmd": cmd, "rc": proc.returncode, "total_s": total,
+        "wallclock": time.time() - started,
+        "stdout_tail": proc.stdout.decode(errors="replace").splitlines()[-3:],
+    }
+
+
+def _eps_tag(eps):
+    if eps == int(eps):
+        return str(int(eps))
+    return str(eps).replace(".", "p")
+
+
 def _adversarial_ranking():
     """Option B: force top-1 to be a bad placement (all-CPU) and gradually
     improve through top-5 (all-GPU). Adaptive commits to top-1 and fails;
@@ -141,10 +187,47 @@ def run_all(args):
         csv_path  = os.path.join(OUT_DIR, f"q5_{stem}.csv")
         q13.write_runtime_yaml(yaml_path, seq)
 
+        # V(t)-triggered transition policies.
+        # - Both methods: advance burst when V(t) > eps (first placement swap)
+        # - BoundGuard: every intermediate candidate (cand_1..cand_5) uses
+        #   the "validate" policy — after T_v, if V(t) is still > eps,
+        #   advance to the next candidate; otherwise commit.
+        # - Adaptive commits to cand_1 after the first swap (no further triggers).
+        triggers = {"combination_burst": "v-above"}
+        stop_after = None
+        if method == "BoundGuard":
+            for name, _blob, _d in seq:
+                if name.startswith("cand_") and name != "cand_tail":
+                    triggers[name] = "validate"
+            stop_after = "cand_tail"
+        elif method == "Adaptive":
+            stop_after = "cand_1"
+
         print()
         print("=" * 70)
         print(f"  Method: {method}  mode={mode}  total={total}s")
+        print(f"  triggers={triggers}  stop_after={stop_after}")
         print("=" * 70)
+
+        # Per-method warmup: run the full sequence once with the same
+        # background and discard the result so the *measured* run starts
+        # from a warm state (ONNX sessions, CUDA context, OS page cache).
+        # Required because q13.reap() kills the processes between methods,
+        # otherwise the first-measured method absorbs the cold-start penalty.
+        if not args.skip_warmup:
+            warm_csv = csv_path + ".warm"
+            bg_warm = q13.start_background(SCENARIO_BG, total + 60)
+            time.sleep(2.0)
+            try:
+                _run_method_vt_triggered(
+                    yaml_path, warm_csv, mode, seq, triggers, stop_after,
+                    epsilon=args.epsilon, tv=3.0)
+            except Exception as e:
+                print(f"    per-method warmup ERROR (continuing): {e}")
+            finally:
+                q13.stop_background(bg_warm)
+                q13.reap()
+            print(f"  Per-method warmup complete for {method}.")
 
         bg_dur = total + 60
         bg_procs = q13.start_background(SCENARIO_BG, bg_dur)
@@ -152,7 +235,9 @@ def run_all(args):
         rec = {"method": method, "status": "ok", "csv": csv_path,
                "yaml": yaml_path, "mode": mode, "total_s": total}
         try:
-            rec["exec"] = q13.run_method(yaml_path, csv_path, mode, seq)
+            rec["exec"] = _run_method_vt_triggered(
+                yaml_path, csv_path, mode, seq, triggers, stop_after,
+                epsilon=args.epsilon, tv=3.0)
             m = q13.measure(csv_path, args.epsilon, q13.P_STABLE)
             rec.update(m)
             print(f"    persistence={m['persistence_sec']:.1f}s  "
@@ -207,37 +292,78 @@ def plot(out_obj, out_pdf, epsilon=1.0):
 
     rows_a = load_csv(r_a["csv"])
     rows_b = load_csv(r_b["csv"])
-    v_a = compute_windowed_v(rows_a, T=WINDOW_T)
-    v_b = compute_windowed_v(rows_b, T=WINDOW_T)
+    v_a_full = compute_windowed_v(rows_a, T=WINDOW_T)
+    v_b_full = compute_windowed_v(rows_b, T=WINDOW_T)
+    # Clip drawn curves at 48s while leaving x-axis limit (set later) at 50s.
+    DATA_CLIP = 48
+    v_a = v_a_full[:DATA_CLIP + 1]
+    v_b = v_b_full[:DATA_CLIP + 1]
     t_a = np.arange(len(v_a))
     t_b = np.arange(len(v_b))
 
     trans_b = _combo_transitions(rows_b)
-    search_start = q13.P_STABLE + q13.P_BURST
     y_max = max(max(v_a), max(v_b)) * 1.18
 
     plt.rcParams["hatch.linewidth"] = 0.4
     fig, ax = plt.subplots(figsize=(9.0, 4.4))
 
-    # Gray region = window where no tested placement has yet brought V(t)<=eps.
-    # End it at the first tick (after burst) where *any* method drops to
-    # epsilon, since after that a feasible placement has been discovered.
-    def _first_below(v_arr, start):
-        for i, x in enumerate(v_arr):
-            if i >= start and x <= epsilon:
-                return i
-        return None
-    recover_a = _first_below(v_a, search_start)
-    recover_b = _first_below(v_b, search_start)
-    candidates = [r for r in (recover_a, recover_b) if r is not None]
-    region_end = min(candidates) if candidates else max(t_a[-1], t_b[-1])
+    # Gray "No feasible placement found" region:
+    #   start = first tick AFTER the first candidate placement (cand_1) has
+    #           fully transitioned (i.e., one tick after the cand_1 boundary
+    #           so the transition itself is excluded).
+    #   end   = first tick where *any* method's V(t) drops back to <= epsilon
+    #           (after which a feasible placement has been discovered).
+    def _first_below_after(v_arr, start):
+        if start is None:
+            return None
+        return next((i for i, x in enumerate(v_arr)
+                     if i > start and x <= epsilon), None)
 
-    ax.axvspan(search_start, region_end, color="#f2f2f2", zorder=0)
+    def _first_cand_tick(rows):
+        last = None
+        for i, r in enumerate(rows):
+            c = r.get("combination", "")
+            if c != last and c.startswith("cand_"):
+                return i
+            last = c
+        return None
+
+    cand_a = _first_cand_tick(rows_a)
+    cand_b = _first_cand_tick(rows_b)
+    first_cand_starts = [x for x in (cand_a, cand_b) if x is not None]
+    T_v = 3
+    # Gray region starts T_v seconds after the first cand_* placement is
+    # fully transitioned — i.e. after the initial validation window passes
+    # and BoundGuard has had a full T_v to assess the first candidate.
+    region_start = (min(first_cand_starts) + T_v) if first_cand_starts else 0
+
+    # End the gray region at the last BoundGuard validation decision point:
+    # the start of the final candidate (just before cand_tail) + T_v.
+    # After that point BoundGuard commits to the final placement and we no
+    # longer say "no feasible placement found".
+    last_probe_start = None
+    last = None
+    for i, r in enumerate(rows_b):
+        c = r.get("combination", "")
+        if c != last and c.startswith("cand_") and c != "cand_tail":
+            last_probe_start = i
+        last = c
+    T_v = 3
+    if last_probe_start is not None:
+        region_end = last_probe_start + T_v
+    else:
+        last_a, last_b = t_a[-1], t_b[-1]
+        below_a = _first_below_after(v_a, region_start)
+        below_b = _first_below_after(v_b, region_start)
+        region_end = max(below_a if below_a is not None else last_a,
+                         below_b if below_b is not None else last_b)
+
+    ax.axvspan(region_start, region_end, color="#f2f2f2", zorder=0)
     ax.axhline(epsilon, color="#555555", linestyle="--", linewidth=0.9,
                zorder=1)
 
     # Inline label inside the gray region (replaces the legend entry).
-    mid_x = (search_start + region_end) / 2.0
+    mid_x = (region_start + region_end) / 2.0
     ax.text(mid_x, y_max * 0.02,
             "No feasible placement found",
             ha="center", va="bottom",
@@ -298,13 +424,16 @@ def plot(out_obj, out_pdf, epsilon=1.0):
                 arrowprops=dict(arrowstyle="->", color="#c88a44",
                                 linewidth=0.7, shrinkA=2, shrinkB=2))
 
-    ax.set_xlim(0, max(t_a[-1], t_b[-1]))
+    # Cap the x-axis at 50 s so both curves are shown over the same span
+    # (Adaptive's tail after commit is the same flat V(t), so truncating
+    # there keeps the probing phase readable).
+    ax.set_xlim(0, 50)
     ax.set_ylim(0, y_max)
     ax.set_xlabel("Time (seconds)", fontsize=13, fontweight="bold")
     ax.set_ylabel(r"QoS violation score $V(t)$", fontsize=13, fontweight="bold")
     ax.yaxis.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
-    ax.legend(loc="upper right", fontsize=10, framealpha=0.92)
+    ax.legend(loc="upper left", fontsize=10, framealpha=0.92)
 
     fig.tight_layout()
     fig.savefig(out_pdf)
@@ -323,8 +452,17 @@ def main():
                         help="Use the real XGBoost ranking instead of adversarial.")
     parser.add_argument("--skip-warmup", action="store_true",
                         help="Skip the warmup pass before measured methods.")
-    parser.add_argument("--out", default=OUT_PDF)
+    parser.add_argument("--out", default=None,
+                        help="Output PDF path (defaults to "
+                             "results/q5_bounded_infeasible_epsilon_<eps>.pdf)")
     args = parser.parse_args()
+
+    if args.out is None:
+        args.out = os.path.join(
+            RESULTS_DIR,
+            f"q5_bounded_infeasible_epsilon_{_eps_tag(args.epsilon)}.pdf",
+        )
+
     os.makedirs(OUT_DIR, exist_ok=True)
 
     if args.no_run:

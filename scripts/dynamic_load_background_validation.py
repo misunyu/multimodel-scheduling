@@ -53,14 +53,19 @@ if not os.path.exists(PYTHON):
 
 WORKER = os.path.join(SCRIPT_DIR, "headless_inference_worker.py")
 DEFAULT_SCHEDULE = os.path.join(PROJECT_DIR, "tests", "dynamic_load_views_schedule.yaml")
+STATIC_SCHEDULE  = os.path.join(PROJECT_DIR, "tests", "dynamic_load_static_schedule.yaml")
 RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
-OUT_PDF = os.path.join(RESULTS_DIR, "dynamic_load_adaptation_background.pdf")
 BG_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_bg_boundguard.csv")
 ST_CSV  = os.path.join(RESULTS_DIR, "dynamic_load_bg_static.csv")
 
 PHASE_A_DURATION = 22
 PHASE_B_DURATION = 6
-PHASE_C_DURATION = 50
+T_V              = 3
+N_CANDIDATES     = 4
+TAIL_DURATION    = 38
+STATIC_TAIL_BURST = (PHASE_B_DURATION
+                     + N_CANDIDATES * T_V
+                     + TAIL_DURATION)
 
 NOISE_WORKERS = [
     {"model": "models_onnx/squeezenet1.0-12.onnx",           "device": "cpu", "rate": 30},
@@ -109,29 +114,46 @@ def stop_background(procs):
             p.wait()
 
 
-def run_scenario(schedule, csv_path, mode, label):
-    if os.path.exists(csv_path):
-        os.remove(csv_path)
-    total = PHASE_A_DURATION + PHASE_B_DURATION + PHASE_C_DURATION
-    cmd = [
+def _cmd_for(mode, label, schedule, csv_path):
+    common = [
         PYTHON, os.path.join(PROJECT_DIR, "schedule_executor_main.py"),
         "--schedule", schedule,
-        "--duration", str(total),
         "--adaptive-mode", str(mode),
         "--metrics-csv", csv_path,
         "--auto_start_all",
-        "--combo-duration", f"combination_p1_low={PHASE_A_DURATION}",
-        "--combo-duration", f"combination_p1_high={PHASE_B_DURATION}",
-        "--combo-duration", f"combination_p2_high={PHASE_C_DURATION}",
     ]
+    if label == "BoundGuard":
+        durations = [
+            ("combination_p1_low",  PHASE_A_DURATION),
+            ("combination_p1_high", PHASE_B_DURATION),
+            ("combination_cand_1",  T_V),
+            ("combination_cand_2",  T_V),
+            ("combination_cand_3",  T_V),
+            ("combination_p2_high", T_V + TAIL_DURATION),
+        ]
+    else:
+        durations = [
+            ("combination_p1_low",  PHASE_A_DURATION),
+            ("combination_p1_high", STATIC_TAIL_BURST),
+        ]
+    total = sum(d for _, d in durations)
+    cmd = common + ["--duration", str(total)]
+    for name, d in durations:
+        cmd += ["--combo-duration", f"{name}={d}"]
+    return cmd, total
+
+
+def run_scenario(schedule, csv_path, mode, label):
+    if os.path.exists(csv_path):
+        os.remove(csv_path)
+    cmd, total = _cmd_for(mode, label, schedule, csv_path)
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
     timeout = total * 4 + 90
 
     print()
     print("=" * 70)
-    print(f"  Dynamic load + background [{label}, mode={mode}]")
-    print(f"  Phases: A={PHASE_A_DURATION}s  B={PHASE_B_DURATION}s  C={PHASE_C_DURATION}s")
+    print(f"  Dynamic load + background [{label}, mode={mode}, total={total}s]")
     print(f"  Background: {[s['model'].split('/')[-1] for s in NOISE_WORKERS]}")
     print("=" * 70)
 
@@ -200,20 +222,21 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
     fig, ax = plt.subplots(figsize=(7.0, 4.2))
 
     ax.plot(st_t_plot, st_v_plot, color="#8b2e2e", linewidth=2.0,
-            linestyle="--", marker="o", markersize=5, markevery=5,
+            linestyle="--", marker="o", markersize=5, markevery=8,
             markerfacecolor="#f4b5b5", markeredgecolor="#8b2e2e",
-            markeredgewidth=0.7,
+            markeredgewidth=0.6,
             label="Static", zorder=10)
     ax.plot(bg_t_plot, bg_v_plot, color="#2c5984", linewidth=2.2,
-            linestyle="-", marker="s", markersize=6, markevery=5,
+            linestyle="-", marker="s", markersize=6, markevery=8,
             markerfacecolor="#b9d0e8", markeredgecolor="#2c5984",
-            markeredgewidth=0.7,
+            markeredgewidth=0.6,
             label="BoundGuard", zorder=11)
 
     ax.axhline(y=epsilon, color="gray", linestyle="--", linewidth=1.1, zorder=4)
-    ax.text(-0.012, epsilon, r"$\epsilon$",
+    ax.text(0.015, epsilon, r"$\epsilon$",
             transform=ax.get_yaxis_transform(),
-            ha="right", va="center", fontsize=12, color="#333333")
+            ha="left", va="bottom", fontsize=12, color="#333333",
+            zorder=5)
 
     candidate_max = max(max(bg_v_t), max(st_v_t), epsilon)
     y_max = candidate_max * 1.15
@@ -247,7 +270,7 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
     ax.set_xlabel("Time (seconds)", fontsize=15, fontweight="bold")
     ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=15, fontweight="bold")
     ax.tick_params(axis='both', labelsize=13)
-    ax.legend(loc="upper left", framealpha=0.92, fontsize=13)
+    ax.legend(loc="center right", framealpha=0.92, fontsize=13)
     ax.grid(True, linestyle=":", linewidth=0.5, color="#cccccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()
@@ -256,25 +279,52 @@ def make_plot(bg_data, st_data, epsilon, pdf_path, x_max, load_change_sec):
     return bg_recover_sec
 
 
+def _eps_tag(eps):
+    if eps == int(eps):
+        return str(int(eps))
+    return str(eps).replace(".", "p")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--schedule", default=DEFAULT_SCHEDULE)
     parser.add_argument("--epsilon", type=float, default=1.0)
     parser.add_argument("--no-run", action="store_true")
-    parser.add_argument("--out", default=OUT_PDF)
+    parser.add_argument("--out", default=None,
+                        help="Output PDF (defaults to "
+                             "results/dynamic_load_adaptation_background_epsilon_<eps>.pdf)")
     parser.add_argument("--run-only", choices=["bg", "st"], default=None,
                         help="Run only one curve per invocation.")
+    parser.add_argument("--skip-warmup", action="store_true",
+                        help="Skip the warmup pass before the measured runs.")
     args = parser.parse_args()
+
+    if args.out is None:
+        args.out = os.path.join(
+            RESULTS_DIR,
+            f"dynamic_load_adaptation_background_epsilon_{_eps_tag(args.epsilon)}.pdf",
+        )
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     if not args.no_run:
         target = args.run_only
+        if target is None and not args.skip_warmup:
+            warm_csv = os.path.join(RESULTS_DIR, "dynamic_load_bg_warmup.csv")
+            print()
+            print("=" * 70)
+            print("  Warmup pass (results discarded)")
+            print("=" * 70)
+            run_scenario(STATIC_SCHEDULE, warm_csv, mode=3, label="Warmup")
+            reap_lingering_executors()
+
         if target is None or target == "bg":
             run_scenario(args.schedule, BG_CSV, mode=1, label="BoundGuard")
             reap_lingering_executors()
         if target is None or target == "st":
-            run_scenario(args.schedule, ST_CSV, mode=3, label="Static")
+            # Trimmed yaml (p1_low + p1_high only) so Static placement never
+            # changes — no candidate combos for the executor to iterate into.
+            run_scenario(STATIC_SCHEDULE, ST_CSV, mode=3, label="Static")
             reap_lingering_executors()
         if target is not None:
             print(f"\n[Done] {target} data saved.")
@@ -285,7 +335,7 @@ def main():
 
     bg_times = bg_data[2]
     st_times = st_data[2]
-    x_max = max(max(bg_times), max(st_times)) + 1.0
+    x_max = min(100.0, max(max(bg_times), max(st_times)) + 1.0)
 
     bg_bounds = bg_data[3]
     if len(bg_bounds) >= 2:

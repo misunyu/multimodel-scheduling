@@ -26,7 +26,11 @@ class ScheduleExecutor:
 
     def __init__(self, schedule_file: str, duration: int, info_window: InfoWindow,
                  selected_combo: str = None, adaptive_mode: int = 0, metrics_csv: str = None,
-                 combo_durations: dict = None):
+                 combo_durations: dict = None,
+                 combo_triggers: dict = None,
+                 qos_epsilon: float = 1.0,
+                 qos_tv: float = 3.0,
+                 qos_window_T: int = 3):
         self.schedule_file = schedule_file
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
@@ -36,6 +40,17 @@ class ScheduleExecutor:
         # Optional per-combo duration override: {combo_name: int_seconds}
         # When a combo is not in this map, default_duration is used.
         self.combo_durations = dict(combo_durations or {})
+        # QoS-driven advancement: {combo_name: "v-above" | "validate"}.
+        #   v-above  : advance as soon as V(t) > epsilon (or combo_durations cap)
+        #   validate : wait T_v seconds after entering combo, then check V(t);
+        #              if > epsilon advance, otherwise stay (up to combo_durations cap)
+        self.combo_triggers = dict(combo_triggers or {})
+        self.qos_epsilon = float(qos_epsilon)
+        self.qos_tv = float(qos_tv)
+        self.qos_window_T = int(qos_window_T)
+        # Runtime state for the polling logic.
+        self._qos_poll_timer = None
+        self._qos_advance_fired = False
 
         self._viewer: UnifiedViewer = None
         self._index: int = 0
@@ -218,6 +233,7 @@ class ScheduleExecutor:
             if measured_duration < 1:
                 measured_duration = 1
             QTimer.singleShot(measured_duration * 1000, self._after_stop)
+            self._maybe_start_qos_trigger(combo)
             return
 
         # Mode 0 (stop-and-restart) shortcut for same-placement transitions:
@@ -247,6 +263,7 @@ class ScheduleExecutor:
                         measured_duration = 1
                     self._prev_running_combo = combo
                     QTimer.singleShot(measured_duration * 1000, self._after_stop)
+                    self._maybe_start_qos_trigger(combo)
                     return
 
         # Reuse existing viewer if it exists
@@ -419,17 +436,149 @@ class ScheduleExecutor:
         # survive into the in-place phase.
         # For mode 0 with a real placement change: fire after the
         # timed_shutdown with a buffer (the viewer will be torn down).
+        # Cancel any previous duration timer before scheduling a new one.
+        if getattr(self, '_duration_timer', None) is not None:
+            try:
+                self._duration_timer.stop()
+            except Exception:
+                pass
+            self._duration_timer = None
+
         if adaptive or reactive or static or self._next_transition_is_inplace():
             # Fire 1 second before timed_shutdown (which fires at run_duration*1000)
             after_ms = max(1000, (run_duration - 1) * 1000)
-            QTimer.singleShot(after_ms, self._after_stop)
         else:
-            buffer_ms = 1000
-            QTimer.singleShot((run_duration * 1000) + buffer_ms, self._after_stop)
+            after_ms = (run_duration * 1000) + 1000
+
+        self._duration_timer = QTimer(self._viewer if self._viewer else None)
+        self._duration_timer.setSingleShot(True)
+        self._duration_timer.timeout.connect(self._after_stop)
+        self._duration_timer.start(after_ms)
+
+        # QoS-driven advancement: optionally replace/complement the timer above
+        # with a V(t) poll that shortens the phase when a violation is detected.
+        self._maybe_start_qos_trigger(combo)
+
+    # ------------------------------------------------------------------
+    # QoS-driven advancement
+    # ------------------------------------------------------------------
+    def _stop_qos_poll(self):
+        if self._qos_poll_timer is not None:
+            try:
+                self._qos_poll_timer.stop()
+            except Exception:
+                pass
+            self._qos_poll_timer = None
+
+    def _current_vscore(self):
+        if self._viewer is None:
+            return None
+        try:
+            from reactive_deploy import _collect_vscore
+            return _collect_vscore(self._viewer, window_T=self.qos_window_T)
+        except Exception:
+            return None
+
+    def _qos_advance(self, reason):
+        if self._qos_advance_fired:
+            return
+        self._qos_advance_fired = True
+        self._stop_qos_poll()
+        # Cancel the duration-based timer so it doesn't double-fire _after_stop.
+        if getattr(self, '_duration_timer', None) is not None:
+            try:
+                self._duration_timer.stop()
+            except Exception:
+                pass
+            self._duration_timer = None
+        print(f"[Executor] QoS-triggered advance: {reason}")
+        # Immediately move to the next combo.
+        QTimer.singleShot(0, self._after_stop)
+
+    def _maybe_start_qos_trigger(self, combo):
+        self._qos_advance_fired = False
+        self._stop_qos_poll()
+        policy = self.combo_triggers.get(combo)
+        if not policy:
+            return
+        # Clear the rolling V(t) history on combo entry so carried-over
+        # samples from the previous phase don't pre-trigger the advance.
+        try:
+            if self._viewer is not None:
+                self._viewer._v_history_mode2 = []
+        except Exception:
+            pass
+        poll_ms = 200
+        eps = self.qos_epsilon
+        entered_at = time.time()
+        poll_count = [0]
+
+        def check_v_above():
+            if self._qos_advance_fired or not self._running:
+                self._stop_qos_poll()
+                return
+            v = self._current_vscore()
+            poll_count[0] += 1
+            # Log every 10th poll (2s) so we can see progress without spam
+            if poll_count[0] % 10 == 1:
+                elapsed = time.time() - entered_at
+                print(f"[Executor] QoS-poll combo={combo} elapsed={elapsed:.1f}s "
+                      f"V(t)={'None' if v is None else f'{v:.3f}'} eps={eps}")
+            if v is None:
+                return
+            if v > eps:
+                self._qos_advance(
+                    f"V(t)={v:.3f} > eps={eps} in combo={combo}")
+
+        def check_validate():
+            if self._qos_advance_fired or not self._running:
+                self._stop_qos_poll()
+                return
+            if (time.time() - entered_at) < self.qos_tv:
+                return  # still inside the T_v validation window
+            v = self._current_vscore()
+            poll_count[0] += 1
+            if poll_count[0] % 5 == 1:
+                elapsed = time.time() - entered_at
+                print(f"[Executor] QoS-validate combo={combo} elapsed={elapsed:.1f}s "
+                      f"V(t)={'None' if v is None else f'{v:.3f}'} eps={eps} "
+                      f"(post-T_v)")
+            if v is None:
+                return
+            if v > eps:
+                self._qos_advance(
+                    f"V(t)={v:.3f} > eps={eps} after T_v={self.qos_tv}s "
+                    f"in combo={combo}")
+            else:
+                # Candidate validated — commit, stop polling, let the max-
+                # duration timer (already scheduled) keep the combo alive.
+                print(f"[Executor] QoS-trigger: combo={combo} validated "
+                      f"(V(t)={v:.3f} <= eps={eps}); committing.")
+                self._qos_advance_fired = True
+                self._stop_qos_poll()
+
+        if policy == "v-above":
+            check_fn = check_v_above
+        elif policy == "validate":
+            check_fn = check_validate
+        else:
+            print(f"[Executor] Unknown combo-trigger policy '{policy}' "
+                  f"for combo={combo}; ignoring.")
+            return
+
+        self._qos_poll_timer = QTimer(self._viewer if self._viewer else None)
+        self._qos_poll_timer.setInterval(poll_ms)
+        self._qos_poll_timer.timeout.connect(check_fn)
+        self._qos_poll_timer.start()
+        print(f"[Executor] QoS-trigger active: combo={combo} policy={policy} "
+              f"eps={eps} T_v={self.qos_tv}s")
 
     def _after_stop(self):
         if not self._running:
             return
+        # Stop any QoS poll leftover from the previous combo.
+        self._stop_qos_poll()
+        self._qos_advance_fired = False
 
         adaptive = (self.adaptive_mode == 1)
         reactive = (self.adaptive_mode == 2)
@@ -713,6 +862,22 @@ def main():
                         help='Per-combination duration override. Repeatable. '
                              'Combos not listed here use --duration. '
                              'Example: --combo-duration combination_failure=5')
+    parser.add_argument('--combo-trigger', action='append', default=[],
+                        metavar='COMBO=POLICY',
+                        help='QoS-driven advancement policy per combo. '
+                             'Policies: "v-above" (advance when V(t) > epsilon), '
+                             '"validate" (wait T_v, then advance if V(t) > epsilon; '
+                             'otherwise commit). Repeatable.')
+    parser.add_argument('--qos-trigger-epsilon', type=float, default=1.0,
+                        help='Epsilon for QoS-triggered advancement (default 1.0).')
+    parser.add_argument('--qos-trigger-tv', type=float, default=3.0,
+                        help='Validation window T_v for the "validate" policy '
+                             '(default 3.0 s).')
+    parser.add_argument('--qos-window-t', type=int, default=3,
+                        help='V(t) sliding window (default 3 s).')
+    parser.add_argument('--stop-after', type=str, default=None,
+                        help='Stop the executor after this combo completes '
+                             '(combos after it in the yaml are skipped).')
     args = parser.parse_args()
 
     # Parse --combo-duration overrides into a {combo_name: seconds} dict
@@ -727,6 +892,20 @@ def main():
             combo_durations[name] = max(1, int(val.strip()))
         except ValueError:
             print(f"[Main] WARNING: ignoring --combo-duration '{spec}' (seconds must be int)")
+
+    # Parse --combo-trigger into {combo_name: policy}
+    combo_triggers: dict = {}
+    for spec in (args.combo_trigger or []):
+        if "=" not in spec:
+            print(f"[Main] WARNING: ignoring malformed --combo-trigger '{spec}'")
+            continue
+        name, _, pol = spec.partition("=")
+        pol = pol.strip()
+        if pol not in ("v-above", "validate"):
+            print(f"[Main] WARNING: unknown --combo-trigger policy '{pol}' "
+                  f"for combo '{name}'; must be one of: v-above, validate")
+            continue
+        combo_triggers[name.strip()] = pol
 
     # Resolve schedule path: if given path doesn't exist, try tests/<basename>
     schedule_path = args.schedule
@@ -788,7 +967,11 @@ def main():
                                         selected_combo=args.schedule_name,
                                         adaptive_mode=getattr(args, 'adaptive_mode', 0),
                                         metrics_csv=getattr(args, 'metrics_csv', None),
-                                        combo_durations=combo_durations)
+                                        combo_durations=combo_durations,
+                                        combo_triggers=combo_triggers,
+                                        qos_epsilon=args.qos_trigger_epsilon,
+                                        qos_tv=args.qos_trigger_tv,
+                                        qos_window_T=args.qos_window_t)
         except ValueError as e:
             print(f"[Main] ERROR: {e}")
             return 1
@@ -831,7 +1014,20 @@ def main():
         executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info,
                                     adaptive_mode=getattr(args, 'adaptive_mode', 0),
                                     metrics_csv=getattr(args, 'metrics_csv', None),
-                                    combo_durations=combo_durations)
+                                    combo_durations=combo_durations,
+                                    combo_triggers=combo_triggers,
+                                    qos_epsilon=args.qos_trigger_epsilon,
+                                    qos_tv=args.qos_trigger_tv,
+                                    qos_window_T=args.qos_window_t)
+        # Truncate combos to stop after a specified name, if requested.
+        try:
+            if args.stop_after and args.stop_after in executor._combinations:
+                idx = executor._combinations.index(args.stop_after)
+                executor._combinations = executor._combinations[:idx + 1]
+                print(f"[Main] --stop-after {args.stop_after}: "
+                      f"truncated combos to {executor._combinations}")
+        except Exception as e:
+            print(f"[Main] --stop-after failed: {e}")
     except ValueError as e:
         print(f"[Main] ERROR: {e}")
         return 1

@@ -47,20 +47,31 @@ ML_CSV   = os.path.join(RESULTS, "ml_mis_rtvy_ml.csv")
 SR_CSV   = os.path.join(RESULTS, "ml_mis_rtvy_sr.csv")  # stop-and-restart
 ST_CSV   = os.path.join(RESULTS, "ml_mis_rtvy_st.csv")
 
-P_STABLE  = 22
-P_BURST   = 8
-P_XGB     = 3    # T=3s: XGBoost pick monitoring window
-P_ALL_GPU = 25   # heuristic fallback
+P_STABLE    = 22
+# Burst is capped; executor advances as soon as V(t) > eps thanks to the
+# "v-above" combo-trigger.
+P_BURST_MAX = 30
+# xgb_pick is capped; executor advances after T_v when V(t) > eps, otherwise
+# commits. Cap is long enough to absorb workers' warm-up overhead.
+P_XGB_MAX   = 30
+P_ALL_GPU   = 25   # final commit duration
 
 
-def run(csv_path, mode, label, combo_durations):
+def run(csv_path, mode, label, combo_durations,
+        combo_triggers=None, epsilon=1.0, tv=3.0, stop_after=None):
     if os.path.exists(csv_path): os.remove(csv_path)
     total = sum(combo_durations.values())
     cmd = [PYTHON, EXECUTOR, "--schedule", SCHEDULE,
            "--duration", str(total), "--adaptive-mode", str(mode),
-           "--metrics-csv", csv_path, "--auto_start_all"]
+           "--metrics-csv", csv_path, "--auto_start_all",
+           "--qos-trigger-epsilon", str(epsilon),
+           "--qos-trigger-tv",      str(tv)]
     for c, d in combo_durations.items():
         cmd += ["--combo-duration", f"{c}={d}"]
+    for c, pol in (combo_triggers or {}).items():
+        cmd += ["--combo-trigger", f"{c}={pol}"]
+    if stop_after:
+        cmd += ["--stop-after", stop_after]
     env = os.environ.copy(); env["QT_QPA_PLATFORM"] = "offscreen"
     print(f"\n{'='*60}\n  [{label}, mode={mode}]\n{'='*60}")
     proc = subprocess.run(cmd, env=env, cwd=PROJECT_DIR,
@@ -83,8 +94,33 @@ def find_cold_start_gaps(times_sec, rows=None):
     return gaps
 
 
+def _trim_trailing_reset(rows):
+    """Drop the teardown tail rows where the executor reverts the combo
+    label back to the initial combo after all phases have finished. Those
+    rows capture workers tearing down and produce a spurious V(t) spike
+    that isn't part of any measured phase."""
+    if not rows:
+        return rows
+    combos = [r.get("combination", "") for r in rows]
+    n = len(combos)
+    # Walk back from the end: if we see the initial combo reappear after a
+    # different one, truncate at the boundary of that reset.
+    last = combos[-1]
+    i = n - 1
+    # Find contiguous tail with the same label as the last row.
+    while i > 0 and combos[i] == last:
+        i -= 1
+    # i now points at the last row that is NOT the trailing label. If the
+    # trailing label differs from combos[i] and matches an *earlier* label
+    # (i.e. a reset to a phase we already left), drop the trailing block.
+    if combos[i] != last and last in combos[:i]:
+        return rows[:i + 1]
+    return rows
+
+
 def load_curve(csv_path):
     rows = load_csv(csv_path)
+    rows = _trim_trailing_reset(rows)
     v_t = compute_windowed_v(rows, T=WINDOW_T)
     times = parse_timestamps(rows)
     bounds = find_phase_boundaries(rows)
@@ -92,53 +128,114 @@ def load_curve(csv_path):
     return rows, v_t, times, bounds, cold_starts
 
 
+def _eps_tag(eps):
+    if eps == int(eps):
+        return str(int(eps))
+    return str(eps).replace(".", "p")
+
+
+def _warmup_pass(epsilon=1.0, tv=3.0):
+    """Run one full stable-only pass so all measured runs start from the
+    same warm state (ONNX sessions, CUDA context, OS page cache)."""
+    warm_csv = os.path.join(RESULTS, "ml_mis_rtvy_warmup.csv")
+    print()
+    print("=" * 60)
+    print("  [Warmup pass — results discarded]")
+    print("=" * 60)
+    run(warm_csv, mode=3, label="Warmup",
+        combo_durations={
+            "combination_stable": P_STABLE,
+            "combination_burst":  P_BURST_MAX,
+        },
+        epsilon=epsilon, tv=tv,
+        stop_after="combination_burst")
+    reap_lingering_executors()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epsilon", type=float, default=1.0)
+    parser.add_argument("--tv", type=float, default=3.0,
+                        help="Validation window T_v (default 3s).")
     parser.add_argument("--no-run", action="store_true")
-    parser.add_argument("--out", default=OUT_PDF)
+    parser.add_argument("--out", default=None,
+                        help="Output PDF (defaults to "
+                             "results/ml_misprediction_alternative_epsilon_<eps>.pdf)")
     parser.add_argument("--run-only", choices=["bg", "ml", "sr", "st"],
                         default=None,
                         help="Run only one curve per invocation: bg=BoundGuard, "
                              "ml=ML-only, sr=Stop-and-restart, st=Static.")
+    parser.add_argument("--skip-warmup", action="store_true",
+                        help="Skip the warmup pass before the measured runs.")
     args = parser.parse_args()
+
+    if args.out is None:
+        args.out = os.path.join(
+            RESULTS,
+            f"ml_misprediction_alternative_epsilon_{_eps_tag(args.epsilon)}.pdf",
+        )
 
     if not args.no_run:
         target = args.run_only
+        # Warmup pass before the first measured method so all curves start
+        # from the same warm state (ONNX sessions, CUDA context, OS page cache).
+        if target is None and not args.skip_warmup:
+            _warmup_pass(epsilon=args.epsilon, tv=args.tv)
+        # BoundGuard: burst advances on V(t)>eps; xgb_pick validates for T_v
+        # then advances to all_gpu if still > eps, else commits.
         if target is None or target == "bg":
             run(BG_CSV, mode=1, label="BoundGuard",
                 combo_durations={
                     "combination_stable":   P_STABLE,
-                    "combination_burst":    P_BURST,
-                    "combination_xgb_pick": P_XGB,
+                    "combination_burst":    P_BURST_MAX,
+                    "combination_xgb_pick": P_XGB_MAX,
                     "combination_all_gpu":  P_ALL_GPU,
-                })
+                },
+                combo_triggers={
+                    "combination_burst":    "v-above",
+                    "combination_xgb_pick": "validate",
+                },
+                epsilon=args.epsilon, tv=args.tv)
             reap_lingering_executors()
+        # Adaptive hot-swap (ML-only): burst advances on V(t)>eps; xgb_pick
+        # is the terminal commit (no validate — stays there).
         if target is None or target == "ml":
             run(ML_CSV, mode=1, label="Adaptive (ML-only)",
                 combo_durations={
                     "combination_stable":   P_STABLE,
-                    "combination_burst":    P_BURST,
-                    "combination_xgb_pick": P_XGB + P_ALL_GPU,
-                })
+                    "combination_burst":    P_BURST_MAX,
+                    "combination_xgb_pick": P_XGB_MAX + P_ALL_GPU,
+                },
+                combo_triggers={
+                    "combination_burst":    "v-above",
+                },
+                stop_after="combination_xgb_pick",
+                epsilon=args.epsilon, tv=args.tv)
             reap_lingering_executors()
+        # Stop-and-restart (mode 0): burst advances on V(t)>eps; xgb_pick
+        # is final (and also validates with T_v); this matches the original
+        # figure's behaviour where Stop-and-restart commits to the ML pick.
         if target is None or target == "sr":
             run(SR_CSV, mode=0, label="Stop-and-restart",
                 combo_durations={
                     "combination_stable":   P_STABLE,
-                    "combination_burst":    P_BURST,
-                    "combination_xgb_pick": P_XGB,
-                    "combination_all_gpu":  P_ALL_GPU,
-                })
+                    "combination_burst":    P_BURST_MAX,
+                    "combination_xgb_pick": P_XGB_MAX + P_ALL_GPU,
+                },
+                combo_triggers={
+                    "combination_burst":    "v-above",
+                },
+                stop_after="combination_xgb_pick",
+                epsilon=args.epsilon, tv=args.tv)
             reap_lingering_executors()
+        # Static (mode 3): no switching, only the scheduled phase sweep.
         if target is None or target == "st":
             run(ST_CSV, mode=3, label="Static",
                 combo_durations={
                     "combination_stable":   P_STABLE,
-                    "combination_burst":    P_BURST,
-                    "combination_xgb_pick": P_XGB,
-                    "combination_all_gpu":  P_ALL_GPU,
-                })
+                    "combination_burst":    P_BURST_MAX + P_XGB_MAX + P_ALL_GPU,
+                },
+                stop_after="combination_burst")
             reap_lingering_executors()
         # If running one at a time, exit after data collection
         if target is not None:
@@ -154,15 +251,20 @@ def main():
     eps = args.epsilon
     fig, ax = plt.subplots(figsize=(9.6, 4.8))
 
-    # Clip all curves to the same wall-clock span
-    clip_t = max(bg_t[-1], st_t[-1]) if bg_t and st_t else 999
+    # Clip all curves to the same wall-clock span. Use the shortest of the
+    # measured BoundGuard / Adaptive / Stop-and-restart traces so Static
+    # doesn't extend past the other methods' last measurement.
+    adaptive_ends = [tlist[-1] for tlist in (bg_t, ml_t, sr_t) if tlist]
+    clip_t = min(adaptive_ends) if adaptive_ends else 60.0
     def clip(t_list, v_list):
         t_c = [t for t in t_list if t <= clip_t]
         return t_c, v_list[:len(t_c)]
     ml_t_clip, ml_v_clip = clip(ml_t, ml_v)
     sr_t_clip, sr_v_clip = clip(sr_t, sr_v)
+    st_t_clip, st_v_clip = clip(st_t, st_v)
+    bg_t_clip, bg_v_clip = clip(bg_t, bg_v)
 
-    ax.plot(st_t, st_v, color="#8b2e2e", lw=2, ls="--",
+    ax.plot(st_t_clip, st_v_clip, color="#8b2e2e", lw=2, ls="--",
             marker="o", markersize=5, markevery=5,
             markerfacecolor="#f4b5b5", markeredgecolor="#8b2e2e",
             markeredgewidth=0.7,
@@ -208,7 +310,7 @@ def main():
     for gs, vb, ge, va in sr_gap_segments:
         ax.plot([gs, ge], [vb, va], color="#bbbbbb", lw=1.2, ls=":", zorder=9)
 
-    ax.plot(bg_t, bg_v, color="#2c5984", lw=2.2, ls="-",
+    ax.plot(bg_t_clip, bg_v_clip, color="#2c5984", lw=2.2, ls="-",
             marker="^", markersize=6, markevery=5,
             markerfacecolor="#b9d0e8", markeredgecolor="#2c5984",
             markeredgewidth=0.7,
@@ -237,28 +339,42 @@ def main():
         ax.text(bx+0.3, y_max*0.19, "Input rate\nincreases",
                 color="#b03a2e", fontsize=11, ha="left", va="bottom", zorder=12)
 
-    # XGBoost pick marker (phase 3 start)
-    if len(bg_bounds) >= 3:
-        px = bg_t[bg_bounds[2][0]]
-        ax.axvline(x=px, color="#c88a44", ls=":", lw=1.0, zorder=5)
-        ax.text(px+0.3, y_max*0.93, "XGBoost pick\n(2 GPU + 2 CPU)",
+    # Locate the 1st / 2nd placement transitions by combo name, so the
+    # markers are drawn correctly regardless of whether the burst phase was
+    # recorded (it may be skipped when V(t) > eps triggers immediately).
+    def _find_first(combo_name):
+        for idx, name in bg_bounds:
+            if name == combo_name:
+                return bg_t[idx]
+        return None
+    first_transition_t = _find_first("combination_xgb_pick")
+    second_transition_t = _find_first("combination_all_gpu")
+
+    # First placement transition (stable/burst -> xgb_pick)
+    if first_transition_t is not None:
+        ax.axvline(x=first_transition_t, color="#c88a44", ls=":", lw=1.0, zorder=5)
+        ax.text(first_transition_t+0.3, y_max*0.93, "1st placement\ntransition",
                 color="#c88a44", fontsize=11, ha="left", va="center", zorder=12)
 
-    # 2nd placement marker (phase 4 start)
-    if len(bg_bounds) >= 4:
-        fx = bg_t[bg_bounds[3][0]]
-        ax.axvline(x=fx, color="#5d87b5", ls=":", lw=1.0, zorder=5)
-        ax.text(fx+0.3, y_max*0.39, "2nd placement\n($V(t)>\\epsilon$ after T)",
+    # Second placement transition (xgb_pick -> all_gpu) — BoundGuard only
+    if second_transition_t is not None:
+        ax.axvline(x=second_transition_t, color="#5d87b5", ls=":", lw=1.0, zorder=5)
+        ax.text(second_transition_t+0.3, y_max*0.39, "2nd placement\n($V(t)>\\epsilon$ after T)",
                 color="#5d87b5", fontsize=11, ha="left", va="center", zorder=12)
 
-    # BoundGuard recovery marker
+    # BoundGuard recovery marker (first tick where V(t) drops to <= eps
+    # after the 2nd placement transition).
     bg_recover = None
-    if len(bg_bounds) >= 4:
-        for i in range(bg_bounds[3][0], len(bg_v)):
-            if bg_v[i] <= eps:
-                bg_recover = bg_t[i]; break
+    if second_transition_t is not None:
+        for i, t in enumerate(bg_t):
+            if t >= second_transition_t and bg_v[i] <= eps:
+                bg_recover = t; break
     # All three curves end at clip_t; set xlim just past that
     ax.set_xlim(0, clip_t + 1)
+    # Tighter x-tick spacing (every 5 s) so the long flat V=0 stable region
+    # doesn't dominate the plot visually.
+    from matplotlib.ticker import MultipleLocator
+    ax.xaxis.set_major_locator(MultipleLocator(5))
     ax.set_xlabel("Time (seconds)", fontsize=17, fontweight="bold")
     ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=17, fontweight="bold")
     ax.tick_params(axis='both', labelsize=15)
