@@ -378,7 +378,10 @@ def main():
     ax.set_xlabel("Time (seconds)", fontsize=17, fontweight="bold")
     ax.set_ylabel(r"QoS Violation Score $\mathbf{V(t)}$", fontsize=17, fontweight="bold")
     ax.tick_params(axis='both', labelsize=15)
-    ax.legend(loc="upper left", framealpha=0.92, fontsize=13)
+    _handles, _labels = ax.get_legend_handles_labels()
+    _order = [0, 2, 1, 3]
+    ax.legend([_handles[i] for i in _order], [_labels[i] for i in _order],
+              loc="upper left", framealpha=0.92, fontsize=13)
     ax.grid(True, ls=":", lw=0.5, color="#ccc", zorder=0)
     ax.set_axisbelow(True)
     fig.tight_layout()
