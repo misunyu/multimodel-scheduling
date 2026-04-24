@@ -237,11 +237,11 @@ def main():
     ax4 = fig.add_subplot(gs[1, 1:3])
 
     render_heatmap(ax2, agg["detect_lat"],
-                   "Detection latency (ticks)",
+                   "Detection latency (seconds)",
                    fmt="{:.1f}",
                    cmap="pastel_blue")
     render_heatmap(ax3, agg["recover_lat"],
-                   "Recovery latency (ticks)",
+                   "Recovery latency (seconds)",
                    fmt="{:.1f}",
                    cmap="pastel_peach")
     render_heatmap(ax4, agg["cum_violation"],
