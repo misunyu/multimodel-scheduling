@@ -238,6 +238,8 @@ def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
     per_view_rows = []
     cpu_items = []
     gpu_items = []
+    npu0_items = []
+    npu1_items = []
 
     for k, view in models.items():
         k_l = str(k).lower()
@@ -248,7 +250,6 @@ def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
         if not model_name or not exec_dev_raw: continue
 
         exec_dev = _norm_exec(exec_dev_raw)
-        if exec_dev in ("NPU0", "NPU1"): continue  # NPU Skip
 
         row = {}
 
@@ -261,27 +262,37 @@ def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
         # Device Flags
         exec_cpu = 1.0 if exec_dev == "CPU" else 0.0
         exec_gpu = 1.0 if exec_dev == "GPU" else 0.0
+        exec_npu0 = 1.0 if exec_dev == "NPU0" else 0.0
+        exec_npu1 = 1.0 if exec_dev == "NPU1" else 0.0
 
         # [NEW] 결합 피처 (model_hash * device)
         # Sparse generation: only create features for the actual hash bucket
         h_val = int(hashlib.md5(model_name.lower().encode("utf-8")).hexdigest(), 16) % MODEL_HASH_BUCKETS
         row[f"model_hash_{h_val}_on_cpu"] = 1.0 * exec_cpu
         row[f"model_hash_{h_val}_on_gpu"] = 1.0 * exec_gpu
+        row[f"model_hash_{h_val}_on_npu0"] = 1.0 * exec_npu0
+        row[f"model_hash_{h_val}_on_npu1"] = 1.0 * exec_npu1
 
         row["view.exec_cpu"] = exec_cpu
         row["view.exec_gpu"] = exec_gpu
+        row["view.exec_npu0"] = exec_npu0
+        row["view.exec_npu1"] = exec_npu1
 
         # Planned FPS (Demand)
         infps_val = 0.0
         if infps_map:
             infps_val = float(infps_map.get((model_name, exec_dev), 0.0))
-        
+
         if exec_dev == "CPU": cpu_items.append((h_val, infps_val))
         if exec_dev == "GPU": gpu_items.append((h_val, infps_val))
+        if exec_dev == "NPU0": npu0_items.append((h_val, infps_val))
+        if exec_dev == "NPU1": npu1_items.append((h_val, infps_val))
 
         row["view.infps"] = infps_val
         row["view.infps_on_cpu"] = infps_val * exec_cpu
         row["view.infps_on_gpu"] = infps_val * exec_gpu
+        row["view.infps_on_npu0"] = infps_val * exec_npu0
+        row["view.infps_on_npu1"] = infps_val * exec_npu1
 
         per_view_rows.append(row)
 
@@ -313,6 +324,22 @@ def featurize_window(window: Dict[str, Any], infps_map=None) -> Tuple[
                 b = _pair_bucket(h1, h2, "gpu")
                 w = f1 + f2
                 X[f"pairhash_{b}_on_gpu"] = X.get(f"pairhash_{b}_on_gpu", 0.0) + w
+
+        for i in range(len(npu0_items)):
+            for j in range(i + 1, len(npu0_items)):
+                h1, f1 = npu0_items[i]
+                h2, f2 = npu0_items[j]
+                b = _pair_bucket(h1, h2, "npu0")
+                w = f1 + f2
+                X[f"pairhash_{b}_on_npu0"] = X.get(f"pairhash_{b}_on_npu0", 0.0) + w
+
+        for i in range(len(npu1_items)):
+            for j in range(i + 1, len(npu1_items)):
+                h1, f1 = npu1_items[i]
+                h2, f2 = npu1_items[j]
+                b = _pair_bucket(h1, h2, "npu1")
+                w = f1 + f2
+                X[f"pairhash_{b}_on_npu1"] = X.get(f"pairhash_{b}_on_npu1", 0.0) + w
     else:
         X["views.count.views"] = 0.0
 
@@ -332,22 +359,23 @@ def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
     rows = []
     cpu_items = []
     gpu_items = []
+    npu0_items = []
+    npu1_items = []
 
     for v in views:
         m = v.get("model")
         dev = _norm_exec(v.get("execution", ""))
         if not m or not dev: continue
-        if dev in ("NPU0", "NPU1"): continue
 
         # [수정] infps 또는 intps를 가져옴 (intps는 infps와 동일하게 취급)
         fps_val = v.get("infps")
         if fps_val is None:
             fps_val = v.get("intps")
-        
+
         if fps_val is None:
             print(f"Error: Neither 'infps' nor 'intps' found for model '{m}' in the schedule.")
             sys.exit(1)
-        
+
         fps = float(fps_val) if fps_val is not None else 0.0
 
         r = {}
@@ -357,22 +385,32 @@ def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
 
         exec_cpu = 1.0 if dev == "CPU" else 0.0
         exec_gpu = 1.0 if dev == "GPU" else 0.0
+        exec_npu0 = 1.0 if dev == "NPU0" else 0.0
+        exec_npu1 = 1.0 if dev == "NPU1" else 0.0
 
         # [NEW] 결합 피처 (model_hash * device)
         # Sparse generation: only create features for the actual hash bucket
         h_val = int(hashlib.md5(m.lower().encode("utf-8")).hexdigest(), 16) % MODEL_HASH_BUCKETS
         r[f"model_hash_{h_val}_on_cpu"] = 1.0 * exec_cpu
         r[f"model_hash_{h_val}_on_gpu"] = 1.0 * exec_gpu
+        r[f"model_hash_{h_val}_on_npu0"] = 1.0 * exec_npu0
+        r[f"model_hash_{h_val}_on_npu1"] = 1.0 * exec_npu1
 
         if dev == "CPU": cpu_items.append((h_val, fps))
         if dev == "GPU": gpu_items.append((h_val, fps))
+        if dev == "NPU0": npu0_items.append((h_val, fps))
+        if dev == "NPU1": npu1_items.append((h_val, fps))
 
         r["view.exec_cpu"] = exec_cpu
         r["view.exec_gpu"] = exec_gpu
+        r["view.exec_npu0"] = exec_npu0
+        r["view.exec_npu1"] = exec_npu1
 
         r["view.infps"] = fps
         r["view.infps_on_cpu"] = fps * exec_cpu
         r["view.infps_on_gpu"] = fps * exec_gpu
+        r["view.infps_on_npu0"] = fps * exec_npu0
+        r["view.infps_on_npu1"] = fps * exec_npu1
 
         rows.append(r)
 
@@ -404,6 +442,22 @@ def featurize_from_combo(combo_blob: Dict[str, Any]) -> pd.DataFrame:
                 b = _pair_bucket(h1, h2, "gpu")
                 w = f1 + f2
                 X[f"pairhash_{b}_on_gpu"] = X.get(f"pairhash_{b}_on_gpu", 0.0) + w
+
+        for i in range(len(npu0_items)):
+            for j in range(i + 1, len(npu0_items)):
+                h1, f1 = npu0_items[i]
+                h2, f2 = npu0_items[j]
+                b = _pair_bucket(h1, h2, "npu0")
+                w = f1 + f2
+                X[f"pairhash_{b}_on_npu0"] = X.get(f"pairhash_{b}_on_npu0", 0.0) + w
+
+        for i in range(len(npu1_items)):
+            for j in range(i + 1, len(npu1_items)):
+                h1, f1 = npu1_items[i]
+                h2, f2 = npu1_items[j]
+                b = _pair_bucket(h1, h2, "npu1")
+                w = f1 + f2
+                X[f"pairhash_{b}_on_npu1"] = X.get(f"pairhash_{b}_on_npu1", 0.0) + w
     else:
         X["views.count.views"] = 0.0
 
