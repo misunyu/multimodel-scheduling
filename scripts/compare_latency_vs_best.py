@@ -231,20 +231,20 @@ def main():
     bar1 = plt.bar(x - width/2, oracle_vals, width, label='Throughput-optimal Placement', color='skyblue', alpha=0.5, hatch='//', edgecolor='black', linewidth=0.5)
     bar2 = plt.bar(x + width / 2, latency_vals, width, label='Latency-based Heuristic', color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
     
-    plt.ylabel('Normalized Throughput')
-    plt.xlabel('Number of Application Instances')
-    plt.xticks(x, processed_labels, rotation=0, fontsize=8)
-    leg = plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=8, frameon=False)
-    
+    plt.ylabel('Normalized Throughput', fontsize=11)
+    plt.xlabel('Number of Application Instances', fontsize=11)
+    plt.xticks(x, processed_labels, rotation=0, fontsize=10)
+    leg = plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=10, frameon=False)
+
     all_vals = oracle_vals + latency_vals
     plt.ylim(0, 1.2)
-    plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
-    
+    plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], fontsize=10)
+
     def autolabel(rects):
         for rect in rects:
             height = rect.get_height()
             plt.text(rect.get_x() + rect.get_width()/2., height,
-                     f'{height:.2f}', ha='center', va='bottom', fontsize=8)
+                     f'{height:.2f}', ha='center', va='bottom', fontsize=10)
 
     autolabel(bar1)
     autolabel(bar2)

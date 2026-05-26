@@ -1351,6 +1351,10 @@ def main():
                 gap = actual_best_score - pred_best_actual_score
                 score_gaps.append(max(0, gap))
 
+                # Best-of-5: best actual outcome among the model's predicted Top-5 group
+                top5_candidates = [r for r in scenario_results if r["combination"] in predicted_top5_names]
+                best5_row = max(top5_candidates, key=lambda x: x["actual_score"]) if top5_candidates else pred_best_row
+
                 scenario_summary_data.append({
                     "m_count": model_count,
                     "is_top1": is_top1,
@@ -1361,7 +1365,10 @@ def main():
                     "oracle_S": actual_best_row["actual_score"],
                     "pred_T": pred_best_row["actual_T_norm"],
                     "pred_D": pred_best_row["actual_D_norm"],
-                    "pred_S": pred_best_row["actual_score"]
+                    "pred_S": pred_best_row["actual_score"],
+                    "best5_T": best5_row["actual_T_norm"],
+                    "best5_D": best5_row["actual_D_norm"],
+                    "best5_S": best5_row["actual_score"]
                 })
 
             # [Added] Also include alpha in the filename
@@ -1398,7 +1405,13 @@ def main():
                 avg_oracle_D = np.mean([d["oracle_D"] for d in scenario_summary_data])
                 avg_oracle_S = np.mean([d["oracle_S"] for d in scenario_summary_data])
                 f.write(f"Actual Best Average,,{avg_oracle_T:.2f},{avg_oracle_D:.2f},{avg_oracle_S:.2f}\n")
-                
+
+                # Best-of-5 Average (best actual outcome within model's predicted Top-5)
+                avg_best5_T = np.mean([d["best5_T"] for d in scenario_summary_data])
+                avg_best5_D = np.mean([d["best5_D"] for d in scenario_summary_data])
+                avg_best5_S = np.mean([d["best5_S"] for d in scenario_summary_data])
+                f.write(f"Best-of-5 Average,,{avg_best5_T:.2f},{avg_best5_D:.2f},{avg_best5_S:.2f}\n")
+
                 # Averages by model count
                 max_m = max(d["m_count"] for d in scenario_summary_data) if scenario_summary_data else 0
                 for n in range(max_m, 2, -1):
@@ -1415,6 +1428,11 @@ def main():
                     p_D = np.mean([d["pred_D"] for d in subset])
                     p_S = np.mean([d["pred_S"] for d in subset])
                     f.write(f"Average (>= {n} models),,{p_T:.2f},{p_D:.2f},{p_S:.2f}\n")
+
+                    b5_T = np.mean([d["best5_T"] for d in subset])
+                    b5_D = np.mean([d["best5_D"] for d in subset])
+                    b5_S = np.mean([d["best5_S"] for d in subset])
+                    f.write(f"Best-of-5 Average (>= {n} models),,{b5_T:.2f},{b5_D:.2f},{b5_S:.2f}\n")
                 
                 # Overall Average
                 avg_pred_T = np.mean([d["pred_T"] for d in scenario_summary_data])

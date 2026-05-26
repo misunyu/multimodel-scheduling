@@ -100,7 +100,7 @@ def main():
                ncol=4, fontsize=5.5, frameon=False)
     
     plt.tight_layout(rect=[0, 0, 1, 0.90])
-    plt.savefig(output_path)
+    plt.savefig(output_path, bbox_inches='tight', pad_inches=0.02)
     print(f"Line graph saved to {output_path}")
 
     # CSV 파일로 저장

@@ -105,13 +105,14 @@ def main():
                         color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.3)
 
         if i == 0:
-            ax.set_ylabel('Score', fontsize=10)
+            ax.set_ylabel('Score', fontsize=12)
         else:
-            ax.set_ylabel(title, fontsize=10)
+            ax.set_ylabel(title, fontsize=12)
         # ax.set_title(title, fontsize=12)
         ax.set_xticks(x)
-        ax.set_xticklabels(alphas, fontsize=9)
-        ax.set_xlabel('Alpha', fontsize=10)
+        ax.set_xticklabels(alphas, fontsize=11)
+        ax.tick_params(axis='y', labelsize=11)
+        ax.set_xlabel('Alpha', fontsize=12)
         
         ax.grid(axis='y', linestyle='--', alpha=0.7, linewidth=0.15)
         
@@ -127,7 +128,7 @@ def main():
 
     # Global legend at the bottom
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2, fontsize=10, frameon=False)
+    fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2, fontsize=12, frameon=False)
 
     plt.tight_layout(rect=[0, 0.08, 1, 1.0]) 
     plt.savefig(output_path)

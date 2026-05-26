@@ -5,6 +5,17 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+def compute_score(item, alpha):
+    """Score under the alpha objective: throughput_norm - alpha * drop_rate_norm.
+    Falls back to the stored 'score' field if derived norms are unavailable."""
+    derived = item.get("derived", {}) or {}
+    t = derived.get("throughput_norm")
+    d = derived.get("drop_rate_norm")
+    if t is None or d is None:
+        return item.get("score")
+    return round(float(t) - alpha * float(d), 2)
+
+
 def get_single_model_scores(results_dir, pattern="*_x3.json"):
     scores = {} # (model_name, execution) -> score
     
@@ -136,12 +147,15 @@ def main():
     parser.add_argument("--test_schedules_csv", default="xgboost_model/dataset/gpu/test_schedules_x3.csv")
     parser.add_argument("--output_csv", default="latency_based_best_results.csv")
     parser.add_argument("--pattern", default="*_x3.json", help="Pattern to match performance json files")
+    parser.add_argument("--alpha", type=float, default=0.2,
+                        help="Objective weight: score = throughput_norm - alpha * drop_rate_norm")
     args = parser.parse_args()
 
     results_recompute_dir = args.results_recompute_dir
     test_schedules_csv = args.test_schedules_csv
     output_csv = args.output_csv
     pattern = args.pattern
+    alpha = args.alpha
     
     print("Collecting single model scores...")
     model_scores = get_single_model_scores(results_recompute_dir, pattern)
@@ -202,7 +216,9 @@ def main():
         best_actual_combs = []
         max_actual_score = -float('inf')
         for c_name, p_item in sched_perf.items():
-            actual_score = p_item.get('score', -float('inf'))
+            actual_score = compute_score(p_item, alpha)
+            if actual_score is None:
+                actual_score = -float('inf')
             if np.isclose(actual_score, max_actual_score, atol=1e-7):
                 best_actual_combs.append(c_name)
             elif actual_score > max_actual_score:
@@ -282,7 +298,7 @@ def main():
             'best_combination': display_comb,
             'normalized_throughput': derived.get('throughput_norm'),
             'drop_rate': derived.get('drop_rate_norm'),
-            'score': perf_item.get('score'),
+            'score': compute_score(perf_item, alpha),
             'models_count': models_count
         })
             

@@ -105,17 +105,18 @@ def main():
     bar2 = plt.bar(x + width/2, drop_vals, width, label='Normalized Drop Rate',
                    color='lightcoral', alpha=0.5, hatch='..', edgecolor='black', linewidth=0.5)
 
-    plt.ylabel('Normalized Throughput and Drop Rate')
-    plt.xticks(x, labels, fontsize=8)
-    plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=8, frameon=False)
-    
+    plt.ylabel('Normalized Throughput and Drop Rate', fontsize=11)
+    plt.xticks(x, labels, fontsize=10)
+    plt.yticks(fontsize=10)
+    plt.legend(loc='lower center', bbox_to_anchor=(0.5, 0.98), ncol=2, fontsize=10, frameon=False)
+
     plt.ylim(0, 1.2)
-    
+
     def autolabel(rects):
         for rect in rects:
             height = rect.get_height()
             plt.text(rect.get_x() + rect.get_width()/2., height,
-                     f'{height:.2f}', ha='center', va='bottom', fontsize=8)
+                     f'{height:.2f}', ha='center', va='bottom', fontsize=10)
 
     autolabel(bar1)
     autolabel(bar2)
