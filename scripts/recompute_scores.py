@@ -27,7 +27,7 @@ def recompute_scores(input_dir, output_dir):
         dmax = 0.0
         
         for entry in data_content['data']:
-            total_throughput = entry.get('total', {}).get('total_throughput_fps', 0.0)
+            total_throughput = sum(float(mv.get('throughput_fps', 0) or 0) for mv in (entry.get('models', {}) or {}).values())
             drop_rate = entry.get('derived', {}).get('drop_rate_fps', 0.0)
             
             if total_throughput > fmax:
@@ -46,7 +46,7 @@ def recompute_scores(input_dir, output_dir):
         best_deployments = {alpha: {'score': -float('inf'), 'comb': None} for alpha in alphas}
         
         for entry in data_content['data']:
-            total_throughput = entry.get('total', {}).get('total_throughput_fps', 0.0)
+            total_throughput = sum(float(mv.get('throughput_fps', 0) or 0) for mv in (entry.get('models', {}) or {}).values())
             drop_rate = entry.get('derived', {}).get('drop_rate_fps', 0.0)
             
             # Calculate normalized values

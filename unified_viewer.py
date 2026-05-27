@@ -1658,25 +1658,18 @@ class UnifiedViewer(QMainWindow):
                 "view4": (view4_avg_fps, view4_avg_infer_time, view4_infer_count, view4_model, view4_mode, view4_wait, int(drop_map.get("view4", 0))),
             }
 
-            # Calculate total throughput for scheduled views (with headless later)
-            total_fps = sum(per_view_stats[v][0] for v in scheduled_views)
+            # Minimal ACCV schema: timestamp + window + combination + per-view metrics.
+            # Derived aggregates (total/avg throughput, per-device rollups) are intentionally
+            # omitted — they can be recomputed from `models` at analysis time.
             scheduled_count = len(scheduled_views)
-            total_avg_fps = total_fps / scheduled_count if scheduled_count > 0 else 0.0
-
-            # Prepare throughput data including all scheduled views (even if 0 inferences)
             throughput_data = {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "window_sec": float(self.window_duration_sec) if self.window_duration_sec is not None else None,
                 "combination": self.current_combination,
                 "models": {},
-                "total": {
-                    "total_throughput_fps": round(total_fps, 2),
-                    "avg_throughput_fps": round(total_avg_fps, 2)
-                }
             }
             
             # Add all scheduled views to the models dictionary (include zeros if no inferences)
-            devices_used = set()
             for v in scheduled_views:
                 avg_fps, avg_time, infer_cnt, model_name, exec_mode, avg_wait_ms, dropped = per_view_stats[v]
                 throughput_data["models"][v] = {
@@ -1688,7 +1681,6 @@ class UnifiedViewer(QMainWindow):
                     "avg_wait_to_preprocess_ms": round(avg_wait_ms or 0.0, 2),
                     "dropped_frames_due_to_full_queue": int(dropped or 0)
                 }
-                devices_used.add(exec_mode)
 
             # Include headless jobs (no views) into models and totals
             try:
@@ -1712,9 +1704,6 @@ class UnifiedViewer(QMainWindow):
                     avg_time = (sum_infer_ms / count) if count > 0 else 0.0
                     avg_wait_ms = (sum_wait_ms / wait_count) if wait_count > 0 else 0.0
                     avg_fps = (count / elapsed) if elapsed > 0 else 0.0
-                    # Update totals (headless contributes to total throughput)
-                    total_fps += avg_fps
-                    # Models entry uses the headless id as key
                     throughput_data["models"][hid] = {
                         "model": model_name,
                         "execution": exec_mode,
@@ -1724,25 +1713,11 @@ class UnifiedViewer(QMainWindow):
                         "avg_wait_to_preprocess_ms": round(avg_wait_ms or 0.0, 2),
                         "dropped_frames_due_to_full_queue": 0
                     }
-                    devices_used.add(exec_mode)
-                # Recompute average throughput across all scheduled entities (views + headless)
-                total_entities = scheduled_count + len(headless_ids)
-                total_avg_fps = total_fps / total_entities if total_entities > 0 else 0.0
-                # Reflect updated totals
-                throughput_data["total"]["total_throughput_fps"] = round(total_fps, 2)
-                throughput_data["total"]["avg_throughput_fps"] = round(total_avg_fps, 2)
             except Exception as e:
                 try:
                     print(f"[Save Throughput] Warning: failed to include headless metrics: {e}")
                 except Exception:
                     pass
-
-            # Compute per-device queue metrics with fallback when timing logs are unavailable
-            try:
-                device_metrics = self._get_device_metrics_default(devices_used, per_view_stats, scheduled_views)
-                throughput_data["devices"] = device_metrics
-            except Exception as e:
-                print(f"[Save Throughput] Warning: failed to compute device metrics: {e}")
             
             # Determine if the current combination is the first schedule in the YAML
             # BUT: if results_path was explicitly set by an external executor, we should ALWAYS append

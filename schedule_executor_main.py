@@ -246,9 +246,10 @@ class ScheduleExecutor:
 
             # ScheduleExecutor._write_best_header() 내부
             def _metrics(d):
-                # 1) Total FPS
+                # 1) Total FPS — sum per-view throughput from `models` (total/ block removed)
                 try:
-                    total_fps = float(d.get('total', {}).get('total_throughput_fps', 0) or 0)
+                    models = d.get('models', {}) or {}
+                    total_fps = sum(float(mv.get('throughput_fps', 0) or 0) for mv in models.values())
                 except Exception:
                     total_fps = 0.0
 
