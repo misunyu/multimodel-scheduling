@@ -27,6 +27,21 @@ from model_processors import (
     run_resnet_npu_process
 )
 
+
+def _is_yolo(model_name) -> bool:
+    """True if the logical model name belongs to the YOLO family."""
+    return "yolo" in str(model_name or "").lower()
+
+
+def _parse_npu_id(execution: str) -> int:
+    """Map execution strings 'npu', 'npu0', 'npu1' -> NPU device index (default 0)."""
+    s = str(execution or "").lower()
+    if s in ("npu", "npu0"):
+        return 0
+    if s == "npu1":
+        return 1
+    return 0
+
 class InfoWindow(QWidget):
     """Main window for displaying system and model information."""
     
@@ -545,7 +560,7 @@ class UnifiedViewer(QMainWindow):
     def initialize_processes(self):
         """Initialize and start model workers (single-process, multi-thread)."""
         # Start video reader thread only if any model requires YOLO video (yolov4)
-        need_video = any("yolov4" in (cfg or {}).get("model", "") for cfg in self.model_settings.values())
+        need_video = any(_is_yolo((cfg or {}).get("model", "")) for cfg in self.model_settings.values())
         self.video_reader_proc = None
         if need_video:
             self.video_reader_proc = Thread(
@@ -583,48 +598,37 @@ class UnifiedViewer(QMainWindow):
             shutdown_event = self.headless_shutdown_events[hid]
 
             # Register into yolo/resnet sets so feeders can send inputs
-            if "yolov4" in model:
+            exec_lower = str(execution or "cpu").lower()
+            if _is_yolo(model):
                 self.yolo_views.add(hid)
-                if execution == "gpu":
-                    process = Thread(
-                        target=run_yolo_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid, model),
-                        daemon=True,
-                    )
-                elif execution in ("npu0", "npu1"):
-                    print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {hid} ({model}).")
-                    process = Thread(
-                        target=run_yolo_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid, model),
-                        daemon=True,
-                    )
+                if exec_lower == "gpu":
+                    process = Thread(target=run_yolo_gpu_process,
+                                     args=(frame_queue, output_queue, shutdown_event, hid, model),
+                                     daemon=True)
+                elif exec_lower.startswith("npu"):
+                    process = Thread(target=run_yolo_npu_process,
+                                     args=(frame_queue, output_queue, shutdown_event,
+                                           _parse_npu_id(exec_lower), hid, model),
+                                     daemon=True)
                 else:
-                    process = Thread(
-                        target=run_yolo_cpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
-                        daemon=True,
-                    )
+                    process = Thread(target=run_yolo_cpu_process,
+                                     args=(frame_queue, output_queue, shutdown_event, hid, model),
+                                     daemon=True)
             else:
                 self.resnet_views.add(hid)
-                if execution == "gpu":
-                    process = Thread(
-                        target=run_resnet_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
-                        daemon=True,
-                    )
-                elif execution in ("npu0", "npu1"):
-                    print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {hid}.")
-                    process = Thread(
-                        target=run_resnet_gpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
-                        daemon=True,
-                    )
+                if exec_lower == "gpu":
+                    process = Thread(target=run_resnet_gpu_process,
+                                     args=(frame_queue, output_queue, shutdown_event, hid, model),
+                                     daemon=True)
+                elif exec_lower.startswith("npu"):
+                    process = Thread(target=run_resnet_npu_process,
+                                     args=(frame_queue, output_queue, shutdown_event,
+                                           _parse_npu_id(exec_lower), hid, model),
+                                     daemon=True)
                 else:
-                    process = Thread(
-                        target=run_resnet_cpu_process,
-                        args=(frame_queue, output_queue, shutdown_event, hid),
-                        daemon=True,
-                    )
+                    process = Thread(target=run_resnet_cpu_process,
+                                     args=(frame_queue, output_queue, shutdown_event, hid, model),
+                                     daemon=True)
             process.start()
             self.headless_processes.append(process)
         
@@ -760,55 +764,45 @@ class UnifiedViewer(QMainWindow):
         output_queue = getattr(self, f"{view_name}_output_queue") if view_name in ["view1", "view2"] else getattr(self, f"{view_name}_result_queue")
         shutdown_event = getattr(self, f"{view_name}_shutdown_event")
         
-        if "yolov4" in model:
-            # YOLOv4 model
+        exec_lower = str(execution or "cpu").lower()
+        if _is_yolo(model):
             self.yolo_views.add(view_name)
-            if execution == "gpu":
+            if exec_lower == "gpu":
                 print(f"[UnifiedViewer] Starting {view_name} with {model} GPU (thread)")
-                process = Thread(
-                    target=run_yolo_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name, model),
-                    daemon=True,
-                )
-            elif execution in ("npu0", "npu1"):
-                # NPU execution is deprecated; fall back to GPU to align with new policy
-                print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {view_name} ({model}).")
-                process = Thread(
-                    target=run_yolo_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name, model),
-                    daemon=True,
-                )
+                process = Thread(target=run_yolo_gpu_process,
+                                 args=(frame_queue, output_queue, shutdown_event, view_name, model),
+                                 daemon=True)
+            elif exec_lower.startswith("npu"):
+                npu_id = _parse_npu_id(exec_lower)
+                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id} (thread)")
+                process = Thread(target=run_yolo_npu_process,
+                                 args=(frame_queue, output_queue, shutdown_event,
+                                       npu_id, view_name, model),
+                                 daemon=True)
             else:
                 print(f"[UnifiedViewer] Starting {view_name} with {model} CPU (thread)")
-                process = Thread(
-                    target=run_yolo_cpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
-                    daemon=True,
-                )
+                process = Thread(target=run_yolo_cpu_process,
+                                 args=(frame_queue, output_queue, shutdown_event, view_name, model),
+                                 daemon=True)
         else:
-            # ResNet model
             self.resnet_views.add(view_name)
-            if execution == "gpu":
+            if exec_lower == "gpu":
                 print(f"[UnifiedViewer] Starting {view_name} with {model} GPU (thread)")
-                process = Thread(
-                    target=run_resnet_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
-                    daemon=True,
-                )
-            elif execution in ("npu0", "npu1"):
-                print(f"[UnifiedViewer] Warning: execution={execution} is deprecated. Falling back to GPU for {view_name} ({model}).")
-                process = Thread(
-                    target=run_resnet_gpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
-                    daemon=True,
-                )
+                process = Thread(target=run_resnet_gpu_process,
+                                 args=(frame_queue, output_queue, shutdown_event, view_name, model),
+                                 daemon=True)
+            elif exec_lower.startswith("npu"):
+                npu_id = _parse_npu_id(exec_lower)
+                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id} (thread)")
+                process = Thread(target=run_resnet_npu_process,
+                                 args=(frame_queue, output_queue, shutdown_event,
+                                       npu_id, view_name, model),
+                                 daemon=True)
             else:
                 print(f"[UnifiedViewer] Starting {view_name} with {model} CPU (thread)")
-                process = Thread(
-                    target=run_resnet_cpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
-                    daemon=True,
-                )
+                process = Thread(target=run_resnet_cpu_process,
+                                 args=(frame_queue, output_queue, shutdown_event, view_name, model),
+                                 daemon=True)
         
         setattr(self, f"{view_name}_process", process)
         process.start()
@@ -855,7 +849,7 @@ class UnifiedViewer(QMainWindow):
         """Initialize and start view handler threads."""
         # View1 handler
         view1_model = self.model_settings.get("view1", {}).get("model", "")
-        if "yolov4" in view1_model:
+        if _is_yolo(view1_model):
             self.view1_handler = YoloViewHandler(
                 "view1",
                 self.model_settings,
@@ -879,7 +873,7 @@ class UnifiedViewer(QMainWindow):
         
         # View2 handler
         view2_model = self.model_settings.get("view2", {}).get("model", "")
-        if "yolov4" in view2_model:
+        if _is_yolo(view2_model):
             self.view2_handler = YoloViewHandler(
                 "view2",
                 self.model_settings,
@@ -903,7 +897,7 @@ class UnifiedViewer(QMainWindow):
         
         # View3 handler
         view3_model = self.model_settings.get("view3", {}).get("model", "")
-        if "yolov4" in view3_model:
+        if _is_yolo(view3_model):
             self.view3_handler = YoloViewHandler(
                 "view3",
                 self.model_settings,
@@ -927,7 +921,7 @@ class UnifiedViewer(QMainWindow):
         
         # View4 handler
         view4_model = self.model_settings.get("view4", {}).get("model", "")
-        if "yolov4" in view4_model:
+        if _is_yolo(view4_model):
             self.view4_handler = YoloViewHandler(
                 "view4",
                 self.model_settings,

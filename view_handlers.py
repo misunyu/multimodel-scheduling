@@ -118,9 +118,25 @@ class YoloViewHandler(ViewHandler):
             
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
-                # For YOLO models, the result queue contains (frame, infer_time[, wait_ms])
                 item = self.result_queue.get(timeout=1)
-                if isinstance(item, tuple) and len(item) == 3:
+                if isinstance(item, dict):
+                    frame = item.get("frame")
+                    timing = item.get("timing_ms", {}) or {}
+                    infer_time = float(timing.get("infer", 0.0))
+                    wait_ms = float(timing.get("wait", 0.0))
+                    detections = item.get("result", [])
+                    if frame is not None and isinstance(detections, list) and detections:
+                        import cv2
+                        frame = frame.copy()
+                        for det in detections:
+                            try:
+                                x1, y1, x2, y2, score, cls = det
+                            except Exception:
+                                continue
+                            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                            cv2.putText(frame, f"{int(cls)}:{score:.2f}", (int(x1), max(int(y1) - 4, 12)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+                elif isinstance(item, tuple) and len(item) == 3:
                     frame, infer_time, wait_ms = item
                 else:
                     frame, infer_time = item
@@ -169,8 +185,16 @@ class ResNetViewHandler(ViewHandler):
             
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
-                # For ResNet models, the result queue contains (frame, class_name, infer_time)
-                frame, class_name, infer_time = self.result_queue.get(timeout=1)
+                item = self.result_queue.get(timeout=1)
+                if isinstance(item, dict):
+                    frame = item.get("frame")
+                    timing = item.get("timing_ms", {}) or {}
+                    infer_time = float(timing.get("infer", 0.0))
+                    res = item.get("result", []) or []
+                    class_name = (res[0][0] if isinstance(res, list) and res and isinstance(res[0], (list, tuple))
+                                  else "")
+                else:
+                    frame, class_name, infer_time = item
             except queue.Empty:
                 continue
             except (EOFError, BrokenPipeError, OSError) as e:

@@ -129,8 +129,7 @@ def video_reader_process(video_path, frame_queue, shutdown_event, max_queue_size
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop
                 continue
             try:
-                if frame_queue.qsize() < max_queue_size:
-                    frame_queue.put((frame, time.time()), timeout=0.5)
+                frame_queue.put_nowait(frame)
             except queue.Full:
                 pass
             next_t += period
@@ -175,14 +174,18 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event,
                 t_post0 = time.time()
                 result = model.postprocess(raw, conf_thres=conf_thres, iou_thres=iou_thres)
                 t_end = time.time()
+                pre_ms = (t_inf0 - t_pre0) * 1000.0
+                inf_ms = (t_post0 - t_inf0) * 1000.0
+                post_ms = (t_end - t_post0) * 1000.0
+                wait_ms = ((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0
                 log_inference(pipeline="yolo", device=f"NPU{npu_id}", view=view_name,
                               model=model_name,
-                              preprocess_time_ms=(t_inf0 - t_pre0) * 1000.0,
-                              inference_time_ms=(t_post0 - t_inf0) * 1000.0,
-                              postprocess_time_ms=(t_end - t_post0) * 1000.0,
-                              wait_to_preprocess_ms=((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0)
+                              preprocess_time_ms=pre_ms, inference_time_ms=inf_ms,
+                              postprocess_time_ms=post_ms, wait_to_preprocess_ms=wait_ms)
                 output_queue.put({"view": view_name, "model": model_name,
-                                  "device": f"NPU{npu_id}", "frame": frame, "result": result})
+                                  "device": f"NPU{npu_id}", "frame": frame, "result": result,
+                                  "timing_ms": {"wait": wait_ms, "pre": pre_ms,
+                                                "infer": inf_ms, "post": post_ms}})
         finally:
             model.dispose()
     except Exception as e:
@@ -221,15 +224,19 @@ def run_resnet_npu_process(input_queue, output_queue, shutdown_event,
                 t_post0 = time.time()
                 result = model.postprocess(raw)
                 t_end = time.time()
+                pre_ms = (t_inf0 - t_pre0) * 1000.0
+                inf_ms = (t_post0 - t_inf0) * 1000.0
+                post_ms = (t_end - t_post0) * 1000.0
+                wait_ms = ((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0
                 log_inference(pipeline="resnet", device=f"NPU{npu_id}", view=view_name,
                               model=model_name,
-                              preprocess_time_ms=(t_inf0 - t_pre0) * 1000.0,
-                              inference_time_ms=(t_post0 - t_inf0) * 1000.0,
-                              postprocess_time_ms=(t_end - t_post0) * 1000.0,
-                              wait_to_preprocess_ms=((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0)
+                              preprocess_time_ms=pre_ms, inference_time_ms=inf_ms,
+                              postprocess_time_ms=post_ms, wait_to_preprocess_ms=wait_ms)
                 output_queue.put({"view": view_name, "model": model_name,
                                   "device": f"NPU{npu_id}", "frame": frame,
-                                  "result": result, "topk": topk})
+                                  "result": result, "topk": topk,
+                                  "timing_ms": {"wait": wait_ms, "pre": pre_ms,
+                                                "infer": inf_ms, "post": post_ms}})
         finally:
             model.dispose()
     except Exception as e:
@@ -265,14 +272,18 @@ def _run_yolo_ort(input_queue, output_queue, shutdown_event,
         t_post0 = time.time()
         result = _yolov8_postprocess(raw, meta, conf_thres=conf_thres, iou_thres=iou_thres)
         t_end = time.time()
+        pre_ms = (t_inf0 - t_pre0) * 1000.0
+        inf_ms = (t_post0 - t_inf0) * 1000.0
+        post_ms = (t_end - t_post0) * 1000.0
+        wait_ms = ((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0
         log_inference(pipeline="yolo", device=device, view=view_name,
                       model=model_name,
-                      preprocess_time_ms=(t_inf0 - t_pre0) * 1000.0,
-                      inference_time_ms=(t_post0 - t_inf0) * 1000.0,
-                      postprocess_time_ms=(t_end - t_post0) * 1000.0,
-                      wait_to_preprocess_ms=((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0)
+                      preprocess_time_ms=pre_ms, inference_time_ms=inf_ms,
+                      postprocess_time_ms=post_ms, wait_to_preprocess_ms=wait_ms)
         output_queue.put({"view": view_name, "model": model_name,
-                          "device": device, "frame": frame, "result": result})
+                          "device": device, "frame": frame, "result": result,
+                          "timing_ms": {"wait": wait_ms, "pre": pre_ms,
+                                        "infer": inf_ms, "post": post_ms}})
 
 
 def run_yolo_cpu_process(input_queue, output_queue, shutdown_event,
@@ -348,14 +359,18 @@ def _run_resnet_ort(input_queue, output_queue, shutdown_event,
         result = [(imagenet_classes[i] if i < len(imagenet_classes) else str(i),
                    float(probs[0, i])) for i in top_idx]
         t_end = time.time()
+        pre_ms = (t_inf0 - t_pre0) * 1000.0
+        inf_ms = (t_post0 - t_inf0) * 1000.0
+        post_ms = (t_end - t_post0) * 1000.0
+        wait_ms = ((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0
         log_inference(pipeline="resnet", device=device, view=view_name,
                       model=model_name,
-                      preprocess_time_ms=(t_inf0 - t_pre0) * 1000.0,
-                      inference_time_ms=(t_post0 - t_inf0) * 1000.0,
-                      postprocess_time_ms=(t_end - t_post0) * 1000.0,
-                      wait_to_preprocess_ms=((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0)
+                      preprocess_time_ms=pre_ms, inference_time_ms=inf_ms,
+                      postprocess_time_ms=post_ms, wait_to_preprocess_ms=wait_ms)
         output_queue.put({"view": view_name, "model": model_name,
-                          "device": device, "frame": frame, "result": result})
+                          "device": device, "frame": frame, "result": result,
+                          "timing_ms": {"wait": wait_ms, "pre": pre_ms,
+                                        "infer": inf_ms, "post": post_ms}})
 
 
 def run_resnet_cpu_process(input_queue, output_queue, shutdown_event,

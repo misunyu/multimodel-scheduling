@@ -1,367 +1,98 @@
-# model_schedules_g_m_r_t.yaml
-# Auto-generated configuration for model execution on CPU or GPU
+# ACCV 2026 schedule configurations.
+# Models are YOLOv8 (Mobilint .mxq on NPU, Ultralytics-exported ONNX on CPU/GPU)
+# + ResNet50 (Mobilint .mxq on NPU, torchvision-exported ONNX on CPU/GPU).
+#
+# Each combination is a dict of <id>: { model, execution, display, infps }.
+# execution ∈ {cpu, gpu, npu, npu0, npu1}.
+# display: view1..view4 (visible) or "none" (headless).
 
-# Target device file: target_device.yaml
-# Available devices:
-# - CPU: 1
-# - GPU: 1 (IDs: 0)
-
-# Available models:
-# - gpt2
-# - mnasnet
-# - tiny-llama-chat-onnx
-# - resnet50
-
-# Model-execution configurations with unique IDs
-
-combination_1:
-  gpt2_cpu:
-    display: none
+# All three devices running YOLOv8n in parallel — quickest sanity test
+# for cpu+gpu+npu coexistence. Each stream pulls frames at 30 FPS.
+combination_cpu_gpu_npu:
+  yolov8n_cpu:
+    model: yolov8n
     execution: cpu
-    intps: 160
-    model: gpt2
-  mnasnet_cpu:
     display: view1
+    infps: 30
+  yolov8n_gpu:
+    model: yolov8n
+    execution: gpu
+    display: view2
+    infps: 30
+  yolov8n_npu:
+    model: yolov8n
+    execution: npu
+    display: view3
+    infps: 30
+
+# Heterogeneous placement: scale up CPU/GPU models while keeping NPU light.
+combination_mixed_models:
+  yolov8s_cpu:
+    model: yolov8s
     execution: cpu
-    infps: 370
-    model: mnasnet
+    display: view1
+    infps: 15
+  yolov8m_gpu:
+    model: yolov8m
+    execution: gpu
+    display: view2
+    infps: 30
+  yolov8n_npu:
+    model: yolov8n
+    execution: npu
+    display: view3
+    infps: 30
+  resnet50_npu:
+    model: resnet50
+    execution: npu
+    display: none
+    infps: 60
+
+# NPU-only baseline (everything on Mobilint Aries).
+combination_all_npu:
+  yolov8n_npu:
+    model: yolov8n
+    execution: npu
+    display: view1
+    infps: 30
+  yolov8s_npu:
+    model: yolov8s
+    execution: npu
+    display: view2
+    infps: 30
+  resnet50_npu:
+    model: resnet50
+    execution: npu
+    display: view3
+    infps: 60
+
+# CPU-only baseline.
+combination_all_cpu:
+  yolov8n_cpu:
+    model: yolov8n
+    execution: cpu
+    display: view1
+    infps: 10
   resnet50_cpu:
-    display: view2
-    execution: cpu
-    infps: 73
     model: resnet50
-  tiny-llama-chat-onnx_cpu:
-    display: none
     execution: cpu
-    intps: 170
-    model: tiny-llama-chat-onnx
+    display: view2
+    infps: 30
 
-combination_10:
-  gpt2_gpu:
-    display: none
+# GPU-only baseline.
+combination_all_gpu:
+  yolov8n_gpu:
+    model: yolov8n
     execution: gpu
-    intps: 356
-    model: gpt2
-  mnasnet_cpu:
     display: view1
-    execution: cpu
-    infps: 370
-    model: mnasnet
+    infps: 30
+  yolov8s_gpu:
+    model: yolov8s
+    execution: gpu
+    display: view2
+    infps: 30
   resnet50_gpu:
-    display: view2
-    execution: gpu
-    infps: 50
     model: resnet50
-  tiny-llama-chat-onnx_cpu:
-    display: none
-    execution: cpu
-    intps: 170
-    model: tiny-llama-chat-onnx
-
-combination_11:
-  gpt2_gpu:
-    display: none
     execution: gpu
-    intps: 356
-    model: gpt2
-  mnasnet_cpu:
-    display: view1
-    execution: cpu
-    infps: 370
-    model: mnasnet
-  resnet50_cpu:
-    display: view2
-    execution: cpu
-    infps: 73
-    model: resnet50
-  tiny-llama-chat-onnx_gpu:
-    display: none
-    execution: gpu
-    intps: 104
-    model: tiny-llama-chat-onnx
-
-combination_12:
-  gpt2_gpu:
-    display: none
-    execution: gpu
-    intps: 356
-    model: gpt2
-  mnasnet_cpu:
-    display: view1
-    execution: cpu
-    infps: 370
-    model: mnasnet
-  resnet50_gpu:
-    display: view2
-    execution: gpu
-    infps: 50
-    model: resnet50
-  tiny-llama-chat-onnx_gpu:
-    display: none
-    execution: gpu
-    intps: 104
-    model: tiny-llama-chat-onnx
-
-combination_13:
-  gpt2_gpu:
-    display: none
-    execution: gpu
-    intps: 356
-    model: gpt2
-  mnasnet_gpu:
-    display: view1
-    execution: gpu
-    infps: 400
-    model: mnasnet
-  resnet50_cpu:
-    display: view2
-    execution: cpu
-    infps: 73
-    model: resnet50
-  tiny-llama-chat-onnx_cpu:
-    display: none
-    execution: cpu
-    intps: 170
-    model: tiny-llama-chat-onnx
-
-combination_14:
-  gpt2_gpu:
-    display: none
-    execution: gpu
-    intps: 356
-    model: gpt2
-  mnasnet_gpu:
-    display: view1
-    execution: gpu
-    infps: 400
-    model: mnasnet
-  resnet50_gpu:
-    display: view2
-    execution: gpu
-    infps: 50
-    model: resnet50
-  tiny-llama-chat-onnx_cpu:
-    display: none
-    execution: cpu
-    intps: 170
-    model: tiny-llama-chat-onnx
-
-combination_15:
-  gpt2_gpu:
-    display: none
-    execution: gpu
-    intps: 356
-    model: gpt2
-  mnasnet_gpu:
-    display: view1
-    execution: gpu
-    infps: 400
-    model: mnasnet
-  resnet50_cpu:
-    display: view2
-    execution: cpu
-    infps: 73
-    model: resnet50
-  tiny-llama-chat-onnx_gpu:
-    display: none
-    execution: gpu
-    intps: 104
-    model: tiny-llama-chat-onnx
-
-combination_16:
-  gpt2_gpu:
-    display: none
-    execution: gpu
-    intps: 356
-    model: gpt2
-  mnasnet_gpu:
-    display: view1
-    execution: gpu
-    infps: 400
-    model: mnasnet
-  resnet50_gpu:
-    display: view2
-    execution: gpu
-    infps: 50
-    model: resnet50
-  tiny-llama-chat-onnx_gpu:
-    display: none
-    execution: gpu
-    intps: 104
-    model: tiny-llama-chat-onnx
-
-combination_2:
-  gpt2_cpu:
-    display: none
-    execution: cpu
-    intps: 160
-    model: gpt2
-  mnasnet_cpu:
-    display: view1
-    execution: cpu
-    infps: 370
-    model: mnasnet
-  resnet50_gpu:
-    display: view2
-    execution: gpu
-    infps: 50
-    model: resnet50
-  tiny-llama-chat-onnx_cpu:
-    display: none
-    execution: cpu
-    intps: 170
-    model: tiny-llama-chat-onnx
-
-combination_3:
-  gpt2_cpu:
-    display: none
-    execution: cpu
-    intps: 160
-    model: gpt2
-  mnasnet_cpu:
-    display: view1
-    execution: cpu
-    infps: 370
-    model: mnasnet
-  resnet50_cpu:
-    display: view2
-    execution: cpu
-    infps: 73
-    model: resnet50
-  tiny-llama-chat-onnx_gpu:
-    display: none
-    execution: gpu
-    intps: 104
-    model: tiny-llama-chat-onnx
-
-combination_4:
-  gpt2_cpu:
-    display: none
-    execution: cpu
-    intps: 160
-    model: gpt2
-  mnasnet_cpu:
-    display: view1
-    execution: cpu
-    infps: 370
-    model: mnasnet
-  resnet50_gpu:
-    display: view2
-    execution: gpu
-    infps: 50
-    model: resnet50
-  tiny-llama-chat-onnx_gpu:
-    display: none
-    execution: gpu
-    intps: 104
-    model: tiny-llama-chat-onnx
-
-combination_5:
-  gpt2_cpu:
-    display: none
-    execution: cpu
-    intps: 160
-    model: gpt2
-  mnasnet_gpu:
-    display: view1
-    execution: gpu
-    infps: 400
-    model: mnasnet
-  resnet50_cpu:
-    display: view2
-    execution: cpu
-    infps: 73
-    model: resnet50
-  tiny-llama-chat-onnx_cpu:
-    display: none
-    execution: cpu
-    intps: 170
-    model: tiny-llama-chat-onnx
-
-combination_6:
-  gpt2_cpu:
-    display: none
-    execution: cpu
-    intps: 160
-    model: gpt2
-  mnasnet_gpu:
-    display: view1
-    execution: gpu
-    infps: 400
-    model: mnasnet
-  resnet50_gpu:
-    display: view2
-    execution: gpu
-    infps: 50
-    model: resnet50
-  tiny-llama-chat-onnx_cpu:
-    display: none
-    execution: cpu
-    intps: 170
-    model: tiny-llama-chat-onnx
-
-combination_7:
-  gpt2_cpu:
-    display: none
-    execution: cpu
-    intps: 160
-    model: gpt2
-  mnasnet_gpu:
-    display: view1
-    execution: gpu
-    infps: 400
-    model: mnasnet
-  resnet50_cpu:
-    display: view2
-    execution: cpu
-    infps: 73
-    model: resnet50
-  tiny-llama-chat-onnx_gpu:
-    display: none
-    execution: gpu
-    intps: 104
-    model: tiny-llama-chat-onnx
-
-combination_8:
-  gpt2_cpu:
-    display: none
-    execution: cpu
-    intps: 160
-    model: gpt2
-  mnasnet_gpu:
-    display: view1
-    execution: gpu
-    infps: 400
-    model: mnasnet
-  resnet50_gpu:
-    display: view2
-    execution: gpu
-    infps: 50
-    model: resnet50
-  tiny-llama-chat-onnx_gpu:
-    display: none
-    execution: gpu
-    intps: 104
-    model: tiny-llama-chat-onnx
-
-combination_9:
-  gpt2_gpu:
-    display: none
-    execution: gpu
-    intps: 356
-    model: gpt2
-  mnasnet_cpu:
-    display: view1
-    execution: cpu
-    infps: 370
-    model: mnasnet
-  resnet50_cpu:
-    display: view2
-    execution: cpu
-    infps: 73
-    model: resnet50
-  tiny-llama-chat-onnx_cpu:
-    display: none
-    execution: cpu
-    intps: 170
-    model: tiny-llama-chat-onnx
+    display: view3
+    infps: 60
