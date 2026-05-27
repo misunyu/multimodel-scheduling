@@ -146,6 +146,43 @@ def video_reader_process(video_path, frame_queue, shutdown_event, max_queue_size
 # YOLO — NPU (Mobilint mblt_model_zoo)
 # ---------------------------------------------------------------------------
 
+def _npu_yolo_detections(result, frame) -> list:
+    """Convert Mobilint Results object to CPU/GPU-style detection list.
+
+    NPU's `model.postprocess(...)` returns an `mblt_model_zoo` Results object
+    with `box_cls` shape (N, 6+n_extra) in letterbox/input coordinates. The
+    GUI view handler expects a plain list of (x1, y1, x2, y2, score, cls)
+    tuples in original frame coordinates, so we rescale here.
+    """
+    box_cls = getattr(result, "box_cls", None)
+    if box_cls is None or box_cls.shape[0] == 0:
+        return []
+    pre_cfg = getattr(result, "pre_cfg", {}) or {}
+    letterbox_cfg = pre_cfg.get("LetterBox", {}) if isinstance(pre_cfg, dict) else {}
+    img_size = letterbox_cfg.get("img_size", 640)
+    if isinstance(img_size, (list, tuple)):
+        in_h, in_w = int(img_size[0]), int(img_size[1] if len(img_size) > 1 else img_size[0])
+    else:
+        in_h = in_w = int(img_size)
+    h0, w0 = frame.shape[:2]
+    gain = min(in_h / h0, in_w / w0)
+    pad_x = (in_w - w0 * gain) / 2.0
+    pad_y = (in_h - h0 * gain) / 2.0
+
+    # box_cls may be a torch tensor; convert via numpy for a dependency-light path.
+    arr = box_cls.detach().cpu().numpy() if hasattr(box_cls, "detach") else np.asarray(box_cls)
+    xyxy = arr[:, :4].astype(np.float32, copy=True)
+    xyxy[:, [0, 2]] -= pad_x
+    xyxy[:, [1, 3]] -= pad_y
+    xyxy /= gain
+    np.clip(xyxy[:, [0, 2]], 0, w0, out=xyxy[:, [0, 2]])
+    np.clip(xyxy[:, [1, 3]], 0, h0, out=xyxy[:, [1, 3]])
+    scores = arr[:, 4].astype(np.float32)
+    classes = arr[:, 5].astype(np.int32)
+    return [(float(xyxy[i, 0]), float(xyxy[i, 1]), float(xyxy[i, 2]), float(xyxy[i, 3]),
+             float(scores[i]), int(classes[i])) for i in range(arr.shape[0])]
+
+
 def run_yolo_npu_process(input_queue, output_queue, shutdown_event,
                          npu_id: int = 0,
                          view_name: Optional[str] = None,
@@ -172,7 +209,8 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event,
                 t_inf0 = time.time()
                 raw = model(input_img)
                 t_post0 = time.time()
-                result = model.postprocess(raw, conf_thres=conf_thres, iou_thres=iou_thres)
+                raw_result = model.postprocess(raw, conf_thres=conf_thres, iou_thres=iou_thres)
+                detections = _npu_yolo_detections(raw_result, frame)
                 t_end = time.time()
                 pre_ms = (t_inf0 - t_pre0) * 1000.0
                 inf_ms = (t_post0 - t_inf0) * 1000.0
@@ -183,7 +221,7 @@ def run_yolo_npu_process(input_queue, output_queue, shutdown_event,
                               preprocess_time_ms=pre_ms, inference_time_ms=inf_ms,
                               postprocess_time_ms=post_ms, wait_to_preprocess_ms=wait_ms)
                 output_queue.put({"view": view_name, "model": model_name,
-                                  "device": f"NPU{npu_id}", "frame": frame, "result": result,
+                                  "device": f"NPU{npu_id}", "frame": frame, "result": detections,
                                   "timing_ms": {"wait": wait_ms, "pre": pre_ms,
                                                 "infer": inf_ms, "post": post_ms}})
         finally:

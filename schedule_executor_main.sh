@@ -59,10 +59,18 @@ if [[ ! -f "$SCHEDULE_FILE" && "$SCHEDULE_FILE" != */* ]]; then
   fi
 fi
 
-# Resolve Python interpreter for sudo: prefer system binary to avoid pyenv shims
-PY="/opt/.pyenv/shims/python3"
-if [[ ! -x "$PY" ]]; then
-  # Fallback if system path is different; s will use absolute path when provided
+# Resolve Python interpreter.
+# 1) Prefer the active virtualenv (.venv) so project deps like cv2/PyQt5 are available.
+# 2) Else prefer pyenv shim (used for sudo runs that need a stable absolute path).
+# 3) Else fall back to whatever python3 is on PATH.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+  PY="$SCRIPT_DIR/.venv/bin/python"
+elif [[ -x "/opt/.pyenv/shims/python3" ]]; then
+  PY="/opt/.pyenv/shims/python3"
+else
   PY="python3"
 fi
 
