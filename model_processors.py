@@ -1,936 +1,383 @@
+"""Model processing functions for the multimodel scheduling application.
+
+Rewritten for the ACCV 2026 (Mobilint MLA100) stack:
+  - NPU path uses mblt_model_zoo (Mobilint Aries .mxq), replacing the previous
+    Neubla `npu` module integration.
+  - CPU/GPU paths use ONNX Runtime against Ultralytics-exported YOLOv8 models
+    and a torchvision-exported ResNet50 (under models/onnx/).
+  - Function signatures are kept backward-compatible with unified_viewer.py,
+    so wiring changes are limited to model-name defaults.
 """
-Model processing functions for the multimodel scheduling application.
-"""
-import time
+
 import os
+import queue
+import time
+from typing import Optional
+
 import cv2
 import numpy as np
 import onnxruntime as ort
-import queue
 
-import npu
+from timing_utils import log_inference, log_model_load
+from utils import resolve_mxq_path, resolve_onnx_path
 
-# Import local modules
-from image_processing import (
-    yolo_preprocess_local, 
-    resnet50_preprocess_local, 
-    yolo_postprocess_cpu, 
-    yolo_postprocess_npu
-)
-
-# Modularized timing/logging utilities (moved to dedicated module)
-from timing_utils import log_model_load, log_inference
-from utils import resolve_cpu_model_onnx, resolve_npu_object_o
-
-# Load ImageNet class labels
 with open("imagenet_classes.txt", "r") as f:
     imagenet_classes = [line.strip() for line in f.readlines()]
 
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _drain_item(input_queue, timeout=1.0):
+    """Pop one item from `input_queue`, normalizing (frame, ts) vs frame."""
+    try:
+        item = input_queue.get(timeout=timeout)
+    except queue.Empty:
+        return None, None
+    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
+        return item[0], item[1]
+    return item, None
+
+
+def _ort_session(onnx_path: str, gpu: bool):
+    """Build an ONNX Runtime session. `gpu=True` requires CUDAExecutionProvider."""
+    so = ort.SessionOptions()
+    try:
+        so.log_severity_level = 3
+    except Exception:
+        pass
+    providers = ["CUDAExecutionProvider"] if gpu else ["CPUExecutionProvider"]
+    sess = ort.InferenceSession(onnx_path, sess_options=so, providers=providers)
+    if gpu and "CUDAExecutionProvider" not in sess.get_providers():
+        raise RuntimeError(f"CUDA EP unavailable for {onnx_path}")
+    return sess
+
+
+def _yolov8_letterbox(frame_bgr, size=640):
+    """Resize+pad BGR frame to (size, size) NCHW float32 [0,1] tensor."""
+    h0, w0 = frame_bgr.shape[:2]
+    r = min(size / h0, size / w0)
+    nh, nw = int(round(h0 * r)), int(round(w0 * r))
+    resized = cv2.resize(frame_bgr, (nw, nh))
+    canvas = np.full((size, size, 3), 114, dtype=np.uint8)
+    top, left = (size - nh) // 2, (size - nw) // 2
+    canvas[top:top + nh, left:left + nw] = resized
+    arr = canvas[..., ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
+    return np.ascontiguousarray(arr[None, ...]), (r, top, left)
+
+
+def _yolov8_postprocess(raw_out, meta, conf_thres=0.25, iou_thres=0.45):
+    """Decode YOLOv8 ONNX output (1, 84, N) → list[(x1,y1,x2,y2,score,cls)] in input coords."""
+    # raw_out[0] shape: (1, 4 + nc, N)
+    out = raw_out[0]
+    if out.ndim == 3 and out.shape[1] < out.shape[2]:
+        pred = out[0].transpose(1, 0)  # (N, 4+nc)
+    else:
+        pred = out[0]
+    boxes_xywh = pred[:, :4]
+    scores_all = pred[:, 4:]
+    cls_ids = scores_all.argmax(axis=1)
+    cls_scores = scores_all.max(axis=1)
+    keep = cls_scores >= conf_thres
+    boxes_xywh = boxes_xywh[keep]
+    cls_scores = cls_scores[keep]
+    cls_ids = cls_ids[keep]
+    if boxes_xywh.shape[0] == 0:
+        return []
+    # xywh -> xyxy
+    xy = boxes_xywh[:, :2]
+    wh = boxes_xywh[:, 2:]
+    x1y1 = xy - wh / 2.0
+    x2y2 = xy + wh / 2.0
+    xyxy = np.concatenate([x1y1, x2y2], axis=1)
+    # un-letterbox to original frame coords
+    r, top, left = meta
+    xyxy[:, [0, 2]] -= left
+    xyxy[:, [1, 3]] -= top
+    xyxy /= r
+    # NMS (torchvision)
+    try:
+        import torch
+        from torchvision.ops import nms
+        idx = nms(torch.from_numpy(xyxy).float(),
+                  torch.from_numpy(cls_scores).float(),
+                  iou_thres).cpu().numpy()
+    except Exception:
+        # naive fallback: keep top-300 by score
+        idx = np.argsort(-cls_scores)[:300]
+    return [(*xyxy[i].tolist(), float(cls_scores[i]), int(cls_ids[i])) for i in idx]
+
+
+# ---------------------------------------------------------------------------
+# Video reader (unchanged)
+# ---------------------------------------------------------------------------
+
 def video_reader_process(video_path, frame_queue, shutdown_event, max_queue_size=10):
-    """
-    Process for reading video frames and putting them in a queue.
-    
-    Args:
-        video_path: Path to the video file
-        frame_queue: Queue to put frames into
-        shutdown_event: Event to signal shutdown
-        max_queue_size: Maximum size of the queue
-    """
+    """Read frames from a video file and enqueue them with timestamps."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"[Video Reader ERROR] Cannot open video: {video_path}")
+        print(f"[video_reader] Failed to open {video_path}")
         return
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    period = 1.0 / fps
+    next_t = time.time()
+    try:
+        while not shutdown_event.is_set():
+            ok, frame = cap.read()
+            if not ok:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop
+                continue
+            try:
+                if frame_queue.qsize() < max_queue_size:
+                    frame_queue.put((frame, time.time()), timeout=0.5)
+            except queue.Full:
+                pass
+            next_t += period
+            sleep_for = next_t - time.time()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            else:
+                next_t = time.time()
+    finally:
+        cap.release()
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_delay = 1.0 / fps if fps > 0 else 1.0 / 30.0
+
+# ---------------------------------------------------------------------------
+# YOLO — NPU (Mobilint mblt_model_zoo)
+# ---------------------------------------------------------------------------
+
+def run_yolo_npu_process(input_queue, output_queue, shutdown_event,
+                         npu_id: int = 0,
+                         view_name: Optional[str] = None,
+                         model_name: str = "yolov8n",
+                         infer_mode: str = "global8",
+                         conf_thres: float = 0.25,
+                         iou_thres: float = 0.45):
+    """Run a YOLO detection model on the Mobilint Aries NPU."""
+    from runtime.npu_mobilint import build_model
+
+    try:
+        t0 = time.time()
+        model = build_model(model_name, task="detection", infer_mode=infer_mode)
+        load_ms = (time.time() - t0) * 1000.0
+        log_model_load(pipeline="yolo", device=f"NPU{npu_id}", view=view_name,
+                       model=model_name, model_load_time_ms=load_ms)
+        try:
+            while not shutdown_event.is_set():
+                frame, enq_ts = _drain_item(input_queue)
+                if frame is None:
+                    continue
+                t_pre0 = time.time()
+                input_img = model.preprocess(frame)
+                t_inf0 = time.time()
+                raw = model(input_img)
+                t_post0 = time.time()
+                result = model.postprocess(raw, conf_thres=conf_thres, iou_thres=iou_thres)
+                t_end = time.time()
+                log_inference(pipeline="yolo", device=f"NPU{npu_id}", view=view_name,
+                              model=model_name,
+                              preprocess_time_ms=(t_inf0 - t_pre0) * 1000.0,
+                              inference_time_ms=(t_post0 - t_inf0) * 1000.0,
+                              postprocess_time_ms=(t_end - t_post0) * 1000.0,
+                              wait_to_preprocess_ms=((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0)
+                output_queue.put({"view": view_name, "model": model_name,
+                                  "device": f"NPU{npu_id}", "frame": frame, "result": result})
+        finally:
+            model.dispose()
+    except Exception as e:
+        print(f"[YOLO NPU{npu_id} view={view_name}] FATAL: {type(e).__name__}: {e}")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# ResNet — NPU (Mobilint)
+# ---------------------------------------------------------------------------
+
+def run_resnet_npu_process(input_queue, output_queue, shutdown_event,
+                           npu_id: int = 0,
+                           view_name: Optional[str] = None,
+                           model_name: str = "resnet50",
+                           infer_mode: str = "global8",
+                           topk: int = 5):
+    """Run a ResNet classification model on the Mobilint Aries NPU."""
+    from runtime.npu_mobilint import build_model
+
+    try:
+        t0 = time.time()
+        model = build_model(model_name, task="classification", infer_mode=infer_mode)
+        load_ms = (time.time() - t0) * 1000.0
+        log_model_load(pipeline="resnet", device=f"NPU{npu_id}", view=view_name,
+                       model=model_name, model_load_time_ms=load_ms)
+        try:
+            while not shutdown_event.is_set():
+                frame, enq_ts = _drain_item(input_queue)
+                if frame is None:
+                    continue
+                t_pre0 = time.time()
+                input_img = model.preprocess(frame)
+                t_inf0 = time.time()
+                raw = model(input_img)
+                t_post0 = time.time()
+                result = model.postprocess(raw)
+                t_end = time.time()
+                log_inference(pipeline="resnet", device=f"NPU{npu_id}", view=view_name,
+                              model=model_name,
+                              preprocess_time_ms=(t_inf0 - t_pre0) * 1000.0,
+                              inference_time_ms=(t_post0 - t_inf0) * 1000.0,
+                              postprocess_time_ms=(t_end - t_post0) * 1000.0,
+                              wait_to_preprocess_ms=((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0)
+                output_queue.put({"view": view_name, "model": model_name,
+                                  "device": f"NPU{npu_id}", "frame": frame,
+                                  "result": result, "topk": topk})
+        finally:
+            model.dispose()
+    except Exception as e:
+        print(f"[ResNet NPU{npu_id} view={view_name}] FATAL: {type(e).__name__}: {e}")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# YOLO — CPU / GPU (ONNX Runtime)
+# ---------------------------------------------------------------------------
+
+def _run_yolo_ort(input_queue, output_queue, shutdown_event,
+                  view_name, model_name, *, gpu: bool,
+                  conf_thres=0.25, iou_thres=0.45):
+    device = "GPU" if gpu else "CPU"
+    onnx_path = resolve_onnx_path(model_name)
+    t0 = time.time()
+    sess = _ort_session(onnx_path, gpu=gpu)
+    inp_name = sess.get_inputs()[0].name
+    img_size = int(sess.get_inputs()[0].shape[2]) or 640
+    load_ms = (time.time() - t0) * 1000.0
+    log_model_load(pipeline="yolo", device=device, view=view_name,
+                   model=model_name, model_load_time_ms=load_ms)
 
     while not shutdown_event.is_set():
-        ret, frame = cap.read()
-        if not ret:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        frame, enq_ts = _drain_item(input_queue)
+        if frame is None:
             continue
+        t_pre0 = time.time()
+        input_arr, meta = _yolov8_letterbox(frame, size=img_size)
+        t_inf0 = time.time()
+        raw = sess.run(None, {inp_name: input_arr})
+        t_post0 = time.time()
+        result = _yolov8_postprocess(raw, meta, conf_thres=conf_thres, iou_thres=iou_thres)
+        t_end = time.time()
+        log_inference(pipeline="yolo", device=device, view=view_name,
+                      model=model_name,
+                      preprocess_time_ms=(t_inf0 - t_pre0) * 1000.0,
+                      inference_time_ms=(t_post0 - t_inf0) * 1000.0,
+                      postprocess_time_ms=(t_end - t_post0) * 1000.0,
+                      wait_to_preprocess_ms=((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0)
+        output_queue.put({"view": view_name, "model": model_name,
+                          "device": device, "frame": frame, "result": result})
 
-        if shutdown_event.is_set():
-            break
-        try:
-            # Avoid qsize() which may not be implemented on some platforms (e.g., macOS)
-            frame_queue.put_nowait(frame)
-        except queue.Full:
-            # Drop frame if queue is full to avoid blocking
-            pass
-        except (BrokenPipeError, EOFError, OSError) as e:
-            print(f"[Video Reader] Output queue closed: {e}. Stopping video reader.")
-            break
-        except Exception as e:
-            # Any other unexpected error on queue put: stop the reader to avoid crashing the app
-            print(f"[Video Reader] Unexpected put error: {e}. Stopping video reader.")
-            break
-        time.sleep(frame_delay)
 
-    cap.release()
-
-def run_yolo_cpu_process(input_queue, output_queue, shutdown_event, view_name=None):
-    """
-    Process for running YOLO model on CPU.
-    
-    Args:
-        input_queue: Queue to get input frames from
-        output_queue: Queue to put output results into
-        shutdown_event: Event to signal shutdown
-        view_name: Optional view identifier for logging
-    """
+def run_yolo_cpu_process(input_queue, output_queue, shutdown_event,
+                         view_name: Optional[str] = None,
+                         model_name: str = "yolov8n",
+                         conf_thres: float = 0.25,
+                         iou_thres: float = 0.45):
     try:
-        # Load the YOLO model
-        print(f"[YOLO CPU] Loading model...")
-        load_start = time.time()
-        # Create ONNX Runtime session with reduced log verbosity to suppress shape merge warnings
-        so = ort.SessionOptions()
-        # 0=VERBOSE,1=INFO,2=WARNING,3=ERROR,4=FATAL
-        so.log_severity_level = 3
-        try:
-            session = ort.InferenceSession(
-                resolve_cpu_model_onnx("yolov3_small"),
-                sess_options=so,
-                providers=["CPUExecutionProvider"]
-            )
-        except TypeError:
-            # Fallback for older onnxruntime without providers argument
-            session = ort.InferenceSession(
-                resolve_cpu_model_onnx("yolov3_small"),
-                sess_options=so
-            )
-        # Determine input/output dynamically
-        try:
-            inputs = session.get_inputs()
-            # Pick the 4D tensor input as image input if available
-            img_input = None
-            for inp in inputs:
-                shp = inp.shape
-                if isinstance(shp, (list, tuple)) and len(shp) == 4:
-                    img_input = inp
-                    break
-            if img_input is None and inputs:
-                img_input = inputs[0]
-            input_name = img_input.name if img_input else "images"
-            in_shape = img_input.shape if img_input else [1, 3, 608, 608]
-            # expect NCHW by default
-            input_w = int(in_shape[3]) if len(in_shape) == 4 and isinstance(in_shape[3], int) else 608
-            input_h = int(in_shape[2]) if len(in_shape) == 4 and isinstance(in_shape[2], int) else 608
-            # Detect optional image_shape input
-            image_shape_input = None
-            image_shape_dtype = np.float32
-            for inp in inputs:
-                if 'image_shape' in inp.name:
-                    image_shape_input = inp
-                    # map ORT type string to numpy dtype
-                    t = (inp.type or '').lower()
-                    if 'int64' in t:
-                        image_shape_dtype = np.int64
-                    elif 'int32' in t:
-                        image_shape_dtype = np.int32
-                    else:
-                        image_shape_dtype = np.float32
-                    break
-        except Exception:
-            input_name = "images"
-            input_w, input_h = 608, 608
-            image_shape_input = None
-            image_shape_dtype = np.float32
-        load_end = time.time()
-        load_time_ms = (load_end - load_start) * 1000.0
-        print(f"[YOLO CPU] Model loaded successfully")
-
-        # Log model load
-        log_model_load(
-            pipeline="yolo",
-            device="CPU",
-            view=view_name,
-            model="yolov3_small",
-            model_load_time_ms=load_time_ms,
-        )
-        
-        while not shutdown_event.is_set():
-            try:
-                item = input_queue.get(timeout=1)
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
-                    frame, enqueue_ts = item
-                else:
-                    frame = item
-                    enqueue_ts = None
-            except queue.Empty:
-                continue
-                
-            pre_s = time.time()
-            # Waiting time until preprocessing begins
-            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            input_tensor, meta = yolo_preprocess_local(frame, (input_w, input_h))
-            pre_e = time.time()
-            pre_ms = (pre_e - pre_s) * 1000.0
-            
-            try:
-                # Build input feed dict, include image_shape if required by model
-                feeds = {input_name: input_tensor}
-                if image_shape_input is not None:
-                    h0 = int(meta.get('orig_h', frame.shape[0]))
-                    w0 = int(meta.get('orig_w', frame.shape[1]))
-                    img_shape_val = np.array([[h0, w0]], dtype=image_shape_dtype)
-                    feeds[image_shape_input.name] = img_shape_val
-                infer_start = time.time()
-                output = session.run(None, feeds)
-                infer_end = time.time()
-                
-                infer_time_ms = (infer_end - infer_start) * 1000.0
-                
-                post_s = time.time()
-                result = yolo_postprocess_cpu(output, frame, meta)
-                post_e = time.time()
-                post_ms = (post_e - post_s) * 1000.0
-
-                # Log per-frame inference timing
-                log_inference(
-                    pipeline="yolo",
-                    device="CPU",
-                    view=view_name,
-                    model="yolov3_small",
-                    preprocess_time_ms=pre_ms,
-                    inference_time_ms=infer_time_ms,
-                    postprocess_time_ms=post_ms,
-                    wait_to_preprocess_ms=wait_ms,
-                )
-                
-                if shutdown_event.is_set():
-                    break
-                try:
-                    output_queue.put((result, infer_time_ms, wait_ms))
-                except (BrokenPipeError, EOFError, OSError) as e:
-                    print(f"[YOLO CPU] Output queue closed: {e}. Exiting process loop.")
-                    break
-                except Exception as e:
-                    print(f"[YOLO CPU] Unexpected put error: {e}. Exiting process loop.")
-                    break
-                
-            except Exception as e:
-                print(f"[YOLO CPU Process ERROR] {e}")
-                continue
-                
+        _run_yolo_ort(input_queue, output_queue, shutdown_event,
+                      view_name, model_name, gpu=False,
+                      conf_thres=conf_thres, iou_thres=iou_thres)
     except Exception as e:
-        print(f"[YOLO CPU Process ERROR] {e}")
+        print(f"[YOLO CPU view={view_name}] FATAL: {type(e).__name__}: {e}")
+        raise
 
-def run_resnet_cpu_process(input_queue, output_queue, shutdown_event, view_name=None):
-    """
-    Process for running ResNet model on CPU.
-    
-    Args:
-        image_dir: Directory containing images to process
-        output_queue: Queue to put output results into
-        shutdown_event: Event to signal shutdown
-        view_name: Optional view identifier for logging
-    """
+
+def run_yolo_gpu_process(input_queue, output_queue, shutdown_event,
+                         view_name: Optional[str] = None,
+                         model_name: str = "yolov8n",
+                         conf_thres: float = 0.25,
+                         iou_thres: float = 0.45):
     try:
-        # Load the ResNet model (CPU), align with eval_resnet50_imagenet.py
-        load_start = time.time()
-        so = ort.SessionOptions()
-        # be less chatty
-        try:
-            so.log_severity_level = 3
-        except Exception:
-            pass
-        # use reasonable threads on CPU
-        try:
-            so.intra_op_num_threads = max(1, (os.cpu_count() or 1))
-        except Exception:
-            pass
-        try:
-            session = ort.InferenceSession(
-                resolve_cpu_model_onnx("resnet50_big"),
-                sess_options=so,
-                providers=["CPUExecutionProvider"],
-            )
-        except TypeError:
-            # Fallback for older onnxruntime without providers argument
-            session = ort.InferenceSession(
-                resolve_cpu_model_onnx("resnet50_big"),
-                sess_options=so,
-            )
-        load_end = time.time()
-        load_time_ms = (load_end - load_start) * 1000.0
-
-        # Determine input/output names and expected layout dynamically (match eval script)
-        try:
-            inputs = session.get_inputs()
-            outputs = session.get_outputs()
-            input_name = inputs[0].name if inputs else "data"
-            output_name = outputs[0].name if outputs else None
-            input_shape = inputs[0].shape if inputs else None
-            # Heuristic for layout: NCHW if channel dim is 3 at index 1; NHWC if last dim is 3
-            layout = "NCHW"
-            if isinstance(input_shape, (list, tuple)) and len(input_shape) == 4:
-                c_dim = input_shape[1]
-                last_dim = input_shape[3]
-                if last_dim == 3 or (isinstance(last_dim, str) and str(last_dim).upper() in ("C", "CHANNEL", "CHANNELS")):
-                    layout = "NHWC"
-                elif c_dim == 3 or (isinstance(c_dim, str) and str(c_dim).upper() in ("C", "CHANNEL", "CHANNELS")):
-                    layout = "NCHW"
-            print(f"[ResNet CPU] Model IO - input_name={input_name}, output_name={output_name}, input_shape={input_shape}, layout={layout}")
-        except Exception as e:
-            print(f"[ResNet CPU] Warning: could not introspect model IO names: {e}")
-            input_name = "data"
-            output_name = None
-            layout = "NCHW"
-
-        # Log model load
-        log_model_load(
-            pipeline="resnet50",
-            device="CPU",
-            view=view_name,
-            model="resnet50_big",
-            model_load_time_ms=load_time_ms,
-        )
-        while not shutdown_event.is_set():
-            try:
-                item = input_queue.get(timeout=1)
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
-                    img, enqueue_ts = item
-                else:
-                    img = item
-                    enqueue_ts = None
-            except queue.Empty:
-                continue
-
-            pre_s = time.time()
-            # Waiting time until preprocessing begins (for parity with YOLO)
-            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            tensor_nchw = resnet50_preprocess_local(img)
-            # Adapt to model's expected layout
-            if layout == "NHWC":
-                input_tensor = np.transpose(tensor_nchw, (0, 2, 3, 1))
-            else:
-                input_tensor = tensor_nchw
-            pre_e = time.time()
-            pre_ms = (pre_e - pre_s) * 1000.0
-            
-            try:
-                infer_start = time.time()
-                outputs = session.run([output_name] if output_name else None, {input_name: input_tensor})
-                infer_end = time.time()
-                
-                infer_time_ms = (infer_end - infer_start) * 1000.0
-                
-                post_s = time.time()
-                logits = outputs[0]
-                # Handle shapes like (N,1000), (1,1000), or (1000,)
-                if logits.ndim == 2:
-                    if logits.shape[0] > 1:
-                        logits_arr = logits.mean(axis=0)
-                    else:
-                        logits_arr = logits[0]
-                else:
-                    logits_arr = np.squeeze(logits)
-                class_id = int(np.argmax(logits_arr))
-                class_name = imagenet_classes[class_id] if class_id < len(imagenet_classes) else f"Class ID: {class_id}"
-                cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                post_e = time.time()
-                post_ms = (post_e - post_s) * 1000.0
-
-                # Log per-frame inference timing
-                log_inference(
-                    pipeline="resnet50",
-                    device="CPU",
-                    view=view_name,
-                    model="resnet50_big",
-                    preprocess_time_ms=pre_ms,
-                    inference_time_ms=infer_time_ms,
-                    postprocess_time_ms=post_ms,
-                    wait_to_preprocess_ms=wait_ms,
-                )
-                
-                if shutdown_event.is_set():
-                    break
-                try:
-                    output_queue.put((img, class_name, infer_time_ms))
-                except (BrokenPipeError, EOFError, OSError) as e:
-                    print(f"[ResNet CPU] Output queue closed: {e}. Exiting process loop.")
-                    break
-                except Exception as e:
-                    print(f"[ResNet CPU] Unexpected put error: {e}. Exiting process loop.")
-                    break
-                
-            except Exception as e:
-                print(f"[ResNet CPU Process ERROR] {e}")
-                continue
-                
+        _run_yolo_ort(input_queue, output_queue, shutdown_event,
+                      view_name, model_name, gpu=True,
+                      conf_thres=conf_thres, iou_thres=iou_thres)
     except Exception as e:
-        print(f"[ResNet CPU Process ERROR] {e}")
+        print(f"[YOLO GPU view={view_name}] FATAL: {type(e).__name__}: {e}")
+        # Hard exit when GPU is requested but unavailable; matches old behavior.
+        shutdown_event.set()
+        os._exit(1)
 
-def run_yolo_npu_process(input_queue, output_queue, shutdown_event, npu_id=0, view_name=None, model_name="yolov3_small"):
-    """
-    Process for running YOLO model on NPU.
-    
-    Args:
-        input_queue: Queue to get input frames from
-        output_queue: Queue to put output results into
-        shutdown_event: Event to signal shutdown
-        npu_id: NPU device ID
-        view_name: Optional view identifier for logging
-    """
+
+# ---------------------------------------------------------------------------
+# ResNet — CPU / GPU (ONNX Runtime)
+# ---------------------------------------------------------------------------
+
+def _resnet_preprocess(frame_bgr, size=224):
+    h, w = frame_bgr.shape[:2]
+    r = min(h, w)
+    top, left = (h - r) // 2, (w - r) // 2
+    crop = frame_bgr[top:top + r, left:left + r]
+    resized = cv2.resize(crop, (size, size))
+    rgb = resized[..., ::-1].astype(np.float32) / 255.0
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    rgb = (rgb - mean) / std
+    arr = rgb.transpose(2, 0, 1)[None, ...].astype(np.float32)
+    return np.ascontiguousarray(arr)
+
+
+def _run_resnet_ort(input_queue, output_queue, shutdown_event,
+                    view_name, model_name, *, gpu: bool, topk=5):
+    device = "GPU" if gpu else "CPU"
+    onnx_path = resolve_onnx_path(model_name)
+    t0 = time.time()
+    sess = _ort_session(onnx_path, gpu=gpu)
+    inp_name = sess.get_inputs()[0].name
+    load_ms = (time.time() - t0) * 1000.0
+    log_model_load(pipeline="resnet", device=device, view=view_name,
+                   model=model_name, model_load_time_ms=load_ms)
+
+    while not shutdown_event.is_set():
+        frame, enq_ts = _drain_item(input_queue)
+        if frame is None:
+            continue
+        t_pre0 = time.time()
+        arr = _resnet_preprocess(frame)
+        t_inf0 = time.time()
+        logits = sess.run(None, {inp_name: arr})[0]
+        t_post0 = time.time()
+        probs = np.exp(logits - logits.max()); probs = probs / probs.sum()
+        top_idx = np.argsort(-probs[0])[:topk]
+        result = [(imagenet_classes[i] if i < len(imagenet_classes) else str(i),
+                   float(probs[0, i])) for i in top_idx]
+        t_end = time.time()
+        log_inference(pipeline="resnet", device=device, view=view_name,
+                      model=model_name,
+                      preprocess_time_ms=(t_inf0 - t_pre0) * 1000.0,
+                      inference_time_ms=(t_post0 - t_inf0) * 1000.0,
+                      postprocess_time_ms=(t_end - t_post0) * 1000.0,
+                      wait_to_preprocess_ms=((t_pre0 - enq_ts) * 1000.0) if enq_ts else 0.0)
+        output_queue.put({"view": view_name, "model": model_name,
+                          "device": device, "frame": frame, "result": result})
+
+
+def run_resnet_cpu_process(input_queue, output_queue, shutdown_event,
+                           view_name: Optional[str] = None,
+                           model_name: str = "resnet50",
+                           topk: int = 5):
     try:
-        # Import NPU-specific functions only when needed
-        from npu import (
-            initialize_driver, 
-            close_driver, 
-            send_receive_data_npu, 
-            yolo_prepare_onnx_model
-        )
-        
-        driver = None
-        try:
-            host_load_s = time.time()
-            front_sess, back_sess, (scale, zero_point) = yolo_prepare_onnx_model(
-                "../yolov3/yolov3_d53_mstrain-608_273e_coco_optim_opset12.neubla_u8_lwq_movingaverage.onnx"
-            )
-            host_load_e = time.time()
-            host_model_load_ms = (host_load_e - host_load_s) * 1000.0
-        except Exception as e:
-            print(f"[YOLO NPU INIT ERROR] npu_id = {npu_id}, Host model preparation failed: {e}")
-            raise
-
-        try:
-            npu_load_s = time.time()
-            # Select NPU binary based on the requested model (resolve legacy/new names)
-            npu_o_path = resolve_npu_object_o(model_name, part=1)
-            driver = initialize_driver(npu_id, npu_o_path)
-            npu_load_e = time.time()
-            npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
-        except Exception as e:
-            print(f"[YOLO NPU INIT ERROR] NPU driver initialization failed: {e}")
-            raise
-
-        # Log model load (host + NPU memory)
-        log_model_load(
-            pipeline="yolo",
-            device=f"NPU{npu_id}",
-            view=view_name,
-            model=model_name,
-            model_load_time_ms=host_model_load_ms,
-            npu_memory_load_time_ms=npu_memory_load_time_ms,
-        )
-
-
-        while not shutdown_event.is_set():
-            try:
-                item = input_queue.get(timeout=1)
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
-                    frame, enqueue_ts = item
-                else:
-                    frame = item
-                    enqueue_ts = None
-            except queue.Empty:
-                continue
-
-            pre_s = time.time()
-            # Waiting time until preprocessing begins
-            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            # Determine input size from front_sess
-            try:
-                finp = front_sess.get_inputs()[0]
-                fshape = finp.shape if finp else [1,3,608,608]
-                f_w = int(fshape[3]) if len(fshape)==4 and isinstance(fshape[3], int) else 608
-                f_h = int(fshape[2]) if len(fshape)==4 and isinstance(fshape[2], int) else 608
-            except Exception:
-                f_w, f_h = 608, 608
-            input_tensor, meta = yolo_preprocess_local(frame, (f_w, f_h))
-            pre_e = time.time()
-            pre_ms = (pre_e - pre_s) * 1000.0
-            infer_start = time.time()
-
-            try:
-                # Host front inference
-                front_output = front_sess.run(None, {"input": input_tensor})[0]
-                input_data = front_output.tobytes()
-            except Exception as e:
-                print(f"[YOLO NPU INFERENCE ERROR] Front session failed: {e}")
-                continue
-
-            try:
-                # Data transfer to/from NPU
-                raw_outputs = send_receive_data_npu(driver, input_data, 3 * f_w * f_h)
-                output_data = [np.frombuffer(buf, dtype=np.uint8) for buf in raw_outputs]
-            except Exception as e:
-                print(f"[YOLO NPU DATA TRANSFER ERROR] send/receive failed: {e}")
-                continue
-
-            try:
-                # Dequantization and back session
-                output_dequant_data = [
-                    (data.astype(np.float32) - zero_point[name]) * scale[name]
-                    for name, data in zip(
-                        ["onnx::Transpose_684_DequantizeLinear",
-                         "onnx::Transpose_688_DequantizeLinear",
-                         "onnx::Transpose_692_DequantizeLinear"],
-                        output_data
-                    )
-                ]
-
-                shape_dict = {
-                    "onnx::Transpose_684": (1, 255, 19, 19),
-                    "onnx::Transpose_688": (1, 255, 38, 38),
-                    "onnx::Transpose_692": (1, 255, 76, 76),
-                }
-
-                back_feeds = {}
-                for name, data in zip(shape_dict.keys(), output_dequant_data):
-                    needed_size = np.prod(shape_dict[name])
-                    if data.size < needed_size:
-                        print(f"[YOLO NPU BACKEND ERROR] insufficient data for {name}, expected {needed_size}, got {data.size}")
-                        raise ValueError("Invalid data size")
-                    back_feeds[name] = data[:needed_size].reshape(shape_dict[name])
-
-                output = back_sess.run(None, back_feeds)
-            except Exception as e:
-                print(f"[YOLO NPU BACKEND ERROR] {e}")
-                continue
-
-            infer_end = time.time()
-            post_s = time.time()
-            result_img, drawn_boxes = yolo_postprocess_npu(output, frame, meta)
-            post_e = time.time()
-            post_ms = (post_e - post_s) * 1000.0
-            
-            infer_time_ms = (infer_end - infer_start) * 1000.0
-            if drawn_boxes:
-                # Log per-frame inference timing only when we have valid detections
-                log_inference(
-                    pipeline="yolo",
-                    device=f"NPU{npu_id}",
-                    view=view_name,
-                    model=model_name,
-                    preprocess_time_ms=pre_ms,
-                    inference_time_ms=infer_time_ms,
-                    postprocess_time_ms=post_ms,
-                    wait_to_preprocess_ms=wait_ms,
-                )
-                output_queue.put((result_img, infer_time_ms, wait_ms))
-
+        _run_resnet_ort(input_queue, output_queue, shutdown_event,
+                        view_name, model_name, gpu=False, topk=topk)
     except Exception as e:
-        print(f"[YOLO NPU Process ERROR] {e}")
-    finally:
-        # Import close_driver only when needed
-        try:
-            from npu import close_driver
-            close_driver(driver)
-        except:
-            pass
+        print(f"[ResNet CPU view={view_name}] FATAL: {type(e).__name__}: {e}")
+        raise
 
-def run_resnet_npu_process(input_queue, output_queue, shutdown_event, npu_id=1, view_name=None):
-    """
-    Process for running ResNet model on NPU.
-    
-    Args:
-        image_dir: Directory containing images to process
-        output_queue: Queue to put output results into
-        shutdown_event: Event to signal shutdown
-        npu_id: NPU device ID
-        view_name: Optional view identifier for logging
-    """
+
+def run_resnet_gpu_process(input_queue, output_queue, shutdown_event,
+                           view_name: Optional[str] = None,
+                           model_name: str = "resnet50",
+                           topk: int = 5):
     try:
-        # Import NPU-specific functions only when needed
-        from npu import (
-            initialize_driver, 
-            close_driver, 
-            send_receive_data_npu, 
-            resnet50_prepare_onnx_model,
-            resnet50_preprocess
-        )
-        driver = None
-        try:
-            host_load_s = time.time()
-            front_sess, back_sess, params = resnet50_prepare_onnx_model(
-                "../resnet/resnet50-0676ba61_opset12.neubla_u8_lwq_percentile.onnx"
-            )
-            host_load_e = time.time()
-            host_model_load_ms = (host_load_e - host_load_s) * 1000.0
-        except Exception as e:
-            print(f"[ResNet NPU INIT ERROR] Host model preparation failed: {e}")
-            raise
-
-        scale = params['/0/avgpool/GlobalAveragePool_output_0_scale'] * params['0.fc.weight_scale']
-        zp_act = params['/0/avgpool/GlobalAveragePool_output_0_zero_point']
-        zp_w = params['0.fc.weight_zero_point']
-        scale_out = params['/0/fc/Gemm_output_0_scale']
-        zp_out = params['/0/fc/Gemm_output_0_zero_point']
-        weight_q = params['0.fc.weight_quantized'].T.astype(np.int32)
-
-        try:
-            npu_load_s = time.time()
-            driver = initialize_driver(npu_id, resolve_npu_object_o("resnet50_small", part=1))
-            npu_load_e = time.time()
-            npu_memory_load_time_ms = (npu_load_e - npu_load_s) * 1000.0
-        except Exception as e:
-            print(f"[ResNet NPU INIT ERROR] NPU driver initialization failed: {e}")
-            raise
-
-        # Log model load (host + NPU memory)
-        log_model_load(
-            pipeline="resnet50",
-            device=f"NPU{npu_id}",
-            view=view_name,
-            model="resnet50_small",
-            model_load_time_ms=host_model_load_ms,
-            npu_memory_load_time_ms=npu_memory_load_time_ms,
-        )
-
-        while not shutdown_event.is_set():
-            try:
-                item = input_queue.get(timeout=1)
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
-                    img, enqueue_ts = item
-                else:
-                    img = item
-                    enqueue_ts = None
-            except queue.Empty:
-                continue
-
-            pre_s = time.time()
-            # Waiting time until preprocessing begins
-            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            input_data = front_sess.run(None, {"input": resnet50_preprocess(img)})[0].tobytes()
-            pre_e = time.time()
-            pre_ms = (pre_e - pre_s) * 1000.0
-            infer_start = time.time()
-            try:
-                raw_outputs = send_receive_data_npu(driver, input_data, 3 * 224 * 224)
-                output_data = np.frombuffer(raw_outputs[0], dtype=np.uint8)
-            except Exception as e:
-                print(f"[ResNet NPU DATA TRANSFER ERROR] send/receive failed: {e}")
-                # Skip this frame and continue
-                continue
-
-            try:
-                back_output = back_sess.run(None, {"input": output_data.reshape(1, -1)})
-                output = back_output[0]
-                max_index = int(np.argmax(output))
-            except Exception as e:
-                # Fallback to manual computation if back session fails
-                output = np.matmul(output_data.astype(np.int32), weight_q)
-                output -= zp_act * np.sum(weight_q, axis=0)
-                output -= zp_w * np.sum(output_data, axis=0)
-                output += zp_act * zp_w
-                output = np.round(output * scale / scale_out) + zp_out
-                output = output.astype(np.uint8)
-                max_index = int(np.argmax(output))
-
-            infer_end = time.time()
-            post_s = time.time()
-            class_name = imagenet_classes[max_index] if max_index < len(imagenet_classes) else f"Class ID: {max_index}"
-            cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-            post_e = time.time()
-            post_ms = (post_e - post_s) * 1000.0
-
-            infer_ms = (infer_end - infer_start) * 1000.0
-            # Log per-frame inference timing
-            log_inference(
-                pipeline="resnet50",
-                device=f"NPU{npu_id}",
-                view=view_name,
-                model="resnet50_small",
-                preprocess_time_ms=pre_ms,
-                inference_time_ms=infer_ms,
-                postprocess_time_ms=post_ms,
-                wait_to_preprocess_ms=wait_ms,
-            )
-
-            output_queue.put((img, class_name, infer_ms))
-
+        _run_resnet_ort(input_queue, output_queue, shutdown_event,
+                        view_name, model_name, gpu=True, topk=topk)
     except Exception as e:
-        print(f"[ResNet NPU Process ERROR] {e}")
-    finally:
-        # Import close_driver only when needed
-        try:
-            from npu import close_driver
-            close_driver(driver)
-        except:
-            pass
-
-
-def run_yolo_gpu_process(input_queue, output_queue, shutdown_event, view_name=None, model_name="yolov3_small"):
-    """
-    Process for running YOLO model on GPU via ONNX Runtime CUDA EP.
-    CPU fallback is NOT allowed if execution:gpu is requested.
-    """
-    try:
-        print(f"[YOLO GPU] Loading model ({model_name})...")
-        load_start = time.time()
-        so = ort.SessionOptions()
-        try:
-            so.log_severity_level = 3
-        except Exception:
-            pass
-        
-        # We only use CUDAExecutionProvider and do NOT allow CPU fallback
-        providers = ["CUDAExecutionProvider"]
-        
-        try:
-            session = ort.InferenceSession(
-                "models/yolov3_small/model/yolov3_small.onnx" if model_name == "yolov3_small" else "models/yolov3_big/model/yolov3_big.onnx",
-                sess_options=so,
-                providers=providers,
-            )
-            # Strict check: if CUDA is not in active providers, it's a failure
-            if "CUDAExecutionProvider" not in session.get_providers():
-                raise RuntimeError(f"CUDAExecutionProvider not available for {model_name} in {view_name}")
-        except Exception as e:
-            print(f"\n[CRITICAL ERROR] Failed to load YOLO GPU model with CUDAExecutionProvider: {e}")
-            print("Terminating program as CPU fallback is disabled for GPU execution mode.\n")
-            # Signal shutdown and exit
-            shutdown_event.set()
-            os._exit(1) # Force exit the whole application
-        # Provider diagnostics
-        try:
-            avail = ort.get_available_providers()
-            active = session.get_providers()
-            print(f"[YOLO GPU] ORT providers available={avail} active(session)={active}")
-        except Exception as e:
-            print(f"[YOLO GPU] Provider diagnostics unavailable: {e}")
-        # Determine inputs
-        try:
-            inputs = session.get_inputs()
-            img_input = None
-            for inp in inputs:
-                shp = inp.shape
-                if isinstance(shp, (list, tuple)) and len(shp) == 4:
-                    img_input = inp
-                    break
-            if img_input is None and inputs:
-                img_input = inputs[0]
-            input_name = img_input.name if img_input else "images"
-            in_shape = img_input.shape if img_input else [1, 3, 608, 608]
-            input_w = int(in_shape[3]) if len(in_shape) == 4 and isinstance(in_shape[3], int) else 608
-            input_h = int(in_shape[2]) if len(in_shape) == 4 and isinstance(in_shape[2], int) else 608
-            image_shape_input = None
-            image_shape_dtype = np.float32
-            for inp in inputs:
-                if 'image_shape' in inp.name:
-                    image_shape_input = inp
-                    t = (inp.type or '').lower()
-                    if 'int64' in t:
-                        image_shape_dtype = np.int64
-                    elif 'int32' in t:
-                        image_shape_dtype = np.int32
-                    else:
-                        image_shape_dtype = np.float32
-                    break
-        except Exception:
-            input_name = "images"
-            input_w, input_h = 608, 608
-            image_shape_input = None
-            image_shape_dtype = np.float32
-        load_end = time.time()
-        load_time_ms = (load_end - load_start) * 1000.0
-        print(f"[YOLO GPU] Model loaded (providers={providers})")
-
-        log_model_load(
-            pipeline="yolo",
-            device="GPU",
-            view=view_name,
-            model=model_name,
-            model_load_time_ms=load_time_ms,
-        )
-
-        while not shutdown_event.is_set():
-            try:
-                item = input_queue.get(timeout=1)
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
-                    frame, enqueue_ts = item
-                else:
-                    frame = item
-                    enqueue_ts = None
-            except queue.Empty:
-                continue
-
-            pre_s = time.time()
-            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            input_tensor, meta = yolo_preprocess_local(frame, (input_w, input_h))
-            pre_e = time.time()
-            pre_ms = (pre_e - pre_s) * 1000.0
-
-            try:
-                feeds = {input_name: input_tensor}
-                if image_shape_input is not None:
-                    h0 = int(meta.get('orig_h', frame.shape[0]))
-                    w0 = int(meta.get('orig_w', frame.shape[1]))
-                    img_shape_val = np.array([[h0, w0]], dtype=image_shape_dtype)
-                    feeds[image_shape_input.name] = img_shape_val
-                infer_start = time.time()
-                output = session.run(None, feeds)
-                infer_end = time.time()
-
-                infer_time_ms = (infer_end - infer_start) * 1000.0
-
-                post_s = time.time()
-                result = yolo_postprocess_cpu(output, frame, meta)
-                post_e = time.time()
-                post_ms = (post_e - post_s) * 1000.0
-
-                log_inference(
-                    pipeline="yolo",
-                    device="GPU",
-                    view=view_name,
-                    model=model_name,
-                    preprocess_time_ms=pre_ms,
-                    inference_time_ms=infer_time_ms,
-                    postprocess_time_ms=post_ms,
-                    wait_to_preprocess_ms=wait_ms,
-                )
-                try:
-                    output_queue.put((result, infer_time_ms, wait_ms))
-                except (BrokenPipeError, EOFError, OSError) as e:
-                    print(f"[YOLO GPU] Output queue closed: {e}. Exiting process loop.")
-                    break
-                except Exception as e:
-                    print(f"[YOLO GPU] Unexpected put error: {e}. Exiting process loop.")
-                    break
-            except Exception as e:
-                print(f"[YOLO GPU Process ERROR] {e}")
-                continue
-    except Exception as e:
-        print(f"[YOLO GPU Process ERROR] {e}")
-
-
-def run_resnet_gpu_process(input_queue, output_queue, shutdown_event, view_name=None):
-    """
-    Process for running ResNet model on GPU via ONNX Runtime CUDA EP.
-    CPU fallback is NOT allowed if execution:gpu is requested.
-    """
-    try:
-        print(f"[ResNet GPU] Loading model...")
-        load_start = time.time()
-        so = ort.SessionOptions()
-        try:
-            so.log_severity_level = 3
-        except Exception:
-            pass
-            
-        # We only use CUDAExecutionProvider and do NOT allow CPU fallback
-        providers = ["CUDAExecutionProvider"]
-        
-        try:
-            session = ort.InferenceSession(
-                "models/resnet50_big/model/resnet50_big.onnx",
-                sess_options=so,
-                providers=providers,
-            )
-            # Strict check: if CUDA is not in active providers, it's a failure
-            if "CUDAExecutionProvider" not in session.get_providers():
-                raise RuntimeError(f"CUDAExecutionProvider not available for ResNet in {view_name}")
-        except Exception as e:
-            print(f"\n[CRITICAL ERROR] Failed to load ResNet GPU model with CUDAExecutionProvider: {e}")
-            print("Terminating program as CPU fallback is disabled for GPU execution mode.\n")
-            # Signal shutdown and exit
-            shutdown_event.set()
-            os._exit(1) # Force exit the whole application
-        # Provider diagnostics
-        try:
-            avail = ort.get_available_providers()
-            active = session.get_providers()
-            print(f"[ResNet GPU] ORT providers available={avail} active(session)={active}")
-        except Exception as e:
-            print(f"[ResNet GPU] Provider diagnostics unavailable: {e}")
-        load_end = time.time()
-        load_time_ms = (load_end - load_start) * 1000.0
-
-        try:
-            inputs = session.get_inputs()
-            outputs = session.get_outputs()
-            input_name = inputs[0].name if inputs else "data"
-            output_name = outputs[0].name if outputs else None
-            input_shape = inputs[0].shape if inputs else None
-            layout = "NCHW"
-            if isinstance(input_shape, (list, tuple)) and len(input_shape) == 4:
-                c_dim = input_shape[1]
-                last_dim = input_shape[3]
-                if last_dim == 3 or (isinstance(last_dim, str) and str(last_dim).upper() in ("C", "CHANNEL", "CHANNELS")):
-                    layout = "NHWC"
-                elif c_dim == 3 or (isinstance(c_dim, str) and str(c_dim).upper() in ("C", "CHANNEL", "CHANNELS")):
-                    layout = "NCHW"
-            print(f"[ResNet GPU] Model IO - input_name={input_name}, output_name={output_name}, input_shape={input_shape}, layout={layout}")
-        except Exception as e:
-            print(f"[ResNet GPU] Warning: could not introspect model IO names: {e}")
-            input_name = "data"
-            output_name = None
-            layout = "NCHW"
-
-        log_model_load(
-            pipeline="resnet50",
-            device="GPU",
-            view=view_name,
-            model="resnet50_big",
-            model_load_time_ms=load_time_ms,
-        )
-
-        while not shutdown_event.is_set():
-            try:
-                item = input_queue.get(timeout=1)
-                if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], float):
-                    img, enqueue_ts = item
-                else:
-                    img = item
-                    enqueue_ts = None
-            except queue.Empty:
-                continue
-
-            pre_s = time.time()
-            wait_ms = ((pre_s - enqueue_ts) * 1000.0) if enqueue_ts else 0.0
-            tensor_nchw = resnet50_preprocess_local(img)
-            if layout == "NHWC":
-                input_tensor = np.transpose(tensor_nchw, (0, 2, 3, 1))
-            else:
-                input_tensor = tensor_nchw
-            pre_e = time.time()
-            pre_ms = (pre_e - pre_s) * 1000.0
-
-            try:
-                infer_start = time.time()
-                outputs = session.run([output_name] if output_name else None, {input_name: input_tensor})
-                infer_end = time.time()
-
-                infer_time_ms = (infer_end - infer_start) * 1000.0
-
-                post_s = time.time()
-                logits = outputs[0]
-                if logits.ndim == 2:
-                    if logits.shape[0] > 1:
-                        logits_arr = logits.mean(axis=0)
-                    else:
-                        logits_arr = logits[0]
-                else:
-                    logits_arr = np.squeeze(logits)
-                max_index = int(np.argmax(logits_arr))
-                class_name = imagenet_classes[max_index] if max_index < len(imagenet_classes) else f"Class ID: {max_index}"
-                cv2.putText(img, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                post_e = time.time()
-                post_ms = (post_e - post_s) * 1000.0
-
-                log_inference(
-                    pipeline="resnet50",
-                    device="GPU",
-                    view=view_name,
-                    model="resnet50_big",
-                    preprocess_time_ms=pre_ms,
-                    inference_time_ms=infer_time_ms,
-                    postprocess_time_ms=post_ms,
-                    wait_to_preprocess_ms=wait_ms,
-                )
-
-                try:
-                    output_queue.put((img, class_name, infer_time_ms))
-                except (BrokenPipeError, EOFError, OSError) as e:
-                    print(f"[ResNet GPU] Output queue closed: {e}. Exiting process loop.")
-                    break
-                except Exception as e:
-                    print(f"[ResNet GPU] Unexpected put error: {e}. Exiting process loop.")
-                    break
-            except Exception as e:
-                print(f"[ResNet GPU Process ERROR] {e}")
-                continue
-    except Exception as e:
-        print(f"[ResNet GPU Process ERROR] {e}")
+        print(f"[ResNet GPU view={view_name}] FATAL: {type(e).__name__}: {e}")
+        shutdown_event.set()
+        os._exit(1)

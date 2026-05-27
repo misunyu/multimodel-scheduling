@@ -218,6 +218,34 @@ def resolve_cpu_model_onnx(logical_name: str) -> str:
     return candidates[0]
 
 
+def resolve_onnx_path(model_name: str) -> str:
+    """Resolve the ONNX file path for a model name.
+
+    New layout (Ultralytics-exported YOLOv8 / torchvision-exported ResNet50):
+        models/onnx/<model_name>.onnx
+    """
+    p = os.path.join("models", "onnx", f"{model_name}.onnx")
+    if not os.path.exists(p):
+        raise FileNotFoundError(
+            f"ONNX file not found: {p}. Re-export with tools/download_models.py."
+        )
+    return p
+
+
+def resolve_mxq_path(model_name: str) -> str:
+    """Resolve the Mobilint .mxq file path for a model name.
+
+    Layout: models/mobilint/<model_name>.mxq (e.g. yolov8s, resnet50,
+    yolo26s-weapon, yolo26s-fall-detection).
+    """
+    p = os.path.join("models", "mobilint", f"{model_name}.mxq")
+    if not os.path.exists(p):
+        raise FileNotFoundError(
+            f".mxq file not found: {p}. Re-download with tools/download_models.py."
+        )
+    return p
+
+
 def resolve_npu_object_o(logical_name: str, part: int = 1) -> str:
     """
     Resolve NPU object (.o) path for a logical model name and partition id.

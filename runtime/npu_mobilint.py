@@ -56,16 +56,24 @@ def list_supported_models(task: str = "detection") -> Dict[str, type]:
 def build_model(name: str,
                 task: str = "detection",
                 infer_mode: str = "global8",
-                product: str = "aries") -> Any:
+                product: str = "aries",
+                local_path: Optional[str] = None) -> Any:
     """Instantiate a Mobilint NPU-backed model.
 
-    `infer_mode` ∈ {single, multi, global4, global8}. global8 = full chip, lowest latency.
+    Resolves `local_path` from models/mobilint/<name>.mxq if not given.
+    `infer_mode` ∈ {single, multi, global4, global8}. global8 = full chip.
     `product`    ∈ {aries, regulus}.
     """
     cls = list_supported_models(task).get(name)
     if cls is None:
         raise KeyError(f"model '{name}' not in Mobilint zoo task='{task}'")
-    return cls(infer_mode=infer_mode, product=product)
+    if local_path is None:
+        from utils import resolve_mxq_path
+        try:
+            local_path = resolve_mxq_path(name)
+        except FileNotFoundError:
+            local_path = None  # fall back to HF download
+    return cls(local_path=local_path, infer_mode=infer_mode, product=product)
 
 
 def run_yolo_npu_process(input_queue,
