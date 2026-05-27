@@ -653,11 +653,27 @@ class UnifiedViewer(QMainWindow):
                         run_id = getattr(self, 'run_id', '')
 
                         # Try to interpret common payload shapes from model_processors:
-                        # - ResNet: (img, class_name, infer_time_ms)
-                        # - YOLO: (result_img, infer_time_ms, wait_ms)
-                        # Fallback: generic repr length-limited
+                        # - dict (current):  {"view","model","device","frame","result","timing_ms":{...}}
+                        # - tuple (legacy):  (img, class_name, infer_ms) or (img, infer_ms, wait_ms)
                         msg = None
-                        if isinstance(item, tuple):
+                        infer_ms = None
+                        wait_ms = None
+                        if isinstance(item, dict):
+                            timing = item.get("timing_ms", {}) or {}
+                            try:
+                                infer_ms = float(timing.get("infer", 0.0))
+                            except Exception:
+                                infer_ms = None
+                            try:
+                                wait_ms = float(timing.get("wait", 0.0))
+                            except Exception:
+                                wait_ms = None
+                            res = item.get("result")
+                            if isinstance(res, list):
+                                msg = f"detections={len(res)} infer={infer_ms:.1f}ms" if infer_ms is not None else f"detections={len(res)}"
+                            else:
+                                msg = f"infer={infer_ms:.1f}ms" if infer_ms is not None else "result received"
+                        elif isinstance(item, tuple):
                             if len(item) == 3 and isinstance(item[1], str):
                                 # ResNet
                                 class_name = item[1]
@@ -1553,6 +1569,13 @@ class UnifiedViewer(QMainWindow):
         self.prev_cpu_stats = current
     
     def save_throughput_data(self):
+        # Skip save if the measurement window never opened (shutdown during warmup).
+        # Without measurement_start_ts the elapsed-based fps calc collapses to ~0 and
+        # would overwrite any earlier valid entry for the same combination.
+        if not getattr(self, 'measurement_start_ts', None):
+            print("[Save Throughput] Skipping save: measurement window did not open (shutdown during warmup).")
+            return
+
         """Save the current throughput of each model and the total throughput to a unique JSON under results/ starting with performance_."""
         try:
             # Prepare results directory and file path

@@ -47,7 +47,7 @@ def _ort_session(onnx_path: str, gpu: bool):
         so.log_severity_level = 3
     except Exception:
         pass
-    providers = ["CUDAExecutionProvider"] if gpu else ["CPUExecutionProvider"]
+    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if gpu else ["CPUExecutionProvider"]
     sess = ort.InferenceSession(onnx_path, sess_options=so, providers=providers)
     if gpu and "CUDAExecutionProvider" not in sess.get_providers():
         raise RuntimeError(f"CUDA EP unavailable for {onnx_path}")
