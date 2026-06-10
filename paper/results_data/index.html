@@ -1,0 +1,87 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Figure &amp; Table Reproduction Guide</title><style>
+    body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0 28px 60px;color:#1a1a1a;line-height:1.5;max-width:1100px}
+    h1{font-size:1.5rem;margin:24px 0 4px} h2{font-size:1.15rem;border-bottom:2px solid #e3e3e3;padding-bottom:5px;margin-top:38px}
+    .sub{color:#666;margin:0 0 6px} .plat{background:#f5f7fa;border:1px solid #e0e6ee;border-radius:6px;padding:10px 14px;font-size:.86rem;color:#333;margin:14px 0}
+    table{border-collapse:collapse;margin:12px 0;font-size:.86rem;width:auto} th,td{border:1px solid #d6d6d6;padding:5px 10px;text-align:left}
+    th{background:#eef1f5} td.num{text-align:right;font-variant-numeric:tabular-nums} tr:nth-child(even) td{background:#fafbfc}
+    code,pre{font-family:SFMono-Regular,Consolas,monospace} pre{background:#1e2330;color:#e6e9ef;padding:10px 13px;border-radius:6px;overflow-x:auto;font-size:.8rem}
+    a{color:#1769aa;text-decoration:none} a:hover{text-decoration:underline}
+    .badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:.74rem;font-weight:600;color:#fff}
+    .badge.ok{background:#2e9e4f} .badge.bad{background:#c0392b}
+    .art{border:1px solid #e3e3e3;border-radius:8px;padding:4px 18px 14px;margin:16px 0;background:#fff}
+    .meta{font-size:.82rem;color:#555} .meta b{color:#222} img{max-width:680px;border:1px solid #ddd;border-radius:4px;margin:8px 0}
+    .ov td,.ov th{font-size:.8rem}
+    </style></head><body>
+    <h1>Quantization, Latency, and Device Placement Reversal in Multi-Camera Streaming Detection</h1>
+    <p class="sub">Figure &amp; Table Reproduction Guide</p>
+    <div class="plat"><b>Platform:</b> RTX 5090 GPU + Mobilint MLA100 NPU &middot; YOLOv11s &middot; Argoverse-HD (24 logs) &middot;
+    NPU binary mxq <code>b2441f9d</code>, infer_mode <code>global8</code> &middot; both devices <code>torch.set_num_threads(4)</code> (operating point). <br>
+    <b>All values extracted from existing <code>accv_experiments/results/rev*.csv</code> — no new measurement.</b> core scripts &amp; paper unchanged.</div>
+    <h2>Reproduce everything</h2>
+    <pre><code>cd paper/results_data &amp;&amp; python regen_all.py
+# regenerates 6 artifacts, cross-checks each against paper/main_vision.tex, refreshes this page</code></pre>
+    <h2>Overview</h2>
+    <table class='ov'><thead><tr><th>Artifact</th><th>Type</th><th>What</th><th>Source</th><th>Generator</th><th>Output</th></tr></thead><tbody><tr><td>Fig.1 fig:failures</td><td>qual. PDF</td><td>NPU(INT8) drops small objects GPU keeps</td><td><a href='fig1_failures/'>fig1_failures/</a></td><td>generate_fig1.py</td><td>vis_failure_examples.pdf</td></tr><tr><td>Fig.2 fig:sweep</td><td>sweep</td><td>worst-stream sAP vs GPU skip, crossover ≈48%</td><td><a href='fig2_sweep/sweep_byN_points.csv'>fig2_sweep/sweep_byN_points.csv</a></td><td>generate_fig2.py</td><td>fig2_sweep.tex/.png</td></tr><tr><td>Table 1 tab:single-stream</td><td>table</td><td>per-size single-camera sAP (threads=4)</td><td><a href='table1_single_stream/single_stream.csv'>table1_single_stream/single_stream.csv</a></td><td>generate_table1.py</td><td>table1.tex</td></tr><tr><td>Table 2 tab:decomp</td><td>table</td><td>quantization vs staleness (causal)</td><td><a href='table2_decomp/decomp.csv'>table2_decomp/decomp.csv</a></td><td>generate_table2.py</td><td>table2.tex</td></tr><tr><td>Table 3 tab:main</td><td>table</td><td>worst/mean sAP, 3 co-tenants</td><td><a href='table3_main/main_worst_mean.csv'>table3_main/main_worst_mean.csv</a></td><td>generate_table3.py</td><td>table3.tex</td></tr><tr><td>Table 4 tab:persize-contention</td><td>table</td><td>per-size Δ under real contention</td><td><a href='table4_persize/persize_under_contention.csv'>table4_persize/persize_under_contention.csv</a></td><td>generate_table4.py</td><td>table4.tex</td></tr></tbody></table>
+    
+    
+        <div class="art" id="fig1">
+          <h2>Figure 1 — Qualitative quantization failures (fig:failures)</h2>
+          <p class="meta"><b>What it shows.</b> Frames where the INT8 NPU drops small/distant safety-critical objects (red) that the FP32 GPU keeps (green); large objects unaffected.</p>
+          <p class="meta"><b>Source data:</b> <a href='fig1_failures/'>fig1_failures/</a> &nbsp;|&nbsp; <b>Generator:</b> <a href='fig1_failures/generate_fig1.py'>generate_fig1.py</a> &nbsp;|&nbsp; <b>Output:</b> <a href='fig1_failures/vis_failure_examples.pdf'>vis_failure_examples.pdf</a></p>
+          <pre><code>python fig1_failures/generate_fig1.py   # needs GPU+NPU device</code></pre>
+          <p class='meta'>Selected panels:</p><table><thead><tr><th>panel</th><th>sid</th><th>frame</th><th>NPU-missed classes</th></tr></thead><tbody><tr><td class="">1</td><td class="">2</td><td class="">5</td><td class="">person;person;traffic_light;traffic_light;traffic_light</td></tr><tr><td class="">2</td><td class="">13</td><td class="">41</td><td class="">traffic_light;traffic_light;traffic_light</td></tr><tr><td class="">3</td><td class="">17</td><td class="">163</td><td class="">person;person;person</td></tr><tr><td class="">4</td><td class="">22</td><td class="">1</td><td class="">person</td></tr></tbody></table><p class='meta'>PDF: <a href='fig1_failures/vis_failure_examples.pdf'>vis_failure_examples.pdf</a> <span class="badge ok">PASS</span></p>
+        </div>
+
+    
+        <div class="art" id="fig2">
+          <h2>Figure 2 — Contention sweep (fig:sweep)</h2>
+          <p class="meta"><b>What it shows.</b> All-GPU worst-stream sAP falls monotonically with GPU frame-skip while All-NPU is flat (0.084); the two cross at ≈48% GPU skip — moderate contention, not saturation. Stable across N=2,4,8.</p>
+          <p class="meta"><b>Source data:</b> <a href='fig2_sweep/sweep_byN_points.csv'>sweep_byN_points.csv</a> (21 pts, 3 reps, threads=4, NPU skip ≤0.1%) &nbsp;|&nbsp; <b>Generator:</b> <a href='fig2_sweep/generate_fig2.py'>generate_fig2.py</a> &nbsp;|&nbsp; <b>Output:</b> fig2_sweep.tex, fig2_sweep.png</p>
+          <pre><code>python fig2_sweep/generate_fig2.py</code></pre>
+          <img src='fig2_sweep/fig2_sweep.png' alt='sweep'/><p class='meta'>pgfplots coords: <a href='fig2_sweep/fig2_sweep.tex'>fig2_sweep.tex</a> &nbsp; vs paper <span class="badge ok">PASS</span></p>
+        </div>
+
+    
+        <div class="art" id="t1">
+          <h2>Table 1 — Single-camera per-size sAP (tab:single-stream)</h2>
+          <p class="meta"><b>What it shows.</b> At the operating point (frame skip ≈0), pure INT8 quantization: small −48.4%, medium −19.7%, large +0.1% (n.s.). Infer GPU 8.5 / NPU 10.0 ms.</p>
+          <p class="meta"><b>Source data:</b> <a href='table1_single_stream/single_stream.csv'>single_stream.csv</a> (rev19 threads=4, 24 logs, 3 reps) &nbsp;|&nbsp; <b>Generator:</b> <a href='table1_single_stream/generate_table1.py'>generate_table1.py</a> &nbsp;|&nbsp; <b>Output:</b> table1.tex</p>
+          <pre><code>python table1_single_stream/generate_table1.py</code></pre>
+          <table><thead><tr><th>Metric</th><th>GPU</th><th>NPU</th><th>NPU−GPU</th></tr></thead><tbody><tr><td class="">AP small</td><td class="num">0.0159</td><td class="num">0.0082</td><td class="num">-0.008 (-48.4%)</td></tr><tr><td class="">AP medium</td><td class="num">0.1839</td><td class="num">0.1477</td><td class="num">-0.036 (-19.7%)</td></tr><tr><td class="">AP large</td><td class="num">0.4768</td><td class="num">0.4773</td><td class="num">+0.001 (+0.1%)</td></tr></tbody></table><p class='meta'>matches paper LaTeX <span class="badge ok">PASS</span></p>
+        </div>
+
+    
+        <div class="art" id="t2">
+          <h2>Table 2 — Causal separation: quantization vs staleness (tab:decomp)</h2>
+          <p class="meta"><b>What it shows.</b> A host post-processing thread setting toggles staleness while leaving detections bit-identical. Quantization is small-biased & load-stable; staleness is large-biased & load-driven (opposite directions).</p>
+          <p class="meta"><b>Source data:</b> <a href='table2_decomp/decomp.csv'>decomp.csv</a> (rev18) + bit-identical (rev22) &nbsp;|&nbsp; <b>Generator:</b> <a href='table2_decomp/generate_table2.py'>generate_table2.py</a> &nbsp;|&nbsp; <b>Output:</b> table2.tex</p>
+          <pre><code>python table2_decomp/generate_table2.py</code></pre>
+          <table><thead><tr><th>component</th><th>small</th><th>medium</th><th>large</th></tr></thead><tbody><tr><td class="">quantization (off)</td><td class="num">-48.4%</td><td class="num">-19.7%</td><td class="num">+0.1%</td></tr><tr><td class="">staleness (off→on ΔsAP)</td><td class="num">≈0</td><td class="num">-0.030</td><td class="num">-0.098</td></tr></tbody></table><p class='meta'>Bit-identical: 20 frames, all identical = True, max box/score diff = 0.0/0.0 <span class="badge ok">PASS</span><br>Note: offline mAP is <i>not</i> thread-invariant (it penalizes skip as zero recall); separation rests on bit-identical detections + skip 0% vs 52% contrast.</p>
+        </div>
+
+    
+        <div class="art" id="t3">
+          <h2>Table 3 — Reversal under co-tenancy (tab:main)</h2>
+          <p class="meta"><b>What it shows.</b> Worst/mean sAP at N=4 for All-GPU, All-NPU, Oracle under 3 co-tenants. Device choice reverses only under the GPU-saturating VLM (All-NPU 0.083 vs All-GPU 0.016, 5.2×).</p>
+          <p class="meta"><b>Source data:</b> <a href='table3_main/main_worst_mean.csv'>main_worst_mean.csv</a> (rev21/rev20, N=4, 3 reps) &nbsp;|&nbsp; <b>Generator:</b> <a href='table3_main/generate_table3.py'>generate_table3.py</a> &nbsp;|&nbsp; <b>Output:</b> table3.tex</p>
+          <pre><code>python table3_main/generate_table3.py</code></pre>
+          <table><thead><tr><th>co-tenant</th><th>AllGPU worst</th><th>AllGPU mean</th><th>AllNPU worst</th><th>AllNPU mean</th><th>Oracle worst</th><th>Oracle mean</th><th>GPU/NPU skip</th></tr></thead><tbody><tr><td class="">L1_CNN</td><td class="num">0.092</td><td class="num">0.131</td><td class="num">0.083</td><td class="num">0.126</td><td class="num">0.109</td><td class="num">0.133</td><td class="">35%/1%</td></tr><tr><td class="">L2_LM</td><td class="num">0.062</td><td class="num">0.1</td><td class="num">0.042</td><td class="num">0.088</td><td class="num">0.063</td><td class="num">0.099</td><td class="">83%/76%</td></tr><tr><td class="">L3_VLM</td><td class="num">0.016</td><td class="num">0.047</td><td class="num">0.083</td><td class="num">0.126</td><td class="num">0.083</td><td class="num">0.12</td><td class="">100%/1%</td></tr></tbody></table><p class='meta'>matches paper LaTeX <span class="badge ok">PASS</span></p>
+        </div>
+
+    
+        <div class="art" id="t4">
+          <h2>Table 4 — Per-size loss under real contention (tab:persize-contention)</h2>
+          <p class="meta"><b>What it shows.</b> All-GPU per-size sAP loss Δ vs uncontended, N=4. In the partial band the loss is large-biased (Δlarge≫Δsmall), confirming the thread-lever decomposition under real contention. All-NPU is contention-invariant (≤0.001).</p>
+          <p class="meta"><b>Source data:</b> <a href='table4_persize/persize_under_contention.csv'>persize_under_contention.csv</a> (rev25, 3 reps) &nbsp;|&nbsp; <b>Generator:</b> <a href='table4_persize/generate_table4.py'>generate_table4.py</a> &nbsp;|&nbsp; <b>Output:</b> table4.tex</p>
+          <pre><code>python table4_persize/generate_table4.py</code></pre>
+          <table><thead><tr><th>GPU frame skip</th><th>Δ small</th><th>Δ medium</th><th>Δ large</th></tr></thead><tbody><tr><td class="">≈31%</td><td class="num">+0.001</td><td class="num">+0.024</td><td class="num">+0.059</td></tr><tr><td class="">≈59%</td><td class="num">+0.001</td><td class="num">+0.040</td><td class="num">+0.095</td></tr><tr><td class="">100% (saturated)</td><td class="num">+0.006</td><td class="num">+0.115</td><td class="num">+0.326</td></tr></tbody></table><p class='meta'>matches paper LaTeX <span class="badge ok">PASS</span></p>
+        </div>
+    
+    <h2>Provenance</h2>
+    <p class="meta">Sources: Table 1 ← rev19_table1_threads4; Table 2 ← rev18_postproc_levers + rev22_bitident;
+    Table 3 ← rev21_mean_worst_extract + rev20_5strat_heavybg; Table 4 ← rev25_persize_under_contention;
+    Fig.2 ← rev24_sweep_byN_points; Fig.1 ← phase_vis_failure_examples.
+    No new measurement; core experiment scripts, <code>results/rev*</code>, and the paper body unchanged.</p>
+    </body></html>

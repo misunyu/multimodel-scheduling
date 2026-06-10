@@ -16,6 +16,8 @@
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{multirow}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
 % NOTE: do NOT load amsthm with llncs; llncs already provides proposition/
 % corollary/proof and numbers them automatically.
 \usepackage[accsupp]{axessibility}  % PDF accessibility
@@ -27,7 +29,6 @@
 %\usepackage{hyperref}
 \usepackage{orcidlink}
 
-
 \begin{document}
 
 % ===============================================================
@@ -35,336 +36,250 @@
 %   Two contributions only:
 %     C1  Two opposite size-stratified losses (INT8 quantization Q on small
 %         objects; contention latency L on medium/large) that single-camera
-%         evaluation conflates, plus the placement reversal they predict --
-%         the isolated rule is never best, and a contention-aware offload that
-%         reverses it is the best deployable worst-stream policy, growing toward
-%         All-NPU as cameras are added.
+%         evaluation conflates, plus the placement reversal they predict.
 %     C2  Worst-stream sAP as the correct streaming-detection metric.
 %   Moved to SUPPLEMENTARY to meet the page limit: per-class breakdown,
 %   the contention-schedule table, the natural-composition robustness table,
 %   and the full YOLOv8 cross-family supplement. Their findings are summarized
 %   in the body. All YOLO11s tables are real measurements.
-%   MEASUREMENT STATE (resolved): an 8/8 repeatability test fixed the current-SDK
-%   normal state (large-object quantization gap approx -21%). The N=4 main
-%   comparison (Table 4) and the family gains (Table 8) are 3-run means in that
-%   state (rev10); the N=8 capacity row and survival count are also 3-run (rev11,
-%   GATE-Q pass). An earlier single-run snapshot (rev9) that showed an Isolated-rule
-%   collapse and an All-GPU/All-NPU optimum was not reproducible and is superseded;
-%   rev11 reproduced the rev9 N=8 capacity values within 0.003 but corrected the
-%   All-GPU survival count from 3/8 to 2/8. STILL SINGLE-RUN (direction-consistent,
-%   flagged in text): intermediate capacity N (5,6,7) and the schedule/L3 cells.
-%   NEW FINDING (rev10 A-3): the reversal threshold is nearly capacity-invariant
-%   (all detectors reverse near saturation); what scales is the quantization
-%   magnitude, not the crossover.
-% ===============================================================
+%   OPEN ISSUE (P0-D): Table~\ref{tab:gen-decomp} (rev6) and the rev7-validated
+%   Table~\ref{tab:single-stream} disagree on the YOLO11s LARGE quantization
+%   cell (-21% vs +0.1%). Resolve before submission; do NOT harmonize blindly.
 % ===============================================================
 
 % TODO REVIEW: Replace with your title
-\title{Disentangling Quantization and Latency in\\
-Multi-Camera Streaming Detection\\
-on Heterogeneous Edge Platforms}
+\title{Quantization, Latency, and Device Placement Reversal in Multi-Camera Streaming Detection}
 
 \titlerunning{Disentangling Quantization and Latency in Multi-Camera Streaming Detection}
 
 \maketitle
 
-
 \begin{abstract}
-Streaming object detection underpins multi-camera perception on vehicles and edge devices, yet it is almost always evaluated as a single streaming-accuracy (sAP) number from one camera in isolation. We show this isolated evaluation recommends a device placement that points the wrong way in deployment. On a heterogeneous GPU--NPU platform, accuracy is lost in two opposite, size-dependent ways: INT8 quantization on the NPU hurts small objects most---though even large objects lose about a fifth of their accuracy---while contention latency on the shared GPU hurts large objects most, as their fast-moving boxes go stale when results arrive late. Seeing only the first loss, isolated evaluation sends large-object-rich cameras to the NPU and small-rich ones to the GPU. Under multi-camera contention this reverses: the small-rich cameras it keeps on the GPU are the ones that should move to the NPU. A simple model explains the flip, and a contention-aware placement that follows it gives the best worst-stream accuracy---beating the isolated rule and both uniform policies---shifting toward all-NPU as cameras are added. The failure is also invisible to the mean accuracy prior work reports, which hides the worst camera that governs safety. Streaming detection on heterogeneous platforms should therefore be evaluated under contention and reported by worst-stream accuracy.
-\keywords{Streaming perception \and Small-object detection \and INT8 quantization \and Edge inference \and Evaluation metrics}
-\end{abstract}
+Streaming object detection on heterogeneous edge platforms is commonly evaluated by profiling a detector on a single camera running alone and reporting a single aggregate streaming-AP (sAP) score. We show that this isolated evaluation protocol can recommend the wrong device once the detector is deployed on a multi-camera platform whose GPU is shared with a co-resident workload.
+%
+In isolation, the FP32 GPU outperforms the INT8 NPU because quantization loss is concentrated on small objects and negligible on large ones, leading isolated profiling to prescribe an All-GPU deployment. Under GPU-saturating co-tenancy, however, contention-induced staleness causes GPU streams to collapse while the NPU remains largely unaffected on a separate compute path. As a result, the device decision reverses: moving all cameras to the NPU improves worst-stream sAP by $4$--$5\times$ over the All-GPU placement.
+%
+Using a controlled staleness lever that leaves detections bit-identical while changing delivery latency, we causally separate two underlying losses: a load-stable quantization loss concentrated on small objects and a contention-induced staleness loss concentrated on medium and large objects. A contention sweep further shows that the reversal emerges at moderate GPU contention rather than only after complete saturation.
+%
+Finally, we show that the failure is fundamentally a worst-camera effect. Mean sAP can substantially understate failure severity once some streams remain healthy while others collapse. We therefore argue that heterogeneous multi-camera streaming detection should be evaluated under deployment-relevant co-tenancy and reported using worst-stream, not only mean, sAP.
 
+\keywords{Streaming perception \and Heterogeneous edge inference \and INT8 quantization \and GPU--NPU placement \and Evaluation metrics}
+\end{abstract}
 
 % ===============================================================
 \section{Introduction}
 \label{sec:intro}
 
-Autonomous vehicles and commercial edge products perceive their surroundings through \emph{several} cameras at once~\cite{argoverse,waymo,mobilint-aries}. Each camera feeds a streaming object detector whose output drives collision avoidance and planning, and a detection is useful only while it is still aligned with the world: a result delivered after the relevant frame has passed degrades the control loop no matter how accurate its boxes are~\cite{streaming-perception}. The streaming average precision (sAP) metric~\cite{streaming-perception} captures this by scoring each detection against the scene state at its \emph{delivery} time.
+Autonomous vehicles and commercial edge products perceive their surroundings through \emph{several} cameras at once~\cite{argoverse,waymo,mobilint-aries}. Each camera feeds a streaming object detector whose output drives planning, and a detection is useful only while it is still aligned with the world: a result delivered after the relevant frame has passed degrades the control loop no matter how accurate its boxes are~\cite{streaming-perception}. The streaming average precision (sAP) metric~\cite{streaming-perception} captures this by scoring each detection against the scene at its \emph{delivery} time.
 
-Streaming perception has been studied almost entirely for a \emph{single} detector on a \emph{single} accelerator, and reported as a single aggregate sAP number~\cite{streamyolo,damo-streamnet,asap,longshortnet}. Modern edge platforms, however, are heterogeneous: a GPU runs the detector in FP32, while an INT8 NPU runs a quantized copy at far lower power. With several cameras sharing such a platform, a natural question is which device should process each camera's stream---and the established way to answer it is an evaluation protocol: profile each detector on each device in isolation (one stream, no competing workload) and route each stream to its better device. We show that this protocol can point the \emph{wrong} way, because the isolated measurement cannot see a size-stratified loss that appears only under deployment contention.
+Streaming perception has been studied almost entirely for a \emph{single} detector on a \emph{single} accelerator, reported as one aggregate sAP number~\cite{streamyolo,damo-streamnet,asap,longshortnet}. Modern edge platforms, however, are heterogeneous and \emph{multi-tenant}: a GPU runs the detector in FP32, an INT8 NPU runs a quantized copy at far lower power, and the GPU is frequently shared with other co-resident models. A natural deployment question is which device should run the detector, and the established way to answer it is an evaluation protocol: profile each device in isolation (one stream, no competing workload) and pick the better one. We show that this protocol can point the \emph{wrong} way, because the isolated measurement cannot see a loss that appears only when the shared GPU is contended.
 
 \paragraph{Two opposite size-stratified losses.}
-Detection quality is lost in two unrelated, size-dependent ways, on two different devices (Fig.~\ref{fig:reversal}). \emph{(i)~Quantization loss.} On the INT8 NPU, low-precision arithmetic drops the low-confidence predictions of small objects below threshold. This loss is steeply size-stratified---largest on small objects and smaller on large ones, though not zero even there ($-21\%$ on large; Sec.~\ref{sec:reversal:single})---and is a property of the \emph{detector and its precision}. \emph{(ii)~Latency staleness.} On the GPU, boxes keep their full accuracy but are delivered late once a background workload competes for the device. A late box ages out of alignment fastest for nearby, large-appearing objects, which traverse more pixels per frame, so this loss falls hardest on \emph{medium and large} objects and is a property of the \emph{streaming clock under contention}. The two losses run in \emph{opposite} size directions, and isolated evaluation, which fixes contention to zero, sees only the quantization loss and never the latency one. It therefore cannot tell the two apart, nor say which device a camera should use once deployed.
+Detection quality is lost in two unrelated, size-dependent ways, on two different devices (Fig.~\ref{fig:failures}). \emph{(i)~Quantization loss.} On the INT8 NPU, low-precision arithmetic drops the low-confidence predictions of small objects below threshold. This loss is steeply size-stratified---large on small objects, negligible on large ones---and is a property of the \emph{detector and its precision}, independent of load. \emph{(ii)~Latency staleness.} On the GPU, boxes keep their full accuracy but are delivered late once a co-tenant competes for the device. A late box ages out of alignment fastest for nearby, large-appearing objects, which traverse more pixels per frame, so this loss falls hardest on \emph{medium and large} objects and is a property of the \emph{streaming clock under contention}. The two losses run in \emph{opposite} size directions, and isolated evaluation, which fixes contention to zero, sees only the quantization loss. It therefore cannot say which device the detector should use once deployed.
 
-\paragraph{A striking consequence: the device choice reverses.}
-Read in isolation, the quantization loss suggests an obvious rule: send small-object-rich cameras to the GPU and reserve the NPU for large-object-rich cameras, whose relative quantization loss is smallest. Under realistic multi-camera contention this rule points the wrong way. As streams pile onto the shared GPU, a camera's fixed quantization loss is overtaken by its growing latency loss, and the better device flips: the small-rich cameras the isolated rule keeps on the GPU are exactly the ones that should move to the NPU. A contention-aware placement that offloads them gives the best worst-stream accuracy of any deployable policy---better than leaving every stream on the GPU, better than the isolated rule, and better than blindly moving everything to the NPU---and the optimal offload fraction grows from none toward all streams as more cameras share the platform. Our model (Sec.~\ref{sec:model}) predicts when each camera reverses, and experiments on Argoverse-HD with YOLO11, an RTX~5090 GPU, and a Mobilint MLA100 NPU confirm it across capacity (Sec.~\ref{sec:generalization}).
+\paragraph{The consequence: the device choice reverses under GPU co-tenancy.}
+Read in isolation the verdict is clear: the FP32 GPU wins, since the NPU only loses accuracy and gains nothing. But on a shared platform, when a GPU-resident co-tenant (\eg\ a vision--language model~\cite{mobilint-aries,qwen-vl}) saturates the device, the worst-stream sAP of every GPU camera collapses (to $0.016$ under our heaviest co-tenant) while the separate-path INT8 NPU keeps delivering; moving \emph{all} cameras to the NPU then recovers worst-stream sAP by $4$--$5\times$ (Sec.~\ref{sec:results}). The reversal is not that the NPU is intrinsically better---in isolation it is worse---but that a fixed quantization penalty is eventually outweighed by a contention penalty isolated evaluation never imposes (Sec.~\ref{sec:model}).
+
+\paragraph{The co-tenant type decides the flip.}
+The reversal is conditional on \emph{which kind} of co-tenant shares the GPU: a light CNN triggers none, a CPU-bound language model cancels the NPU's advantage (it also slows the NPU's host post-processing), and only a GPU-saturating workload drives the flip. ``Evaluate under contention'' is therefore not enough---one must evaluate under the \emph{right} contention (Sec.~\ref{sec:results}).
 
 \paragraph{The failure is hidden by mean sAP.}
-The safety envelope of a multi-camera loop is set by its \emph{worst} camera at any instant---one blind camera is a failure regardless of the others---so the deployment-relevant quantity is the worst-stream sAP, not the mean. Averaging hides this: a placement can post a healthy mean while its worst camera sits near half that accuracy, and at eight concurrent cameras a GPU-bound policy keeps only two of eight streams alive where full NPU offload keeps all eight. Prior streaming work reports the mean, and so would miss exactly the worst-camera failure that governs safety.
+The safety envelope of a multi-camera loop is set by its \emph{worst} camera at any instant---one blind camera is a failure regardless of the others---so the deployment-relevant quantity is the worst-stream sAP, not the mean. Under a placement that keeps some cameras on the saturated GPU and others on the NPU, the mean is buoyed by the surviving NPU streams while the worst camera has already failed. Mean sAP, which prior streaming work reports, can rank placements correctly yet badly understates how far the safety-governing worst camera has failed (Sec.~\ref{sec:results}).
 
 \paragraph{Contributions.}
-This paper makes two contributions.
+We frame this as a \emph{diagnostic}: we propose no new scheduler, but show that the accuracy signal schedulers rely on---isolated, single-camera profiling---can be wrong about device placement once the GPU is shared. This paper makes three contributions.
 \begin{itemize}
-\item \textbf{C1: A two-mechanism, size-stratified account of streaming loss, and the placement reversal it predicts.} Streaming loss separates into an INT8 quantization term concentrated on small objects and a contention-latency term concentrated on medium and large objects---two terms isolated evaluation conflates. A simple model (Sec.~\ref{sec:model}) makes NPU placement preferable exactly when the contention latency loss exceeds the quantization loss, which reverses the isolated rule under load: a contention-aware placement that offloads the reversing (small-rich) cameras gives the best deployable worst-stream sAP, and the optimal offload fraction grows toward all-NPU as cameras are added. We confirm the reversal across the YOLO11 family (Sec.~\ref{sec:generalization}).
-\item \textbf{C2: Worst-stream sAP, not mean sAP, is the deployment-relevant metric.} Worst-case-over-subgroups reporting is standard in robustness and fairness~\cite{groupdro} and in multi-stream systems~\cite{biswift,videoedge}, but streaming-perception evaluation reports the mean and so averages away the worst camera. We show the distinction is decisive here: under a heavy co-tenant the worst camera can sit near half the mean accuracy, and the worst-stream view exposes a camera-survival collapse (two of eight vs.\ eight of eight streams) that the mean, computed over survivors, hides.
-\end{itemize}
-A contention-driven offload schedule whose optimal NPU fraction grows from zero to all streams as load rises, a contention-aware placement that recovers about $90\%$ of an exhaustive oracle from cheap per-camera profiling, and a loss decomposition showing the NPU path loses almost only to quantization while the GPU path loses more to contention latency, appear as \emph{supporting evidence}.
+\item \textbf{C1: Isolated single-camera profiling mis-ranks GPU/NPU placement under GPU co-tenancy.} The FP32 GPU that wins in isolation falls well below the INT8 NPU when a GPU-resident co-tenant saturates the shared GPU; placing all cameras on the NPU recovers worst-stream sAP by $4$--$5\times$, while the placement isolated profiling prescribes---All-GPU---is the worst deployable choice under saturation (Sec.~\ref{sec:results}).
 
+\item \textbf{C2: Two size-opposed losses, causally separated, and a co-tenant-type condition for the flip.} Streaming loss decomposes into a load-stable INT8 quantization loss concentrated on \emph{small} objects and a contention staleness loss concentrated on \emph{large} objects. We separate them causally with a host-thread setting that toggles frame staleness while leaving the detections bit-identical, and we show the device flips only under GPU-saturating co-tenancy, not under light or CPU-bound co-tenants (Sec.~\ref{sec:model},~\ref{sec:results}).
+\item \textbf{C3: Worst-stream sAP, not mean sAP, is the placement-relevant metric.} Worst-case-over-subgroups reporting is standard in robustness and fairness~\cite{groupdro} and in multi-stream systems~\cite{biswift,videoedge}, but streaming-perception evaluation reports the mean, which substantially \emph{understates failure severity} once some streams stay healthy while others collapse---even when it happens to rank placements the same way (Sec.~\ref{sec:results}).
+
+\end{itemize}
 
 % ===============================================================
 \section{The Reversal Problem}
 \label{sec:problem}
 
 \paragraph{Problem statement.}
-Consider a heterogeneous edge platform running several camera streams at once, each running its own copy of the same streaming detector on its own scene, alongside a fixed background workload that competes for one device (the GPU, on our platform). By ``multi-camera'' we mean this multi-tenant case---several \emph{independent} cameras whose detectors share one accelerator complex---not synchronized surround-view fusion; what couples the streams is contention for shared compute, not a joint scene model. Each camera must be sent to the GPU or the NPU. The established way to decide is to profile each device \emph{in isolation}---one stream, no contention---and route each camera to whichever device gave the better single-camera accuracy. The reversal problem is that this isolated choice can be the \emph{opposite} of the placement that actually maximizes the worst stream's accuracy when the same cameras run together under load. Two ingredients make this non-trivial: the INT8 NPU differs from the GPU in a \emph{size-dependent} way, so the best device depends on each camera's object-size mix; and multi-camera contention adds a \emph{latency} penalty, itself size-dependent, that isolated evaluation never sees. Their interaction produces the reversal, which Sec.~\ref{sec:model} makes precise.
+Consider a heterogeneous edge platform running $N$ concurrent camera streams, each executing its own copy of the same streaming detector, plus a co-resident background workload that competes for one device (the GPU, on our platform). By ``multi-camera'' we mean this multi-tenant case---several \emph{independent} cameras whose detectors share one accelerator complex, alongside other co-tenants---not synchronized surround-view fusion; what couples the streams is contention for shared compute. Each camera is assigned to the GPU or the NPU. The established way to decide is to profile each device \emph{in isolation}---one stream, no contention---and route each stream to whichever gives the better single-camera sAP; call this the \emph{isolated} placement. The reversal problem is that the isolated placement can be the \emph{opposite} of the one that maximizes worst-stream sAP when the same detector runs under deployment-relevant co-tenancy. Two ingredients make this non-trivial: the INT8 NPU differs from the GPU in a \emph{size-dependent} way (so the isolated verdict has a clear size signature), and shared-GPU contention adds a \emph{latency} term, itself size-dependent and opposite, that isolated evaluation never sees. Their interaction produces the reversal, which Sec.~\ref{sec:model} makes precise.
 
 \paragraph{Related work.}
-\emph{Streaming perception.} Li~\etal~\cite{streaming-perception} introduced sAP and Argoverse-HD, showing latency and accuracy must be evaluated jointly under a streaming clock; later methods improve sAP by predicting future state, jointly tuning architecture and resolution, or adapting to ego-motion~\cite{streamyolo,damo-streamnet,asap,longshortnet}. All operate on a single detector and a single accelerator and report a single aggregate (mean) sAP. \emph{Heterogeneous multi-stream edge analytics.} A large body of work shares heterogeneous platforms among video streams: NGS~\cite{ngs} routes by image complexity, Kim~\etal~\cite{kim-iccd24} learn a GPU--NPU interference predictor, and predictive-placement~\cite{xgboost,etri-placement} and RL schedulers~\cite{rl-scheduler} target aggregate throughput. The systems community has long observed that profiling a workload \emph{in isolation} mispredicts its co-located behavior, motivating interference-aware provisioning~\cite{igniter}; that line, however, measures latency, throughput, and QoS---not detection accuracy---and never observes that the better \emph{device for accuracy} can reverse. \emph{Worst-case evaluation.} Reporting the worst subgroup rather than the mean is standard in robustness and fairness (worst-group accuracy, group-DRO~\cite{groupdro}), and multi-stream systems already pursue accuracy fairness across streams~\cite{biswift} or per-query minimum-accuracy constraints~\cite{videoedge}. We import this principle into \emph{streaming} sAP and show, to our knowledge for the first time, that it not only matters but \emph{reverses} the device decision a mean- or single-camera evaluation would make. \emph{Quantization and object size.} INT8 quantization is known to harm small-object detection~\cite{yolov6,tensorrt-int8,small-object-survey}, motivating quantization-aware training~\cite{quant-aware-detection}, scale-invariant losses~\cite{nwd,gcd}, and size/speed-driven DNN selection for single-stream edge detection~\cite{tod}; this literature treats the size-stratified loss as a single-detector property to \emph{reduce}, whereas we treat it as a \emph{device-dependent} term whose interaction with contention latency decides placement and whose isolated measurement misleads. To our knowledge, the joint treatment of streaming sAP, multi-camera contention, worst-stream evaluation, and the resulting placement reversal has not been characterized.
-
+\emph{Streaming perception.} Li~\etal~\cite{streaming-perception} introduced sAP and Argoverse-HD, showing latency and accuracy must be evaluated jointly under a streaming clock; later methods improve sAP by predicting future state, jointly tuning architecture and resolution, or adapting to ego-motion~\cite{streamyolo,damo-streamnet,asap,longshortnet}. All operate on a single detector and a single accelerator and report a single aggregate (mean) sAP. \emph{Heterogeneous multi-stream edge analytics.} A large body of work shares heterogeneous platforms among video streams: NGS~\cite{ngs} routes by image complexity, and predictive-placement~\cite{etri-placement} and RL schedulers~\cite{rl-scheduler} target aggregate throughput. The systems community has long observed that profiling a workload \emph{in isolation} mispredicts its co-located behavior, motivating interference-aware provisioning~\cite{igniter}; that line, however, measures latency, throughput, and QoS---not detection accuracy---and never observes that the better \emph{device for accuracy} can reverse. \emph{Worst-case evaluation.} Reporting the worst subgroup rather than the mean is standard in robustness and fairness (group-DRO~\cite{groupdro}), and multi-stream systems pursue accuracy fairness across streams~\cite{biswift} or per-query minimum-accuracy constraints~\cite{videoedge}. We import this principle into \emph{streaming} sAP and show it \emph{reverses} the device decision a mean- or single-camera evaluation would make. \emph{Quantization and object size.} INT8 quantization is known to harm small-object detection~\cite{yolov6,tensorrt-int8,small-object-survey}, motivating quantization-aware training~\cite{quant-aware-detection}, scale-invariant losses~\cite{nwd,gcd}, and size/speed-driven model selection~\cite{tod}; this literature treats the size-stratified loss as a single-detector property to \emph{reduce}, whereas we treat it as one of two \emph{device-dependent} terms whose interaction with contention decides placement. To our knowledge, the joint treatment of streaming sAP, GPU co-tenancy, worst-stream evaluation, and the resulting placement reversal has not been characterized.
 
 % ===============================================================
 \section{A Simple Model of the Two Losses}
 \label{sec:model}
 
-We give a deliberately simple model whose only job is to make the two losses explicit and the reversal falsifiable. Take one camera's stream and, for each object size (small, medium, large), ask which device detects it better.
+We give a deliberately simple account whose purpose is to make the decomposition explicit and falsifiable: to say, per object size, which device detects best, and under what contention the device choice reverses. The unit of analysis is a camera; each device subtracts a different, size-dependent loss from the same offline accuracy ceiling.
 
-\paragraph{Quantization loss---the NPU's penalty.}
-Running the detector in INT8 on the NPU lowers its accuracy by a \emph{quantization loss} that is a fixed property of the detector and its precision. This loss is largest on small objects, whose fine boxes are most damaged by low precision, and smaller on large objects---though not zero even there (about a fifth of large-object accuracy; Sec.~\ref{sec:reversal:single}). Crucially, it does \emph{not} depend on how busy the GPU is: the NPU runs on its own compute path (Sec.~\ref{sec:discussion:mechanism}), so a camera's quantization loss is the same whether it runs alone or alongside seven others.
+\paragraph{Quantization loss.}
+On the INT8 NPU, objects lose accuracy to quantization but are insulated from GPU-side contention, because the NPU compute path is physically separate (Sec.~\ref{sec:discussion:mechanism}). This loss does not depend on GPU load. It is steeply size-stratified---large on small objects, whose fine box regression is most damaged by low precision, and \emph{negligible on large objects} (Sec.~\ref{sec:results}).
 
-\paragraph{Latency loss---the GPU's penalty.}
-Running the detector in full precision on the GPU keeps every box accurate, but once other work competes for the GPU the boxes are delivered late and fall out of step with the moving scene---a \emph{latency loss}. It grows with contention---the combined pressure of the background workload \emph{and} the other camera streams---and falls hardest on medium and large objects, whose nearby boxes sweep across many pixels per frame; small, distant objects barely move between frames and tolerate the delay. A single camera under a light background sees almost no latency loss; the same camera in a busy multi-camera deployment sees a large one. This is exactly the loss isolated evaluation cannot see, because it fixes contention at zero.
+\paragraph{Latency-staleness loss.}
+On the GPU, objects keep their full FP32 quality but pay a streaming-staleness penalty once a co-tenant competes for the device: detections arrive late and fall out of alignment. This latency loss is near zero when the GPU is uncontended and grows with co-tenant pressure. It too is size-stratified, but in the \emph{opposite} direction: it concentrates on medium and large objects, whose nearby boxes traverse many pixels per frame and misalign fastest when late, whereas small distant objects move little and tolerate delay. Isolated evaluation holds contention near zero and never observes this loss---which is why a decision read from it can reverse.
 
-\paragraph{The reversal condition.}
-A camera's accuracy on either device is its latency-free ceiling minus one of these two losses, so the ceiling cancels and the device choice comes down to a single comparison: which loss is larger.
+\paragraph{The crossover condition.}
+Both devices start from the same offline accuracy ceiling $A$; the GPU pays a contention-latency loss $L(C)$ that grows with GPU contention $C$, while the NPU pays a fixed quantization loss $Q$:
+\begin{equation}
+\mathrm{sAP}_{\text{GPU}} = A - L(C), \qquad \mathrm{sAP}_{\text{NPU}} = A - Q, \qquad \text{NPU preferred} \iff L(C) > Q.
+\end{equation}
+With the GPU uncontended, $L(C)\!\approx\!0 < Q$, so isolated evaluation prefers the GPU. As $C$ rises $L(C)$ grows; once a co-tenant \emph{saturates} the GPU, $L(C) > Q$ holds for \emph{every} camera at once and the optimal placement collapses to all-NPU. The reversal is therefore global rather than per-camera: a saturating co-tenant pushes the whole fleet across the condition together.
 
-\begin{proposition}[Reversal condition]
-\label{prop:reversal}
-The NPU gives higher streaming accuracy than the GPU exactly when a camera's latency loss exceeds its quantization loss. In isolation there is no contention, so the latency loss is zero and the GPU wins for every camera; as contention rises the latency loss grows until it overtakes the fixed quantization loss, and at that point the camera's better device flips to the NPU.
-\end{proposition}
-
-\paragraph{Which cameras reverse first.}
-Both losses are larger for small-object-rich cameras, but the quantization loss is a fixed offset while the latency loss grows with contention, so within a workload the small-rich cameras reverse first---not because small objects suffer the most staleness (they suffer the least) but because their quantization loss is smaller still. Across detector sizes the contention level at which the flip happens is remarkably stable: every detector reverses only under near-saturation load (Sec.~\ref{sec:generalization}, Fig.~\ref{fig:gen-cstar}), so what scales with capacity is the size of the quantization loss, not the crossover. What never changes is the reversal itself.
-
-\paragraph{Consequence for placement.}
-Under any real contention the placement that maximizes the worst stream sends to the NPU exactly those cameras whose latency loss has overtaken their quantization loss. As contention grows this set expands from none (leaving every stream on the GPU is best under light load) through partial offload to all cameras (moving everything to the NPU is best under heavy load)---the opposite of the isolated rule, which is frozen at zero contention. The accuracy the isolated rule forgoes lands on the worst camera, which is exactly what averaging over streams hides---motivating the worst-stream metric of Sec.~\ref{sec:worst}.
-
+\paragraph{What the model does and does not claim.}
+The model predicts a \emph{conditional} reversal: it occurs only when GPU contention is severe enough that the latency loss overtakes the (small) quantization loss. It does not claim the NPU is generally better---under light or no GPU contention the GPU wins, since the camera then pays only the NPU's quantization penalty. And because the latency loss is driven by whatever shares the GPU, the model predicts that the \emph{type} of co-tenant matters: only a co-tenant that actually saturates the GPU compute path triggers the flip, a prediction we test directly (Sec.~\ref{sec:results}).
 
 % ===============================================================
 \section{Experimental Setup}
 \label{sec:setup}
 
 \paragraph{Platform.}
-All experiments run on one workstation with a host x86 CPU, an NVIDIA RTX~5090 GPU, and a Mobilint MLA100 NPU (PCIe Gen4~$\times$8). The MLA100, built on Mobilint's ARIES NPU, is rated up to $80$~TOPS INT8 within $25$~W, exposes eight on-chip cores, and runs INT8 models exclusively. % [VERIFY-HW] confirm on-board LPDDR4X capacity before camera-ready.
-GPU/CPU detection uses ONNX Runtime (CUDA/CPU); NPU detection uses the Mobilint SDK, whose \emph{single} mode gives each instance one core and supports up to eight concurrent instances (used for all multi-stream NPU runs; Sec.~\ref{sec:discussion:mechanism}).
+All experiments run on one workstation with a host x86 CPU, an NVIDIA RTX~5090 GPU, and a Mobilint MLA100 NPU (PCIe Gen4~$\times$8). The MLA100, built on Mobilint's ARIES NPU, is rated up to $80$~TOPS INT8 within $25$~W, exposes eight on-chip cores, and runs INT8 models exclusively.
+GPU/CPU detection uses ONNX Runtime (CUDA/CPU); NPU detection uses the Mobilint SDK, whose \emph{single} mode gives each instance one core and supports up to eight concurrent instances. We pin host post-processing to a fixed thread count, the platform's intended operating point; we return to this setting in Sec.~\ref{sec:results:decomp}, where it doubles as a controlled lever on frame staleness.
 
 \paragraph{Detector and dataset.}
-The main experiments use YOLOv11s~\cite{yolov11}, a recent anchor-free detector light enough for real-time streaming yet large enough that the size-dependent quantization behavior is clear. On our platform the GPU runs it well within the $33$~ms per-frame budget; the INT8 NPU runs near the budget but---crucially for what follows---is insensitive to GPU-side contention (Sec.~\ref{sec:discussion:mechanism}). % [VERIFY-LAT] single-stream NPU infer time measured at ~36 ms in the current SDK state (vs ~10 ms previously); confirm before camera-ready. We use public COCO-pretrained weights on Argoverse-HD without fine-tuning (its eight categories mapped to COCO), reflecting an off-the-shelf deployment; the NPU model is exported to INT8 via the Mobilint toolchain, GPU/CPU use FP32 ONNX. Generalization across capacity uses YOLO11 s/m/l/x (n pending an NPU export; Sec.~\ref{sec:generalization}). We evaluate on the Argoverse-HD validation split~\cite{streaming-perception} ($24$ logs at $30$~FPS from the forward-facing ring camera, the only one with streaming-sAP labels). Since our object of study is contention among \emph{independent} streams, we emulate an $N$-camera workload by replaying $N$ distinct logs concurrently---distinct scenes and size mixes, the heterogeneity placement must handle---capturing shared-compute contention but not a physically synchronized rig (Sec.~\ref{sec:discussion:limitations}). Per-log tertile labels (small-/medium-/large-rich, by large-object fraction) build controlled compositions.
+The main experiments use YOLOv11s~\cite{yolov11}, a recent anchor-free detector that fits the $33$~ms per-frame budget on the GPU and NPU (the CPU sits at the boundary). We use public COCO-pretrained weights on Argoverse-HD without fine-tuning (its eight categories mapped to COCO), reflecting an off-the-shelf deployment; the NPU model is exported to INT8 via the Mobilint toolchain, GPU/CPU use FP32 ONNX. We evaluate on the Argoverse-HD validation split~\cite{streaming-perception} ($24$ logs at $30$~FPS from the forward-facing ring camera, the only one with streaming-sAP labels). Since our object of study is contention among \emph{independent} streams, we emulate an $N$-camera workload by replaying $N$ distinct logs concurrently---distinct scenes and size mixes---capturing shared-compute contention but not a physically synchronized rig (Sec.~\ref{sec:discussion:limitations}). Per-log tertile labels (small-/medium-/large-rich, by large-object fraction) build controlled compositions.
 
-\paragraph{Workloads.}
-We separate \emph{foreground} streams (one to eight YOLOv11s streams, whose placement we decide and quality we measure) from a \emph{background} set pinned to the GPU. The background ladder spans five levels of GPU pressure: \textbf{L0} (none); \textbf{L1$_{\text{light}}$} (one ResNet50~\cite{resnet}); \textbf{L1$_{\text{heavy}}$} (three ResNet50); \textbf{L2$_{\text{LM}}$} (ResNet50 + TinyLLaMA-1.1B~\cite{tinyllama}); and \textbf{L3$_{\text{VLM}}$} (ResNet50 + Qwen2-VL-2B~\cite{qwen-vl}), the saturation regime~\cite{mobilint-aries}. All background models run via ONNX Runtime~\cite{onnxruntime} on CUDA. The placement decision depends only on the contention these workloads induce, which we verify by per-device latency profiling.
+\paragraph{Co-tenant workloads.}
+We separate \emph{foreground} streams (one to eight YOLOv11s streams, whose placement we decide and quality we measure) from a \emph{co-tenant} workload pinned to the GPU. Three co-tenants span the relevant regimes: \textbf{L1$_{\text{CNN}}$} (one ResNet50~\cite{resnet}, a light GPU model; with four foreground streams the \emph{combined} load nonetheless sits near the frame boundary); \textbf{L2$_{\text{LM}}$} (ResNet50 + TinyLLaMA-1.1B~\cite{tinyllama}, which also contends for the host CPU); and \textbf{L3$_{\text{VLM}}$} (ResNet50 + Qwen2-VL-2B~\cite{qwen-vl}, a GPU-saturating companion workload~\cite{mobilint-aries}). All co-tenants run via ONNX Runtime~\cite{onnxruntime} on CUDA.
 
 \paragraph{Metrics and placements.}
-Our primary metric is streaming AP (sAP)~\cite{streaming-perception}, scoring each delivered detection against the ground truth at its delivery time; we report $\mathrm{sAP}_{[.50:.95]}$, $\mathrm{sAP}_{0.50}$, and size-stratified variants, alongside offline mAP whose difference from sAP separates the latency loss from the quantization loss. For multi-stream runs we report mean and \emph{worst-stream} sAP, the latter our primary objective; each cell runs on a representative log over a $14$~s window after a $30$-frame warm-up, with Wilcoxon signed-rank significance paired by log ($p<0.05$). We compare five placements: \textbf{All-GPU}; \textbf{Isolated} (the rule from isolated evaluation: large-rich~$\to$~NPU, small-rich~$\to$~GPU); \textbf{Contention-aware} (rank cameras by the per-camera NPU$-$GPU gap measured \emph{under} the deployment background, and offload the smallest-loss streams); \textbf{All-NPU}; and \textbf{Oracle} (best worst-stream sAP over all feasible placements, not deployable). The CPU is excluded from multi-stream candidates: it drops $>95\%$ of frames at L1.
-
+Our primary metric is streaming AP (sAP)~\cite{streaming-perception}, scoring each delivered detection against the ground truth at its delivery time; we report size-stratified sAP, and at our operating point single-stream frame skip is $\approx0$, so there is no single-stream staleness to confound it. For multi-stream runs we report mean and \emph{worst-stream} sAP, the latter our primary objective; each cell runs over a $14$~s window after a $30$-frame warm-up, averaged over three repeats. The placements we compare in the main text are \textbf{All-GPU} (the placement isolated profiling prescribes, since the GPU is at least as good as the NPU at every object size; Sec.~\ref{sec:results:single}), \textbf{All-NPU}, and \textbf{Oracle} (best worst-stream sAP over all $2^N$ placements, not deployable). Partial placements that split cameras across devices (\eg\ routing large-object-rich cameras to the NPU) do not win at the robust operating points (Sec.~\ref{sec:results:reversal}). The CPU is excluded from placement: its infer time ($31.98$~ms) sits at the frame boundary and it drops $>95\%$ of frames under any co-tenant.
 
 % ===============================================================
-\section{Evidence of the Reversal}
-\label{sec:reversal}
+\section{Results}
+\label{sec:results}
 
-This section establishes C1: isolated evaluation prescribes one placement, multi-camera contention prescribes the opposite, and Proposition~\ref{prop:reversal} predicts which cameras reverse.
+We establish the three contributions in turn: the single-camera verdict (the GPU wins, C2 setup), its causal decomposition into two size-opposed losses (C2), the device reversal under GPU co-tenancy and its dependence on co-tenant type (C1), and the worst-vs-mean severity gap (C3).
 
-\paragraph{Isolated evaluation says ``small to the GPU''.}
-\label{sec:reversal:single}
-Table~\ref{tab:single-stream} profiles each device on Argoverse-HD in isolation.
-The NPU's INT8 quantization induces a sharp, size-stratified loss in \emph{relative} terms: $-56\%$ on small objects, $-35\%$ on medium, and $-21\%$ on large---steepest on small objects, matching prior reports that INT8 disproportionately harms small-object box regression~\cite{yolov6,tensorrt-int8,small-object-survey}, but, importantly, far from zero even on large objects. This is the quantization loss: largest for small-rich cameras, smaller but still positive for large-rich ones. Read in isolation, the table prescribes the obvious placement---route each stream to its smaller-relative-loss device, sending small-rich streams to the GPU and large-rich streams to the NPU---which we carry as the \textbf{Isolated} rule. A per-class breakdown (supplementary) confirms the gap tracks object \emph{size}, not class label: the largest classes (bus, truck) lose least or even gain, while the safety-critical small classes (pedestrian, traffic light, stop sign) lose $30$--$60\%$ of their AP. Isolated evaluation would route exactly the safety-critical classes onto the device that detects them worst, and---as Sec.~\ref{sec:reversal:decision} shows---would also load the contended GPU with the streams least able to tolerate it. Fig.~\ref{fig:failures} shows representative frames where the INT8 NPU drops exactly these objects while the FP32 GPU retains them.
+\paragraph{In isolation, the GPU wins---and the loss is pure quantization on small objects.}
+\label{sec:results:single}
+Table~\ref{tab:single-stream} profiles each device on Argoverse-HD in isolation, at the platform's operating point where every device delivers frames within the $33$~ms budget (frame skip $\approx 0$). The INT8 NPU loses accuracy to quantization, steeply size-stratified: $-48.4\%$ relative on small objects, $-19.7\%$ on medium, and a statistically insignificant $+0.1\%$ on large. Because frame skip is $\approx0$ here, there is no single-stream staleness, so this is \emph{pure} quantization loss: it harms small objects most and leaves large objects untouched (we separate quantization from staleness directly in Table~\ref{tab:decomp}). The isolated verdict is therefore unambiguous---the GPU is at least as good as the NPU at every object size (statistically tied on large), so isolated profiling assigns \emph{every} camera to the GPU, and we take \textbf{All-GPU} as the isolated prescription. These small-object bins are dominated by safety-critical classes---pedestrians, traffic lights, signage---so the quantization loss falls on exactly the objects a control loop must detect earliest, while the largest objects are untouched. Fig.~\ref{fig:failures} shows representative frames where the INT8 NPU drops exactly these small objects while the FP32 GPU retains them.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\linewidth]{figures/vis_failure_examples.pdf}
-\caption{Qualitative failure modes behind the quantization loss (YOLOv11s, Argoverse-HD). On frames where the GPU (FP32, \textbf{green}) and NPU (INT8) detections diverge, the NPU drops low-confidence small-box predictions that survive on the GPU (\textbf{red}: objects the NPU misses but the GPU detects)---small distant vulnerable road users and signage. These are exactly the safety-critical detections an isolated single-camera evaluation would route onto the NPU.}
+\includegraphics[width=\linewidth]{vis_failure_examples.pdf}
+\caption{Qualitative quantization failures (YOLOv11s, Argoverse-HD): the INT8 NPU drops small, distant objects (\textbf{red}) that the FP32 GPU retains, while large objects are unaffected.}
 \label{fig:failures}
 \end{figure}
 
 \begin{table}[t]
 \centering
-\caption{Single-camera evaluation on Argoverse-HD (24 logs, YOLOv11s). Values are mean$\pm$std; ``NPU$-$GPU'' is the paired difference with its Wilcoxon significance. This is the isolated evaluation that fixes $C=0$ in the model of Sec.~\ref{sec:model}.}
+\caption{Single-camera evaluation on Argoverse-HD (24 logs, YOLOv11s) at the operating point (host post-processing pinned; frame skip $\approx0$ on every device). ``NPU$-$GPU'' is the paired per-size difference (Wilcoxon $p$). The quantization loss is steep on small objects and \emph{negligible on large}. Because frame skip is $\approx0$ here, this gap carries no staleness and is pure precision loss; Table~\ref{tab:decomp} separates precision from staleness directly. The CPU (infer $31.98$~ms, at the $33$~ms boundary) is excluded from placement and omitted.}
 \label{tab:single-stream}
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccc}
-\toprule
-Metric & CPU & GPU & NPU & NPU$-$GPU \\
-\midrule
-infer mean (ms)   & 30.91$\pm$0.42 & 8.46$\pm$0.22 & 36.42$\pm$0.87 & --- \\
-sAP$_{[.50:.95]}$ & 0.192$\pm$0.114 & 0.196$\pm$0.114 & 0.156$\pm$0.111 & $-0.040$ ($p<0.001$) \\
-sAP$_{0.50}$      & 0.301$\pm$0.133 & 0.305$\pm$0.131 & 0.249$\pm$0.140 & $-0.056$ ($p<0.001$) \\
-AP$_{\text{small}}$  & 0.016$\pm$0.016 & 0.016$\pm$0.016 & 0.007$\pm$0.007 & $-0.009$ ($-56.4\%$, $p<0.001$) \\
-AP$_{\text{medium}}$ & 0.180$\pm$0.127 & 0.184$\pm$0.127 & 0.119$\pm$0.100 & $-0.065$ ($-35.2\%$, $p<0.001$) \\
-AP$_{\text{large}}$  & 0.466$\pm$0.168 & 0.477$\pm$0.164 & 0.377$\pm$0.179 & $-0.100$ ($-21.0\%$, $p<0.001$) \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\paragraph{Multi-camera contention reverses the prescription.}
-\label{sec:reversal:reordering}
-Streams do not run alone: background workloads compete for the GPU, raising per-camera GPU latency and adding the size-dependent latency loss of Sec.~\ref{sec:model}. Running each of eight representative logs as a single foreground stream under a light background (L1), Table~\ref{tab:partA} reports the per-camera NPU$-$GPU accuracy gap, ranked by NPU loss. Two things stand out. First, the ranking already inverts Table~\ref{tab:single-stream}'s prescription: small-rich streams show the \emph{smallest} NPU penalty (mean gap $-0.014$) and large-rich the largest (mean gap $-0.039$), so the streams isolated evaluation sends to the GPU are precisely the ones best suited to the NPU. Second, every gap is still negative for a \emph{single} foreground stream---one stream under a light background does not yet contend enough to cross over. The crossing appears once several streams share the GPU: with four concurrent cameras the added contention pushes the small-rich streams past the point where the NPU wins, which is exactly the regime Sec.~\ref{sec:reversal:decision} measures. Fig.~\ref{fig:reversal} (right) confirms the source: the streaming gap exceeds the offline gap precisely for small-rich streams, so their extra loss is latency, not quality.
-
-\begin{table}[t]
-\centering
-\caption{Per-camera NPU$-$GPU accuracy gap under light contention (L1), sorted by NPU loss (smaller loss is better for NPU placement). This gap is the camera's latency loss minus its quantization loss (Sec.~\ref{sec:model}).}
-\label{tab:partA}
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{rlccc}
-\toprule
-Rank & Stream group & GPU sAP & NPU sAP & $\Delta$ (NPU$-$GPU) \\
-\midrule
-1 & medium-mixed & 0.154 & 0.146 & $-0.008$ \\
-2 & small-rich   & 0.198 & 0.187 & $-0.010$ \\
-3 & small-rich   & 0.121 & 0.109 & $-0.012$ \\
-4 & small-rich   & 0.211 & 0.191 & $-0.020$ \\
-5 & medium-mixed & 0.102 & 0.072 & $-0.030$ \\
-6 & large-rich   & 0.115 & 0.084 & $-0.031$ \\
-7 & large-rich   & 0.155 & 0.121 & $-0.034$ \\
-8 & medium-mixed & 0.248 & 0.207 & $-0.041$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{figures/motiv_reversal.pdf}
-\caption{Per-camera NPU$-$GPU difference under light contention (L1).
-\textbf{Left:} the eight candidates sorted by NPU loss; small-rich (blue) have the smallest loss, large-rich (yellow) the largest---a reversal of the single-camera prediction of Sec.~\ref{sec:reversal:single}.
-\textbf{Right:} NPU$-$GPU streaming accuracy vs.\ NPU$-$GPU offline accuracy. Points below the diagonal are streams whose streaming loss exceeds their offline loss, \ie\ where the extra gap is latency rather than quantization; small-rich streams sit below the line, confirming the reversal is driven by latency.}
-\label{fig:reversal}
-\end{figure}
-
-\paragraph{The reversal changes the deployment decision.}
-\label{sec:reversal:decision}
-Table~\ref{tab:main-comparison} evaluates five placements on a size-diverse four-camera workload (two small-rich, two large-rich) under two backgrounds, averaged over three runs. The result is decisive and matches the model. With four streams competing for the GPU, the \textbf{Contention-aware} placement---which offloads the small-rich cameras the isolated rule would have kept on the GPU---gives the best deployable worst-stream sAP under \emph{both} backgrounds ($0.100$ at L1$_{\text{light}}$, $0.067$ at L2$_{\text{LM}}$), beating All-GPU ($0.082$, $0.063$), the \textbf{Isolated} rule ($0.084$, $0.055$), and uniform All-NPU ($0.084$, $0.064$); it also leads on mean sAP. It recovers about $90\%$ of the exhaustive oracle ($0.110$, $0.074$) from cheap per-camera profiling alone. The single-camera Isolated rule (large-rich~$\to$~NPU, small-rich~$\to$~GPU) is never best and is the worst placement under the heavy co-tenant, precisely because it does the reverse of what Proposition~\ref{prop:reversal} prescribes---paying the NPU's quantization cost on the large-rich streams while leaving the small-rich streams on the saturated GPU. The cameras the isolated rule routes \emph{away} from the NPU are exactly the ones contention routes \emph{to} it.
-
-\begin{table}[t]
-\centering
-\caption{Multi-camera streaming-sAP comparison at $N=4$ on a size-diverse workload (sids $2,22,3,21$), mean of three runs. Worst-stream sAP is the primary metric; mean is shown for contrast. Oracle is the best worst-stream sAP over all $2^4$ GPU/NPU assignments (not deployable). \textbf{Bold} marks the best \emph{deployable} strategy (oracle excluded) per metric per background. Contention-aware offload is best on both metrics under both backgrounds; the Isolated single-camera rule is never best.}
-\label{tab:main-comparison}
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{ll|cc}
-\toprule
-bg & Strategy & mean sAP & worst sAP \\
-\midrule
-\multirow{5}{*}{L1$_{\text{light}}$}
-& All-GPU          & 0.123 & 0.082 \\
-& Contention-aware & \textbf{0.134} & \textbf{0.100} \\
-& Isolated         & 0.133 & 0.084 \\
-& All-NPU          & 0.126 & 0.084 \\
-& Oracle           & 0.134 & 0.110 \\
-\midrule
-\multirow{5}{*}{L2$_{\text{LM}}$}
-& All-GPU          & 0.102 & 0.063 \\
-& Contention-aware & \textbf{0.104} & \textbf{0.067} \\
-& Isolated         & 0.103 & 0.055 \\
-& All-NPU          & \textbf{0.104} & 0.064 \\
-& Oracle           & 0.109 & 0.074 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Two further results support C1 (supplementary; the $N=4$ main comparison and the $N=8$ capacity row are three-run means, the remaining sweep cells single-run and direction-consistent). The worst-stream-optimal NPU offload fraction grows monotonically with load: partial offload (Contention-aware) is best at $N=4$, and as more cameras are added the optimum moves toward full offload, with All-NPU best at $N=8$ (Sec.~\ref{sec:worst})---the deployment signature of cameras reaching their crossover one after another (Proposition~\ref{prop:reversal}). In the saturation regime (L3$_{\text{VLM}}$) leaving streams on the GPU collapses worst-stream sAP to $0.017$ while full NPU offload sustains $0.081$, roughly a fivefold difference. Because the contention-aware ranking needs only per-camera profiles rather than an exhaustive search over all placements, the reversed decision is cheap to realize.
-
-
-% ===============================================================
-\section{Worst-Stream Evaluation}
-\label{sec:worst}
-
-This section establishes C2. Reporting the worst subgroup rather than the mean is a standard robustness and fairness principle~\cite{groupdro} that streaming-perception evaluation has not adopted; we show it is decisive here---mean sAP hides deployment-critical failures, so worst-stream sAP is the deployment-relevant primary metric.
-
-\paragraph{Mean sAP understates the deployment-critical gap.}
-\label{sec:worst:meanhides}
-The deployment-critical quantity is not the average over cameras but the worst one, and the two can be far apart. In Table~\ref{tab:main-comparison} under the heavy co-tenant, the Isolated rule posts a healthy-looking mean sAP of $0.103$ while its worst camera sits at $0.055$---barely half---so a practitioner reading the mean would see a routine result where one camera is in fact near-blind. The same gap drives the placement choice: the contention-aware policy improves the worst camera by up to two streaming-AP points over the next-best deployable option while moving the mean only slightly, so an evaluation that optimizes the mean barely distinguishes placements that differ sharply in safety. Because Argoverse-HD is dominated by small and medium objects ($>70\%$ of annotations per log; no log exceeds $40\%$ large)---exactly the distant objects a perception loop must detect early---and one blind camera is a safety failure regardless of the others, the deployment-relevant quantity is the worst-stream sAP, not the mean.
-
-\paragraph{Worst-stream capacity.}
-\label{sec:worst:capacity}
-The worst-stream view also changes how many cameras a platform can safely sustain. Table~\ref{tab:capacity} sweeps the camera count $N$ at L1$_{\text{light}}$ (the $N=8$ row is a three-run mean; smaller-$N$ rows are single-run and direction-consistent). The best worst-stream strategy shifts exactly as Proposition~\ref{prop:reversal} implies: All-GPU is best at small $N$, partial contention-aware offload at $N=4$--$5$, and full NPU offload at $N\!\ge\!6$, as rising concurrency pushes more cameras past their crossover. The choice is consequential: at a worst-stream threshold of $0.08$, All-GPU sustains $4$ cameras while All-NPU sustains all $8$. The gap is starkest in raw survival---at $N=8$ under All-GPU only two of eight streams keep non-trivial throughput, whereas all eight stay active under All-NPU---a collapse to a functional two-camera system that mean sAP, computed over survivors, would mask.
-
-\begin{table}[t]
-\centering
-\caption{Worst-stream sAP at L1$_{\text{light}}$ vs.\ concurrent camera count $N$. Bold marks the best deployable strategy per $N$. The lower block reports sAP-constrained capacity (largest $N$ above threshold). The $N=8$ panel comprises sids $2, 22, 13, 16, 3, 21, 14, 4$.}
-\label{tab:capacity}
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{c|cccc}
-\toprule
-$N$ & All-GPU & Contention-aware & Isolated & All-NPU \\
-\midrule
-$2$ & \textbf{0.120} & 0.108 & \textbf{0.120} & 0.108 \\
-$3$ & \textbf{0.118} & 0.108 & 0.116 & 0.109 \\
-$4$ & 0.087 & \textbf{0.092} & 0.083 & 0.084 \\
-$5$ & 0.070 & \textbf{0.086} & 0.082 & 0.084 \\
-$6$ & 0.066 & 0.075 & 0.083 & \textbf{0.084} \\
-$8$ & 0.057 & 0.062 & 0.082 & \textbf{0.083} \\
-\midrule
-\multicolumn{5}{c}{\emph{sAP-constrained capacity (largest $N$ above threshold)}} \\
-\midrule
-threshold $\geq 0.10$ & $3$ & $3$ & $3$ & $3$ \\
-threshold $\geq 0.08$ & $4$ & $5$ & $8$ & $\mathbf{8}$ \\
-threshold $\geq 0.05$ & $8$ & $8$ & $8$ & $8$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\paragraph{The metric survives on natural compositions.}
-\label{sec:worst:natural}
-To check that worst-stream evaluation is not an artifact of an adversarial mix, we also evaluate two natural Argoverse-HD compositions (supplementary). There the per-camera NPU losses cluster around a single hardest-camera quantization floor, so the worst-stream-optimal policy simplifies to near-uniform full NPU offload (All-NPU within $0.005$ of the oracle in every $N=8$ cell). The reversal lever flattens---a property of the composition, not the metric---but in every cell the worst-stream-optimal placement still differs from what a mean-sAP or single-camera evaluation would choose, and the deployable default (All-NPU) is again the \emph{opposite} of the single-camera ``large~$\to$~NPU'' rule.
-
-
-% ===============================================================
-\section{Generalization Across Detector Capacity}
-\label{sec:generalization}
-
-The two-mechanism account is detector-agnostic by construction: the quantization loss is set by the detector's precision and the latency loss by its streaming clock under contention. We verify it across the YOLO11 family (s/m/l/x; YOLO11n pending an NPU export), with the YOLOv8 family as a same-protocol cross-family check (supplementary). The capacity sweep returns one prediction confirmed and one surprise: the two losses keep their opposite size directions at every capacity (confirmed), but the contention at which the device choice reverses barely moves with detector size (surprise)---what scales is the magnitude of the quantization loss, not the crossover.
-
-Table~\ref{tab:gen-decomp} reports the per-size quantization loss and single-stream latency loss (at the L2 background) across the family, as a fraction of each detector's GPU baseline. Two patterns hold at every capacity and mirror the YOLOv11s anchor: the quantization loss concentrates on small objects (steepest on small, but non-trivial---$-21\%$ to $-41\%$---even on large), whereas the latency loss does \emph{not} concentrate on small ($+11\%$ to $+28\%$, flat-to-larger toward medium and large). The two losses thus run in opposite size directions across the whole capacity range, exactly as the model requires.
-
-\begin{table}[t]
-\centering
-\caption{Per-size decomposition across the YOLO11 capacity family, as a fraction of each detector's GPU FP32 baseline. The quantization columns give the INT8 loss with no contention; the latency columns give the single-stream staleness loss under the L2$_{\text{LM}}$ background. Quantization concentrates on small objects ($-46$ to $-56\%$) far more than large ($-21$ to $-41\%$); latency does not. YOLO11n TBD; YOLOv8 in supplementary.}
-\label{tab:gen-decomp}
-% [RESOLVED, was P0-D] An 8/8 repeatability test established that this rev6 large cell
-% (rel_Q=-21.0%) is the current-SDK NORMAL state; the once-seen +0.1% n.s. value in an
-% earlier sweep was an outlier. Table~\ref{tab:single-stream} has been updated to the
-% normal state, so it and this table now AGREE on the YOLO11s large cell (-21%).
 \setlength{\tabcolsep}{5pt}
-\begin{tabular}{ll|ccc|ccc}
+\begin{tabular}{lccc}
 \toprule
-& & \multicolumn{3}{c|}{relative quantization loss} & \multicolumn{3}{c}{relative latency loss (L2)} \\
-Detector & params & small & medium & large & small & medium & large \\
+Metric & GPU & NPU & NPU$-$GPU \\
 \midrule
-YOLO11n & 2.6\,M & TBD & TBD & TBD & TBD & TBD & TBD \\
-YOLO11s & 9.4\,M & $-56.4\%$ & $-35.2\%$ & $-21.0\%$ & $+10.7\%$ & $+14.0\%$ & $+15.1\%$ \\
-YOLO11m & 20.1\,M & $-50.8\%$ & $-37.6\%$ & $-32.6\%$ & $+18.2\%$ & $+22.7\%$ & $+22.4\%$ \\
-YOLO11l & 25.3\,M & $-46.9\%$ & $-40.9\%$ & $-35.1\%$ & $+22.1\%$ & $+26.0\%$ & $+26.6\%$ \\
-YOLO11x & 56.9\,M & $-56.2\%$ & $-46.8\%$ & $-40.7\%$ & $+25.3\%$ & $+26.8\%$ & $+28.2\%$ \\
+infer mean (ms)      & 8.5 & 10.0 & --- \\
+frame skip (\%)      & $\sim\!0$ & $\sim\!0$ & --- \\
+AP$_{\text{small}}$  & 0.016 & 0.008 & $-0.008$ ($-48.4\%$, $p<0.001$) \\
+AP$_{\text{medium}}$ & 0.184 & 0.148 & $-0.036$ ($-19.7\%$, $p<0.001$) \\
+AP$_{\text{large}}$  & 0.477 & 0.478 & $+0.001$ ($+0.1\%$, n.s.) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Fig.~\ref{fig:gen-cstar} maps the reversal threshold against capacity, and the result is unexpectedly clean: every detector crosses only under near-saturation contention (between the language-model and vision-language-model backgrounds), so the crossover point is essentially independent of detector size. What scales with capacity is not where the reversal happens but how much quantization costs---the large-object loss grows from about a fifth at the smallest detector to two fifths at the largest (Table~\ref{tab:gen-decomp})---while the latency term that triggers the reversal arrives at roughly the same contention for all. Table~\ref{tab:gen-gain} repeats the worst-stream comparison per detector: at every capacity the contention-aware placement beats the Isolated single-camera rule, by $0.015$ to $0.028$ streaming-AP, confirming the reversal is a property of the family and not of one detector. Cross-\emph{architecture} generality to non-YOLO families (\eg\ RT-DETR, PicoDet) needs an INT8 NPU export we lack and is left to future work; a second streaming benchmark (\eg\ BDD100K) would further strengthen it.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{figures/gen_cstar.pdf}
-\caption{Reversal threshold across the YOLO11 capacity family. \textbf{Left:} per-detector NPU$-$GPU streaming-sAP gap along the L0--L3$_{\text{VLM}}$ background ladder (marker brightness = capacity); a positive gap is where the NPU is the better device, stars mark the crossover. \textbf{Right:} the crossover contention vs.\ capacity---nearly flat, all detectors reversing only near saturation (between the L2$_{\text{LM}}$ and L3$_{\text{VLM}}$ levels). YOLO11n is TBD.}
-\label{fig:gen-cstar}
-\end{figure}
+\paragraph{The two losses, causally separated.}
+\label{sec:results:decomp}
+The NPU's single-stream latency is dominated not by its on-chip compute ($\approx4$~ms, faster than the GPU) but by host-side post-processing (dequantization, decoding, NMS). The number of host threads assigned to this step changes only how fast detections are \emph{delivered}---the detections themselves are bit-identical---so it is a controlled lever on frame staleness that leaves quantization untouched. Table~\ref{tab:decomp} reports the NPU$-$GPU size gap with staleness toggled off (within budget, frame skip $0$) and on (post-processing starved, frames dropped). With staleness off, the gap is pure quantization: small $-48.4\%$, large $\approx0$. Turning staleness on adds a second, \emph{oppositely} size-stratified component---negligible on small objects, $-0.098$ sAP on large---exactly the large-object penalty the model attributes to late delivery. This probe does not reproduce GPU contention itself; it isolates the streaming-clock effect of late delivery while holding the detections fixed, which is the property the GPU-side contention loss shares. The two mechanisms are thus separated by a single switch that does not touch the detector: quantization is small-biased and load-stable, staleness is large-biased and load-driven. This is the clean form of the size-opposition the rest of the paper relies on.
 
 \begin{table}[t]
 \centering
-\caption{Generalization of the reversal across the YOLO11 family (three-run mean). ``Inverts?'': whether Contention-aware (offloading small-rich) beats the Isolated single-camera rule on worst-stream sAP at $N=4$, L1$_{\text{light}}$, Comp.~A. ``Worst gain'' $=$ Contention-aware $-$ Isolated worst sAP. All four measured detectors reverse, by a consistent $0.015$--$0.028$. YOLO11n TBD; RT-DETR/PicoDet deferred (no INT8 export); YOLOv8 in supplementary.}
-\label{tab:gen-gain}
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{ll|cc}
+\caption{Causal separation of the two losses (YOLOv11s, single stream). A host post-processing thread setting toggles frame staleness while leaving the per-processed-frame detections bit-identical (boxes/classes/scores diff $=0$ on $20$ frames). ``Quantization'' is the NPU$-$GPU size gap with staleness off (frame skip $0$); ``staleness'' is the additional gap introduced when frames are dropped. Quantization is small-biased; staleness is large-biased---opposite directions.}
+\label{tab:decomp}
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{lccc}
 \toprule
-Detector & family & inverts? & worst gain \\
+loss component & small & medium & large \\
 \midrule
-YOLO11n & YOLO11 & TBD & TBD \\
-YOLO11s & YOLO11 & yes & $+0.017$ \\
-YOLO11m & YOLO11 & yes & $+0.018$ \\
-YOLO11l & YOLO11 & yes & $+0.015$ \\
-YOLO11x & YOLO11 & yes & $+0.028$ \\
-\midrule
-RT-DETR / PicoDet & DETR/anchor-free & \multicolumn{2}{c}{\emph{future work (no INT8 NPU export)}} \\
+quantization (staleness off) & $-48.4\%$ & $-19.7\%$ & $+0.1\%$ \\
+staleness (off $\to$ on, $\Delta$sAP) & $\approx 0$ & $-0.030$ & $-0.098$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
+\paragraph{The staleness bias holds under real GPU contention, not just the thread lever.}
+\label{sec:results:persize}
+The thread-lever decomposition (Table~\ref{tab:decomp}) is a proxy for late delivery; we confirm the same size-structure under \emph{actual} GPU contention. Table~\ref{tab:persize-contention} reports how All-GPU's per-size sAP degrades as the GPU-only co-tenant is scaled up ($N{=}4$, $\Delta$ relative to the uncontended operating point). In the partial-contention band---the deployable regime around the crossover---the loss is sharply large-biased: at GPU frame-skip $\approx\!59\%$ large objects lose $0.095$ sAP against $0.002$ for small, the same ordering the thread lever produces (Table~\ref{tab:decomp}) but measured here directly under contention. Over the identical range the All-NPU per-size profile is contention-invariant (each size bin varies by $\le\!0.001$), consistent with the physically separate NPU compute path. Only at full saturation does the loss become size-neutral---every size bin collapses by $70$--$80\%$---so the large-object bias is the signature of the partial-contention band where the device crossover actually lives, and full saturation is the total-failure contrast.
+
+\begin{table}[t]
+\centering
+\caption{All-GPU per-size sAP loss under \emph{real} GPU contention ($N{=}4$, YOLOv11s, mean of 3 repeats; $\Delta$sAP relative to the uncontended point). The staleness loss is large-biased in the partial band ($\Delta_{\text{large}}\!\gg\!\Delta_{\text{small}}$), directly confirming the thread-lever decomposition of Table~\ref{tab:decomp}. All-NPU is contention-invariant over the same range (each size varies $\le0.001$). At full saturation every size collapses (size-neutral total failure).}
+\label{tab:persize-contention}
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{lccc}
+\toprule
+GPU frame skip & $\Delta$ small & $\Delta$ medium & $\Delta$ large \\
+\midrule
+$\approx31\%$  & $+0.001$ & $+0.025$ & $+0.059$ \\
+$\approx59\%$  & $+0.002$ & $+0.040$ & $+0.095$ \\
+$100\%$ (saturated) & $+0.006$ & $+0.115$ & $+0.326$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Under GPU co-tenancy the device choice reverses---but only for the right co-tenant.}
+\label{sec:results:reversal}
+Table~\ref{tab:main} reports worst-stream and mean sAP for All-GPU (the placement isolated profiling prescribes), All-NPU, and the non-deployable Oracle, at $N=4$ under the three co-tenants. The reversal appears most clearly in the VLM (bottom) row. Under the GPU-saturating VLM the GPU drops $100\%$ of foreground frames while the NPU (separate path) drops $1\%$: All-NPU scores $0.083$ worst-stream while All-GPU collapses to $0.016$---a $5.2\times$ gap---and at this saturated operating point the Oracle coincides with All-NPU. (Oracle optimizes worst-stream sAP, not mean sAP: under the VLM it places only the weakest stream on the NPU, matching the All-NPU worst-stream score while giving up some mean, so its mean in Table~\ref{tab:main} need not be the largest.) The reversal holds across stream counts under the VLM (All-NPU worst $0.083/0.083/0.083$ vs.\ All-GPU $0.018/0.016/0.014$ at $N{=}2/4/8$), so it is not an artifact of one load. The device isolated profiling preferred---the GPU---is exactly the one that fails.
+
+The other two rows show the reversal is \emph{conditional on the co-tenant}, the discriminating variable being whether it saturates the GPU compute path. Under the light CNN co-tenant no reversal occurs and GPU-using placements stay competitive; we note that the L1$_{\text{CNN}}$, $N{=}4$ GPU figures sit near the $33$~ms frame boundary and are skip-unstable between runs (Sec.~\ref{sec:discussion:limitations}), so we rest no claim on that cell. Under the CPU-bound language model the GPU stays ahead for a different reason---the LM also contends for the host CPU that runs the NPU's post-processing, raising the NPU's frame-skip to $76\%$ and cancelling its isolation advantage. Only the GPU-saturating VLM---which starves the GPU while leaving the NPU path free---produces the flip. ``Evaluate under contention'' is insufficient; one must evaluate under contention that saturates the \emph{GPU compute path} specifically. Partial placements that split cameras across devices do not win at the robust operating points: under the VLM, routing the large-object-rich cameras to the NPU scores $0.024$ worst-stream and a contention-aware split $0.015$, both far below All-NPU's $0.083$; under the LM, no split beats All-GPU. The only cell where a partial placement leads is the skip-unstable L1$_{\text{CNN}}$ near-boundary point (a contention-aware split $0.099$ vs.\ All-GPU $0.092$), which we exclude from our claim. Thus only the two extreme placements are ever the deployable best.
+
+\begin{table}[t]
+\centering
+\caption{Worst-stream and mean sAP at $N=4$ under three GPU co-tenants (YOLOv11s, mean of 3 repeats; last column: All-GPU GPU-skip / All-NPU NPU-skip). All-GPU is the placement isolated profiling prescribes. The device choice reverses only under the GPU-saturating VLM, where All-NPU beats All-GPU by $5.2\times$ on worst-stream and coincides with the (non-deployable) Oracle. Under the VLM the mean badly overstates safety---All-GPU's mean ($0.047$) is $2.9\times$ its worst camera ($0.016$)---while All-NPU keeps every camera alive (small mean-worst gap). The L1$_{\text{CNN}}$, $N{=}4$ GPU figures sit near the $33$~ms boundary and are skip-unstable (Sec.~\ref{sec:discussion:limitations}); split placements never lead except in that cell (Sec.~\ref{sec:results:reversal}).}
+\label{tab:main}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcc|cc|cc|c}
+\toprule
+ & \multicolumn{2}{c|}{All-GPU} & \multicolumn{2}{c|}{All-NPU} & \multicolumn{2}{c|}{Oracle} & GPU/NPU \\
+co-tenant & worst & mean & worst & mean & worst & mean & skip \\
+\midrule
+L1$_{\text{CNN}}$ (ResNet)   & $0.092$ & $0.131$ & $0.083$ & $0.126$ & $0.109$ & $0.133$ & $35\% / 1\%$ \\
+L2$_{\text{LM}}$ ($+$LLM)   & $\mathbf{0.062}$ & $0.100$ & $0.042$ & $0.088$ & $0.063$ & $0.099$ & $83\% / 76\%$ \\
+L3$_{\text{VLM}}$ ($+$VLM)  & $0.016$ & $0.047$ & $\mathbf{0.083}$ & $0.126$ & $0.083$ & $0.120$ & $100\% / 1\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{The reversal is gradual, not an all-or-nothing collapse.}
+\label{sec:results:sweep}
+Table~\ref{tab:main} reports the saturated extreme; Fig.~\ref{fig:sweep} instead sweeps GPU contention continuously. We hold the foreground at $N{=}4$ and scale the load of a single GPU-resident CNN co-tenant (the L1$_{\text{CNN}}$ family, by its request rate/concurrency) from idle to heavy; the $x$-axis is the foreground detector's \emph{own} GPU frame-skip under All-GPU (not the co-tenant's), and each point is the mean of three repeats. Because this co-tenant touches only the GPU compute path, the NPU's frame-skip stays $\le0.1\%$ at every point (verified per point), isolating the GPU-contention axis. All-GPU worst-stream sAP falls monotonically as GPU frame-skip rises, whereas All-NPU is flat at $0.084$, immune to GPU pressure; the two cross at $\approx\!48\%$ GPU frame-skip---roughly when half the GPU frames miss the budget, well below saturation, with the VLM of Table~\ref{tab:main} extending the same trend to full ($100\%$) saturation. The reversal is therefore not the trivial consequence of a dead GPU: it sets in at moderate contention, and the crossover is consistent with the same threshold across stream counts ($N{=}2,4,8$; Fig.~\ref{fig:sweep}). This is the threshold the model predicts (Sec.~\ref{sec:model}), located empirically.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.80\linewidth, height=0.44\linewidth,
+  xlabel={GPU frame skip (\%)}, ylabel={worst-stream sAP},
+  xmin=0, xmax=90, ymin=0.045, ymax=0.122,
+  xtick={0,20,40,60,80}, ytick={0.05,0.07,0.09,0.11},
+  legend pos=north east, legend cell align=left, legend columns=2,
+  legend style={font=\scriptsize, /tikz/every even column/.append style={column sep=4pt}},
+  grid=both, major grid style={gray!18}, tick align=outside,
+  every axis plot/.append style={very thick, mark size=1.6pt},
+]
+% All-NPU band (flat across N, 0.080--0.084)
+\fill[blue!8] (axis cs:0,0.0802) rectangle (axis cs:90,0.0836);
+\addplot[red,    mark=*]         coordinates {(0,0.1149)(4.8,0.1122)(13.6,0.1055)(23.1,0.1031)(41.2,0.0885)(54.5,0.0793)};
+\addlegendentry{All-GPU $N{=}2$}
+\addplot[orange, mark=square*]   coordinates {(0.1,0.1149)(42,0.0879)(57.9,0.0765)(67.3,0.0739)(71.5,0.0719)(73.5,0.0700)(79.2,0.0663)};
+\addlegendentry{All-GPU $N{=}4$}
+\addplot[brown,  mark=triangle*] coordinates {(63.8,0.0701)(71.9,0.0556)(75.9,0.0554)(78.4,0.0559)(82,0.0561)(83.9,0.0532)(87.9,0.0507)};
+\addlegendentry{All-GPU $N{=}8$}
+\addplot[blue, dashed, mark=none] coordinates {(0,0.0836)(90,0.0836)};
+\addlegendentry{All-NPU (all $N$)}
+\draw[dashed,gray] (axis cs:48,0.045) -- (axis cs:48,0.122);
+\node[anchor=south,gray,font=\scriptsize] at (axis cs:48,0.112) {crossover $\approx48\%$};
+\end{axis}
+\end{tikzpicture}
+\caption{Contention sweep at $N{=}2,4,8$ (worst-stream sAP, YOLOv11s; $21$ operating points, $3$ repeats each, max std $0.006$). As a GPU-only co-tenant scales from idle to heavy, All-GPU (solid) degrades monotonically with the foreground detector's \emph{own} GPU frame-skip for every stream count, while All-NPU (blue band, $0.080$--$0.084$ across $N$) is flat and GPU-immune (NPU frame-skip $\le0.1\%$ at $N{=}2,4$, $\le4.7\%$ at $N{=}8$). The crossover sits at $\approx48\%$ GPU frame-skip---moderate contention, not saturation---directly observed at $N{=}2,4$; at $N{=}8$ the eight foreground streams alone already exceed it ($\approx64\%$ skip), so All-NPU leads throughout. The crossover is consistent across $N{=}2,4,8$, at moderate (not total) contention.}
+\label{fig:sweep}
+\end{figure}
+
+\paragraph{Mean sAP understates the worst camera.}
+\label{sec:results:worst}
+The reversal is a \emph{worst-camera} effect, and reporting the mean conceals it. The signature is the mean-minus-worst gap in Table~\ref{tab:main}: under the VLM, All-GPU's mean ($0.047$) is $2.9\times$ its worst camera ($0.016$), because the streams differ in difficulty and the average is buoyed by the less-starved ones while the worst camera has already failed; All-NPU, which keeps every camera alive, has only a $1.5\times$ gap ($0.126$ vs $0.083$). A practitioner reporting the mean would read All-GPU as roughly three times healthier than its worst camera actually is. Mean sAP can still rank the placements correctly here---it too is highest for All-NPU---but it substantially \emph{understates the severity} of the failure, which is what a safety-critical loop must see. The gap is starker for a partial placement that splits cameras across devices: keeping some on the saturated GPU and the rest on the NPU yields mean $0.087$ but worst $0.024$ ($3.6\times$)---the surviving NPU streams hide a camera that has already failed. Per-stream sAP confirms the mechanism directly: in this split the two cameras on the NPU are immune ($0.109$ and $0.191$, unchanged as GPU load rises) while a camera left on the GPU falls from $0.115$ to $0.065$, so the worst stream is always a GPU camera and the mean is propped up by the immune NPU streams. Worst-stream sAP exposes the failure severity directly, where the mean conceals it. Argoverse-HD makes the mean especially misleading: it is dominated by small and medium objects ($>70\%$ of annotations per log), exactly the distant objects a loop must detect early, and exactly what the mean dilutes against the easy large-object majority on the surviving cameras.
 
 % ===============================================================
 \section{Discussion}
@@ -372,46 +287,23 @@ RT-DETR / PicoDet & DETR/anchor-free & \multicolumn{2}{c}{\emph{future work (no 
 
 \paragraph{Mechanism: why the reversal exists.}
 \label{sec:discussion:mechanism}
-The reversal rests on a hardware asymmetry that a loss decomposition makes quantitative. For the worst camera in the $N=8$ size-diverse workload, Table~\ref{tab:decomposition} attributes its All-NPU-path loss to sources.
-The NPU path loses $-0.057$ to quantization and nothing further to contention: adding the GPU-side background ($+0.026$) and seven concurrent NPU instances ($+0.000$) does not degrade it---their contributions are non-negative---so the NPU path's net loss ($-0.034$) is essentially all quantization, confirming the latency loss is negligible on the NPU path. Single mode gives each instance an independent on-chip core, and the bus topology keeps the NPU compute path separate from the GPU's. The GPU path, by contrast, loses more ($-0.059$), almost entirely to queueing, background competition, and the streaming-clock penalty---the latency loss that grows with load. The reversal is therefore not a heuristic artifact but the direct consequence of the latency loss growing on the GPU path while the quantization loss stays fixed and the latency loss stays near zero on the NPU path. Inspecting $50$ GPU/NPU-divergent frames, the NPU misses concentrate on small distant, partially occluded, and low-contrast objects (Fig.~\ref{fig:failures})---the vulnerable-road-user and signage classes whose detections the NPU erases.
-
-\begin{table}[t]
-\centering
-\caption{Loss decomposition of the All-NPU path on the worst camera (sid $21$) of the $N=8$ size-diverse panel. Each row is the worst-stream sAP change from adding one loss source. The NPU path's loss is essentially all INT8 quantization ($-0.057$); adding GPU-side background and seven concurrent NPU instances does \emph{not} worsen it (their contributions are non-negative), so contention is negligible on the NPU path. The GPU path loses more ($-0.059$), almost all of it contention latency. This camera's All-NPU worst-stream sAP for the configuration is about $0.082$ (measured as $0.083$ and $0.081$ in two independent runs, a $0.002$ run-to-run spread; cf.\ Table~\ref{tab:capacity}).}
-\label{tab:decomposition}
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{lc}
-\toprule
-Loss source & $\Delta$ worst sAP \\
-\midrule
-Quantization (GPU L0 $\to$ NPU L0, $N=1$)                  & $-0.057$ \\
-Background on NPU (NPU L0 $\to$ L1$_{\text{light}}$, $N=1$) & $+0.026$ \\
-Concurrent NPU (NPU $N=1 \to N=8$, L0)                     & $+0.000$ \\
-Interaction (NPU $N=8$, L0 $\to$ L1$_{\text{light}}$)      & $-0.002$ \\
-\midrule
-\textbf{Total NPU-path loss} (GPU L0 $\to$ NPU $N=8$ L1)    & $\mathbf{-0.034}$ \\
-\midrule
-\emph{For comparison:} GPU-path loss (GPU L0 $\to$ GPU $N=8$ L1, All-GPU) & $-0.059$ \\
-\bottomrule
-\end{tabular}
-\end{table}
+The reversal rests on a hardware asymmetry. The NPU's losses are load-stable: single mode gives each instance an independent on-chip core, and the bus topology keeps the NPU compute path separate from the GPU's, so a GPU-resident co-tenant does not slow the NPU's inference. Its accuracy cost is therefore a fixed, small-biased quantization penalty (Table~\ref{tab:single-stream}). The GPU path, in contrast, accumulates a streaming-staleness loss that grows with co-tenant pressure and concentrates on large objects (Table~\ref{tab:decomp}). Because the two losses run in opposite size directions, raising GPU contention raises the GPU's loss exactly where the NPU's is smallest; once a co-tenant saturates the GPU, every GPU stream collapses and the fixed NPU penalty becomes the better deal. The one exception we observe sharpens the mechanism: a CPU-bound co-tenant (the LM) contends for the host that runs the NPU's \emph{post-processing}, so it degrades the NPU path too and the advantage cancels---confirming that the reversal requires contention localized to the GPU compute path.
 
 \paragraph{Scope and generalization.}
 \label{sec:discussion:generalization}
-Both mechanisms are methodological rather than dataset-specific---the quantization loss a property of the detector and its quantized variant, the latency loss a property of streaming-clock evaluation under shared-GPU contention---so we expect the reversal and the mean-vs-worst discrepancy to carry over to other GPU--NPU multi-camera deployments (service and warehouse robotics, retail and security, industrial inspection); only the specific crossover points and offload fractions, which depend on vendor, capacity, background, and detector, do not transfer.
+Both mechanisms are methodological rather than dataset-specific---the quantization loss a property of the detector and its quantized variant, the staleness loss a property of streaming-clock evaluation under shared-GPU contention---so we expect the reversal and the mean-vs-worst discrepancy to carry over to other GPU--NPU multi-camera deployments (service and warehouse robotics, retail and security) wherever the GPU hosts a saturating co-tenant. The specific thresholds (which co-tenant saturates, at what load) depend on vendor, detector, and workload and do not transfer; identifying them is exactly the per-deployment measurement we argue for.
 
 \paragraph{Limitations.}
 \label{sec:discussion:limitations}
-The headline measurements use YOLOv11s, with the YOLO11 family for capacity scaling; cross-architecture generality (non-YOLO families) needs an INT8 NPU export we lack, though the model itself is architecture-agnostic. We also observed that the NPU's measured behavior depends on the runtime/SDK state: an earlier sweep showed near-zero large-object quantization loss, but a repeatability test reproduced a $\sim\!-0.10$ large-object gap in $8/8$ runs, establishing it as the current-SDK normal state, which we use throughout; the single-camera NPU inference time likewise differs between SDK states. The multi-stream YOLO11-family gains of Table~\ref{tab:gen-gain} were collected in the earlier state and are being re-measured for consistency (Sec.~\ref{sec:generalization}). Even the worst-stream-optimal placement is bounded by the NPU's INT8 loss---it gives the right \emph{relative} decision at a given contention, not recovery of quality contention has destroyed; raising the absolute bound requires reducing the quantization loss itself (quantization-aware training, mixed precision). Finally, we use one NPU vendor and card, and emulate multi-camera workloads by replaying distinct single-camera logs (Argoverse-HD annotates only the forward ring camera); validating on a synchronized multi-camera benchmark with streaming labels is future work.
-
+The headline uses YOLOv11s; cross-capacity (YOLO11 m/l/x) and cross-architecture (non-YOLO) generality needs further INT8 NPU exports, though the account is architecture-agnostic. INT8 quantization loss is a property of the detector \emph{and} its quantization toolchain, so it depends on the toolchain version; we fix one version and characterize that state. Results come from a single reproducible operating point: the single-stream size gaps reproduce across three repeats with bit-identical detections, and the VLM reversal is large and stable (std $\le 0.001$). We note one measurement sensitivity: at $N{=}4$ under the \emph{light} co-tenant the GPU's per-frame time sits near the $33$~ms boundary, so its frame-skip (and hence the L1$_{\text{CNN}}$ All-GPU/Contention-aware figures) is unstable between runs; we therefore do not rest any claim on that cell, and the conditional pattern across co-tenants---and the large VLM reversal---does not depend on it. The NPU's single-stream latency is dominated by host-side post-processing rather than on-chip compute ($\approx4$~ms, faster than the GPU); an isolated latency profile of the NPU thus measures the host pipeline as much as the accelerator, a further reason the isolated signal is an unreliable basis for placement. Even the best placement is bounded by the NPU's INT8 loss---under saturation it keeps cameras \emph{alive} but at INT8 accuracy; raising that bound requires reducing the quantization loss itself (quantization-aware training, mixed precision). Finally, we use one NPU vendor and card, and emulate multi-camera workloads by replaying distinct single-camera logs (Argoverse-HD annotates only the forward ring camera); validating on a synchronized multi-camera benchmark with streaming labels is future work.
 
 % ===============================================================
 \section{Conclusion}
 \label{sec:conclusion}
 
-We showed that single-camera streaming-perception evaluation can reverse the device-placement decision once the same cameras run under multi-camera contention on a heterogeneous GPU--NPU platform. The cause is two opposite, size-stratified losses---INT8 quantization, steepest on small objects but non-negligible everywhere, and contention latency, heaviest on medium and large objects---that isolated evaluation conflates because it sees only the first. The reversal follows a precise condition (Proposition~\ref{prop:reversal}): the better device flips once a camera's contention latency on the GPU exceeds its fixed quantization loss. In practice this makes a contention-aware placement---one that offloads the small-rich cameras the isolated rule keeps on the GPU---the best deployable choice, recovering about $90\%$ of an exhaustive oracle, while the optimal offload fraction grows toward all-NPU as cameras are added; the isolated single-camera rule is never best. This failure is invisible to the mean accuracy prior work reports, which can mask a worst camera sitting near half the average. Heterogeneous multi-camera streaming detection should therefore be evaluated \emph{under} deployment contention and reported by \emph{worst-stream} sAP. Across the YOLO11 family the reversal holds at every capacity, arriving at a near-constant contention level; extending it to non-YOLO detectors and synchronized multi-camera benchmarks is the natural next step.
+We showed that single-camera streaming-perception evaluation can \emph{reverse} the device-placement decision on a heterogeneous GPU--NPU platform once the shared GPU runs a saturating co-tenant. In isolation the FP32 GPU wins, because the INT8 NPU's only cost is a quantization loss concentrated on small objects and negligible on large ones. But when a GPU-resident vision--language model saturates the device, every GPU stream collapses while the separate-path NPU keeps delivering, and moving all cameras to the NPU recovers worst-stream sAP by $4$--$5\times$---making the isolated prescription the worst deployable choice. Crucially, the flip is conditional on the \emph{kind} of co-tenant: a light GPU workload triggers no reversal, a CPU-bound language model cancels the NPU's edge, and only a GPU-saturating workload triggers the reversal. We separated the two underlying losses causally with a staleness lever that leaves the detector untouched, confirming a small-biased quantization loss and a large-biased staleness loss in opposition, and showed that the failure is a worst-camera effect whose severity mean sAP understates. Heterogeneous multi-camera streaming detection should therefore be stress-tested under deployment-relevant co-tenancy---including GPU-saturating workloads where these are plausible in deployment---and reported by worst-stream sAP.
 
-
+% ===============================================================
 \bibliographystyle{splncs04}
 \bibliography{main}
 \end{document}
