@@ -1,0 +1,85 @@
+
+=== P0.1  Table 1 reproduction ===
+    metric  table1_gpu  table1_npu  table1_diff  stepA_gpu  stepA_npu  stepA_diff  taskB_gpu  taskB_npu  taskB_diff  stepA_matches_table1  taskB_matches_table1
+  sap_5095       0.193       0.182       -0.011     0.1930     0.1820     -0.0110     0.1957     0.1504     -0.0452                  True                 False
+    sap_50       0.308       0.279       -0.029     0.3082     0.2792     -0.0289     0.3046     0.2460     -0.0586                  True                 False
+ sap_small       0.015       0.008       -0.007     0.0153     0.0081     -0.0072     0.0159     0.0065     -0.0093                  True                  True
+sap_medium       0.184       0.148       -0.036     0.1845     0.1485     -0.0360     0.1839     0.1121     -0.0718                  True                 False
+ sap_large       0.472       0.473        0.001     0.4716     0.4725      0.0009     0.4768     0.3647     -0.1121                  True                 False
+
+  step_a reproduces Table 1: PASS
+  TASK B reproduces Table 1: FAIL
+
+=== P0.2  Root-cause checklist ===
+                                        param                                         step_a                                                                                                                            taskB  same                                                                         note
+                   NPU mxq file (single mode)               yolo11s.mxq via global8 fallback /home/msyu/.cache/huggingface/hub/models--mobilint--YOLO11s/snapshots/8e62b1a90172d70b9292afbc883fdade8de0df24/aries/yolo11s.mxq  True                       single/global8 paths fall back to same un-suffixed mxq
+                                   infer_mode global8 (line 185 'yolo11s.mxq, 640, global8')                                                                                                                           single False ROOT CAUSE CANDIDATE — different resource allocation may yield different sAP
+                               CONF threshold                                           0.25                                                                                                                             0.25  True                                            shared from step0_compare_devices
+                            IoU NMS threshold                                           0.45                                                                                                                             0.45  True                                                                       shared
+                                        imgsz                                            640                                                                                                                              640  True                                                                       shared
+COCO area thresholds (small <32² <96² <large)                  pycocotools default 32^2/96^2                                                                                                    pycocotools default 32^2/96^2  True                                                   both use COCOeval defaults
+                          val.json categories                                              8                                                                                                                                8  True                                                                AHD 8 classes
+                 val.json sequences (24 logs)                                             24                                                                                                                               24  True                                                         same shared val.json
+                          coco_mapping length                                             80                                                                                                                               80  True                                                                same val.json
+                      pycocotools aggregation  per-log COCOeval; mean across logs (mean±std)                                                                                    per-log COCOeval; mean across logs (mean±std)  True                                        both per-log-then-average; not pooled
+                           warmup-skip frames                                             30                                                                                                                               30  True                                                    shared via _step_d_common
+
+  Mismatches: 1
+    - infer_mode: step_a="global8 (line 185 'yolo11s.mxq, 640, global8')"  taskB='single'
+      note: ROOT CAUSE CANDIDATE — different resource allocation may yield different sAP
+
+=== P0.3  NEW C* (v2, sAP-gap) ===
+
+C_per_bg (GPU eff E2E ms): {'L0': 7.945833333333333, 'L1_light': 18.455383333333334, 'L1_heavy': 21.0557375, 'L2_lm': 31.120320833333334, 'L3_vlm': 449.42085833333334}
+
+v2 per-(group, bg):
+       group       bg   C_ms  sap_npu_g  sap_gpu_g  delta_g
+  small-rich       L0   7.95     0.2058     0.2112  -0.0054
+  small-rich L1_light  18.46     0.2058     0.2066  -0.0007
+  small-rich L1_heavy  21.06     0.2058     0.2062  -0.0004
+  small-rich    L2_lm  31.12     0.2058     0.1881   0.0177
+  small-rich   L3_vlm 449.42     0.2058     0.0625   0.1434
+medium-mixed       L0   7.95     0.1266     0.1404  -0.0139
+medium-mixed L1_light  18.46     0.1266     0.1412  -0.0146
+medium-mixed L1_heavy  21.06     0.1266     0.1414  -0.0148
+medium-mixed    L2_lm  31.12     0.1266     0.1248   0.0018
+medium-mixed   L3_vlm 449.42     0.1266     0.0306   0.0960
+  large-rich       L0   7.95     0.2136     0.2274  -0.0138
+  large-rich L1_light  18.46     0.2136     0.2375  -0.0239
+  large-rich L1_heavy  21.06     0.2136     0.2381  -0.0246
+  large-rich    L2_lm  31.12     0.2136     0.2170  -0.0034
+  large-rich   L3_vlm 449.42     0.2136     0.0628   0.1508
+
+v2 per-group C*:
+       group  sap_npu_g  Cstar_ms
+  small-rich     0.2058     21.26
+medium-mixed     0.1266     30.02
+  large-rich     0.2136     40.38
+
+v1 (absolute per-size, OLD) for diagnostic:
+detector  params_M        group    Q_g  Cstar_ms
+YOLOv11s       9.4   small-rich 0.0555     29.07
+YOLOv11s       9.4 medium-mixed 0.0649     26.77
+YOLOv11s       9.4   large-rich 0.0773     24.81
+
+=== P0.4  Consistency matrix ===
+  (a) tab:partA small-rich Δ > large-rich Δ
+     small_rich_delta = -0.0181
+     large_rich_delta = -0.0389
+     result = True
+  (b) v2 C*: small-rich crosses first
+     Cstar_small_rich_ms = 21.26
+     Cstar_large_rich_ms = 40.38
+     result = True
+  (c) TASK D N=4 L1 inversion
+     inverts = True
+     result = True
+
+  CONSISTENCY: PASS (small-rich first)
+saved /home/msyu/PycharmProjects/multimodel-scheduling-video/accv_experiments/results/gen_cstar_v2.pdf
+copied -> /home/msyu/PycharmProjects/multimodel-scheduling-video/paper/figures/gen_cstar.pdf
+copied -> /home/msyu/PycharmProjects/multimodel-scheduling-video/figures/gen_cstar.pdf
+
+saved /home/msyu/PycharmProjects/multimodel-scheduling-video/accv_experiments/results/p0_decisions.json
+
+P0 done. CONSISTENCY: PASS

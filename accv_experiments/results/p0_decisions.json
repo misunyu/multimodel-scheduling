@@ -1,0 +1,521 @@
+{
+  "P0.1": {
+    "stepA_matches": true,
+    "taskB_matches": false,
+    "rows": [
+      {
+        "metric": "sap_5095",
+        "table1_gpu": 0.193,
+        "table1_npu": 0.182,
+        "table1_diff": -0.011,
+        "stepA_gpu": 0.193,
+        "stepA_npu": 0.182,
+        "stepA_diff": -0.011,
+        "taskB_gpu": 0.1957,
+        "taskB_npu": 0.1504,
+        "taskB_diff": -0.0452,
+        "stepA_matches_table1": true,
+        "taskB_matches_table1": false
+      },
+      {
+        "metric": "sap_50",
+        "table1_gpu": 0.308,
+        "table1_npu": 0.279,
+        "table1_diff": -0.029,
+        "stepA_gpu": 0.3082,
+        "stepA_npu": 0.2792,
+        "stepA_diff": -0.0289,
+        "taskB_gpu": 0.3046,
+        "taskB_npu": 0.246,
+        "taskB_diff": -0.0586,
+        "stepA_matches_table1": true,
+        "taskB_matches_table1": false
+      },
+      {
+        "metric": "sap_small",
+        "table1_gpu": 0.015,
+        "table1_npu": 0.008,
+        "table1_diff": -0.007,
+        "stepA_gpu": 0.0153,
+        "stepA_npu": 0.0081,
+        "stepA_diff": -0.0072,
+        "taskB_gpu": 0.0159,
+        "taskB_npu": 0.0065,
+        "taskB_diff": -0.0093,
+        "stepA_matches_table1": true,
+        "taskB_matches_table1": true
+      },
+      {
+        "metric": "sap_medium",
+        "table1_gpu": 0.184,
+        "table1_npu": 0.148,
+        "table1_diff": -0.036,
+        "stepA_gpu": 0.1845,
+        "stepA_npu": 0.1485,
+        "stepA_diff": -0.036,
+        "taskB_gpu": 0.1839,
+        "taskB_npu": 0.1121,
+        "taskB_diff": -0.0718,
+        "stepA_matches_table1": true,
+        "taskB_matches_table1": false
+      },
+      {
+        "metric": "sap_large",
+        "table1_gpu": 0.472,
+        "table1_npu": 0.473,
+        "table1_diff": 0.001,
+        "stepA_gpu": 0.4716,
+        "stepA_npu": 0.4725,
+        "stepA_diff": 0.0009,
+        "taskB_gpu": 0.4768,
+        "taskB_npu": 0.3647,
+        "taskB_diff": -0.1121,
+        "stepA_matches_table1": true,
+        "taskB_matches_table1": false
+      }
+    ]
+  },
+  "P0.2": {
+    "rows": [
+      {
+        "param": "NPU mxq file (single mode)",
+        "step_a": "yolo11s.mxq via global8 fallback",
+        "taskB": "/home/msyu/.cache/huggingface/hub/models--mobilint--YOLO11s/snapshots/8e62b1a90172d70b9292afbc883fdade8de0df24/aries/yolo11s.mxq",
+        "same": true,
+        "note": "single/global8 paths fall back to same un-suffixed mxq"
+      },
+      {
+        "param": "infer_mode",
+        "step_a": "global8 (line 185 'yolo11s.mxq, 640, global8')",
+        "taskB": "single",
+        "same": false,
+        "note": "ROOT CAUSE CANDIDATE \u2014 different resource allocation may yield different sAP"
+      },
+      {
+        "param": "CONF threshold",
+        "step_a": 0.25,
+        "taskB": 0.25,
+        "same": true,
+        "note": "shared from step0_compare_devices"
+      },
+      {
+        "param": "IoU NMS threshold",
+        "step_a": 0.45,
+        "taskB": 0.45,
+        "same": true,
+        "note": "shared"
+      },
+      {
+        "param": "imgsz",
+        "step_a": 640,
+        "taskB": 640,
+        "same": true,
+        "note": "shared"
+      },
+      {
+        "param": "COCO area thresholds (small <32\u00b2 <96\u00b2 <large)",
+        "step_a": "pycocotools default 32^2/96^2",
+        "taskB": "pycocotools default 32^2/96^2",
+        "same": true,
+        "note": "both use COCOeval defaults"
+      },
+      {
+        "param": "val.json categories",
+        "step_a": 8,
+        "taskB": 8,
+        "same": true,
+        "note": "AHD 8 classes"
+      },
+      {
+        "param": "val.json sequences (24 logs)",
+        "step_a": 24,
+        "taskB": 24,
+        "same": true,
+        "note": "same shared val.json"
+      },
+      {
+        "param": "coco_mapping length",
+        "step_a": 80,
+        "taskB": 80,
+        "same": true,
+        "note": "same val.json"
+      },
+      {
+        "param": "pycocotools aggregation",
+        "step_a": "per-log COCOeval; mean across logs (mean\u00b1std)",
+        "taskB": "per-log COCOeval; mean across logs (mean\u00b1std)",
+        "same": true,
+        "note": "both per-log-then-average; not pooled"
+      },
+      {
+        "param": "warmup-skip frames",
+        "step_a": 30,
+        "taskB": 30,
+        "same": true,
+        "note": "shared via _step_d_common"
+      }
+    ],
+    "mismatches": [
+      {
+        "param": "infer_mode",
+        "step_a": "global8 (line 185 'yolo11s.mxq, 640, global8')",
+        "taskB": "single",
+        "same": false,
+        "note": "ROOT CAUSE CANDIDATE \u2014 different resource allocation may yield different sAP"
+      }
+    ]
+  },
+  "P0.3": {
+    "v2_rows": [
+      {
+        "group": "small-rich",
+        "sap_npu_g": 0.2058,
+        "Cstar_ms": 21.26
+      },
+      {
+        "group": "medium-mixed",
+        "sap_npu_g": 0.1266,
+        "Cstar_ms": 30.02
+      },
+      {
+        "group": "large-rich",
+        "sap_npu_g": 0.2136,
+        "Cstar_ms": 40.38
+      }
+    ],
+    "v2_per_bg": [
+      {
+        "group": "small-rich",
+        "bg": "L0",
+        "C_ms": 7.95,
+        "sap_npu_g": 0.2058,
+        "sap_gpu_g": 0.2112,
+        "delta_g": -0.0054
+      },
+      {
+        "group": "small-rich",
+        "bg": "L1_light",
+        "C_ms": 18.46,
+        "sap_npu_g": 0.2058,
+        "sap_gpu_g": 0.2066,
+        "delta_g": -0.0007
+      },
+      {
+        "group": "small-rich",
+        "bg": "L1_heavy",
+        "C_ms": 21.06,
+        "sap_npu_g": 0.2058,
+        "sap_gpu_g": 0.2062,
+        "delta_g": -0.0004
+      },
+      {
+        "group": "small-rich",
+        "bg": "L2_lm",
+        "C_ms": 31.12,
+        "sap_npu_g": 0.2058,
+        "sap_gpu_g": 0.1881,
+        "delta_g": 0.0177
+      },
+      {
+        "group": "small-rich",
+        "bg": "L3_vlm",
+        "C_ms": 449.42,
+        "sap_npu_g": 0.2058,
+        "sap_gpu_g": 0.0625,
+        "delta_g": 0.1434
+      },
+      {
+        "group": "medium-mixed",
+        "bg": "L0",
+        "C_ms": 7.95,
+        "sap_npu_g": 0.1266,
+        "sap_gpu_g": 0.1404,
+        "delta_g": -0.0139
+      },
+      {
+        "group": "medium-mixed",
+        "bg": "L1_light",
+        "C_ms": 18.46,
+        "sap_npu_g": 0.1266,
+        "sap_gpu_g": 0.1412,
+        "delta_g": -0.0146
+      },
+      {
+        "group": "medium-mixed",
+        "bg": "L1_heavy",
+        "C_ms": 21.06,
+        "sap_npu_g": 0.1266,
+        "sap_gpu_g": 0.1414,
+        "delta_g": -0.0148
+      },
+      {
+        "group": "medium-mixed",
+        "bg": "L2_lm",
+        "C_ms": 31.12,
+        "sap_npu_g": 0.1266,
+        "sap_gpu_g": 0.1248,
+        "delta_g": 0.0018
+      },
+      {
+        "group": "medium-mixed",
+        "bg": "L3_vlm",
+        "C_ms": 449.42,
+        "sap_npu_g": 0.1266,
+        "sap_gpu_g": 0.0306,
+        "delta_g": 0.096
+      },
+      {
+        "group": "large-rich",
+        "bg": "L0",
+        "C_ms": 7.95,
+        "sap_npu_g": 0.2136,
+        "sap_gpu_g": 0.2274,
+        "delta_g": -0.0138
+      },
+      {
+        "group": "large-rich",
+        "bg": "L1_light",
+        "C_ms": 18.46,
+        "sap_npu_g": 0.2136,
+        "sap_gpu_g": 0.2375,
+        "delta_g": -0.0239
+      },
+      {
+        "group": "large-rich",
+        "bg": "L1_heavy",
+        "C_ms": 21.06,
+        "sap_npu_g": 0.2136,
+        "sap_gpu_g": 0.2381,
+        "delta_g": -0.0246
+      },
+      {
+        "group": "large-rich",
+        "bg": "L2_lm",
+        "C_ms": 31.12,
+        "sap_npu_g": 0.2136,
+        "sap_gpu_g": 0.217,
+        "delta_g": -0.0034
+      },
+      {
+        "group": "large-rich",
+        "bg": "L3_vlm",
+        "C_ms": 449.42,
+        "sap_npu_g": 0.2136,
+        "sap_gpu_g": 0.0628,
+        "delta_g": 0.1508
+      }
+    ],
+    "v1_rows": [
+      {
+        "detector": "YOLOv11s",
+        "params_M": 9.4,
+        "group": "small-rich",
+        "Q_g": 0.0555,
+        "Cstar_ms": 29.07
+      },
+      {
+        "detector": "YOLOv11s",
+        "params_M": 9.4,
+        "group": "medium-mixed",
+        "Q_g": 0.0649,
+        "Cstar_ms": 26.77
+      },
+      {
+        "detector": "YOLOv11s",
+        "params_M": 9.4,
+        "group": "large-rich",
+        "Q_g": 0.0773,
+        "Cstar_ms": 24.81
+      }
+    ],
+    "C_per_bg": {
+      "L0": 7.945833333333333,
+      "L1_light": 18.455383333333334,
+      "L1_heavy": 21.0557375,
+      "L2_lm": 31.120320833333334,
+      "L3_vlm": 449.42085833333334
+    },
+    "gpu_overall": {
+      "L0": {
+        "0": 0.069,
+        "1": 0.0798,
+        "2": 0.1223,
+        "3": 0.1683,
+        "4": 0.2127,
+        "5": 0.35,
+        "6": 0.0974,
+        "7": 0.2117,
+        "8": 0.1028,
+        "9": 0.1123,
+        "10": 0.1485,
+        "11": 0.28,
+        "12": 0.4992,
+        "13": 0.1975,
+        "14": 0.4478,
+        "15": 0.1148,
+        "16": 0.2726,
+        "17": 0.2413,
+        "18": 0.2027,
+        "19": 0.1171,
+        "20": 0.1048,
+        "21": 0.1139,
+        "22": 0.2107,
+        "23": 0.1554
+      },
+      "L1_light": {
+        "0": 0.0674,
+        "1": 0.0727,
+        "2": 0.1207,
+        "3": 0.1542,
+        "4": 0.2132,
+        "5": 0.432,
+        "6": 0.0957,
+        "7": 0.221,
+        "8": 0.1012,
+        "9": 0.1124,
+        "10": 0.1528,
+        "11": 0.2874,
+        "12": 0.482,
+        "13": 0.1985,
+        "14": 0.4488,
+        "15": 0.1165,
+        "16": 0.2478,
+        "17": 0.2468,
+        "18": 0.2034,
+        "19": 0.1208,
+        "20": 0.1058,
+        "21": 0.115,
+        "22": 0.211,
+        "23": 0.1553
+      },
+      "L1_heavy": {
+        "0": 0.0674,
+        "1": 0.0736,
+        "2": 0.1208,
+        "3": 0.1551,
+        "4": 0.2134,
+        "5": 0.4342,
+        "6": 0.0953,
+        "7": 0.2214,
+        "8": 0.1012,
+        "9": 0.1129,
+        "10": 0.1535,
+        "11": 0.2875,
+        "12": 0.4825,
+        "13": 0.1979,
+        "14": 0.45,
+        "15": 0.1163,
+        "16": 0.2456,
+        "17": 0.2478,
+        "18": 0.2033,
+        "19": 0.1204,
+        "20": 0.1052,
+        "21": 0.1148,
+        "22": 0.2112,
+        "23": 0.155
+      },
+      "L2_lm": {
+        "0": 0.0592,
+        "1": 0.0633,
+        "2": 0.1013,
+        "3": 0.1241,
+        "4": 0.2131,
+        "5": 0.4104,
+        "6": 0.0785,
+        "7": 0.1849,
+        "8": 0.0821,
+        "9": 0.0956,
+        "10": 0.1338,
+        "11": 0.2761,
+        "12": 0.4756,
+        "13": 0.1812,
+        "14": 0.4232,
+        "15": 0.0985,
+        "16": 0.2278,
+        "17": 0.2142,
+        "18": 0.1951,
+        "19": 0.1033,
+        "20": 0.091,
+        "21": 0.0895,
+        "22": 0.2009,
+        "23": 0.1164
+      },
+      "L3_vlm": {
+        "0": 0.0031,
+        "1": 0.0023,
+        "2": 0.0188,
+        "3": 0.0138,
+        "4": 0.2272,
+        "5": 0.03,
+        "6": 0.0045,
+        "7": 0.0141,
+        "8": 0.0024,
+        "9": 0.0053,
+        "10": 0.0077,
+        "11": 0.1707,
+        "12": 0.2942,
+        "13": 0.0085,
+        "14": 0.1099,
+        "15": 0.0035,
+        "16": 0.0293,
+        "17": 0.0443,
+        "18": 0.0862,
+        "19": 0.0108,
+        "20": 0.01,
+        "21": 0.0156,
+        "22": 0.1223,
+        "23": 0.0124
+      }
+    },
+    "npu_overall": {
+      "0": 0.0604,
+      "1": 0.0659,
+      "2": 0.111,
+      "3": 0.133,
+      "4": 0.2014,
+      "5": 0.3636,
+      "6": 0.0944,
+      "7": 0.1926,
+      "8": 0.0726,
+      "9": 0.1473,
+      "10": 0.1417,
+      "11": 0.2722,
+      "12": 0.4505,
+      "13": 0.1782,
+      "14": 0.4084,
+      "15": 0.1054,
+      "16": 0.363,
+      "17": 0.2027,
+      "18": 0.1794,
+      "19": 0.1029,
+      "20": 0.1029,
+      "21": 0.0829,
+      "22": 0.1902,
+      "23": 0.1456
+    }
+  },
+  "P0.4": {
+    "matrix": {
+      "(a) tab:partA small-rich \u0394 > large-rich \u0394": {
+        "small_rich_delta": -0.0181,
+        "large_rich_delta": -0.0389,
+        "result": true
+      },
+      "(b) v2 C*: small-rich crosses first": {
+        "Cstar_small_rich_ms": 21.26,
+        "Cstar_large_rich_ms": 40.38,
+        "result": true
+      },
+      "(c) TASK D N=4 L1 inversion": {
+        "inverts": true,
+        "result": true
+      }
+    },
+    "overall_pass": true
+  },
+  "v2_figure_results": "/home/msyu/PycharmProjects/multimodel-scheduling-video/accv_experiments/results/gen_cstar_v2.pdf",
+  "P0.5": {
+    "action": "v2 promoted to paper/figures/gen_cstar.pdf",
+    "consistency": "PASS"
+  }
+}
