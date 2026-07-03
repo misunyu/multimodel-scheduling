@@ -89,7 +89,7 @@ Because the best placement changes with deployment-time contention, we recommend
 Streaming perception evaluates detections at their delivery time rather than at frame capture time. This makes latency a first-class component of accuracy~\cite{streaming-perception}. Subsequent work introduced streaming-oriented detector designs and evaluation protocols~\cite{streamyolo,damo-streamnet,asap,longshortnet}. These studies typically report sAP under isolated execution. This implicitly assumes that latency characteristics remain stable after deployment. The impact of deployment-time resource contention and heterogeneous accelerator sharing therefore remains largely unexplored.
 
 \paragraph{Heterogeneous edge inference.}
-Modern edge platforms combine heterogeneous accelerators and co-resident workloads to balance throughput, latency, and power consumption~\cite{mobilint-aries}. Prior work has optimized scheduling, partitioning, placement, precision selection, and interference-aware provisioning across shared accelerators~\cite{partitiontuner,ngs,rl-scheduler,tod,igniter}. These studies primarily focus on throughput, latency, utilization, or static accuracy. In contrast, we study deployment-time streaming accuracy and show that accelerator sharing can reverse placement decisions.
+Modern edge platforms combine heterogeneous accelerators and co-resident workloads to balance throughput, latency, and power consumption~\cite{mobilint-aries}. Prior work selects device placements and schedules from several signals: isolated accuracy and latency profiles~\cite{tod,partitiontuner,ngs,rl-scheduler}, and measured or predicted GPU utilization, which is a common scheduling and placement signal in GPU cluster management~\cite{gandiva,horus}. Interference-aware systems such as iGniter~\cite{igniter} go further by predicting contention-induced latency, but they target latency SLOs rather than delivery-time streaming accuracy, and do not consider heterogeneous GPU--NPU placement. These studies primarily optimize throughput, latency, utilization, or static accuracy. In contrast, we study deployment-time streaming accuracy, show that accelerator sharing can reverse placement decisions, and quantitatively evaluate the placements implied by these selection criteria under contention.
 %We further show that quantization and staleness have different size-dependent effects.
 
 \paragraph{Worst-case evaluation.}
@@ -149,7 +149,7 @@ All detectors are evaluated on the Argoverse-HD validation split~\cite{streaming
 To study contention among independent camera streams, we concurrently replay $N \in \{2,4,8\}$ distinct Argoverse-HD logs. This emulates a multi-camera workload through concurrent replay of independent single-camera logs rather than a synchronized camera rig. For controlled composition experiments, we sort logs by their fraction of large objects. We then divide them into three equal-sized groups called small-object-rich, medium-object-rich, and large-object-rich.
 
 \paragraph{\textbf{Co-tenant workloads.}}
-We distinguish foreground streams from a GPU-pinned co-tenant workload. We evaluate three co-tenant levels, summarized in Table~\ref{tab:cotenants}. The levels span light CNN inference (\Lcnn{}), mixed CNN+LLM inference (\Llm{}), and a GPU-intensive vision-language workload (\Lvlm{}). All co-tenants execute on CUDA.
+We distinguish foreground streams from a GPU-pinned co-tenant workload. We evaluate three co-tenant levels, summarized in Table~\ref{tab:cotenants}. The levels span light CNN inference (\Lcnn{}), mixed CNN+LLM inference (\Llm{}), and a GPU-intensive vision-language workload (\Lvlm{}). All co-tenants execute on CUDA. For contention sweeps, we additionally vary the number $k$ of concurrent GPU-pinned ResNet50 co-tenant instances (the \emph{$k$-sweep}); increasing $k$ raises the measured foreground GPU deadline-miss rate from about $24\%$ to $67\%$ at $N{=}4$.
 
 \begin{table}
 \centering
@@ -181,7 +181,7 @@ We also report the deadline-miss rate, defined as the fraction of processed infe
 
 We additionally record GPU utilization, GPU memory use, and GPU power as diagnostic system counters. These counters help characterize the co-tenant load, but they are not used as the primary contention variable because they do not directly indicate whether foreground detections meet the streaming deadline.
 
-Each measurement uses a $14$~s evaluation window following a $30$-frame warm-up period. Results are averaged over at least three independent repetitions, with additional repetitions at the near-deadline boundary operating point.
+Each measurement uses a $14$~s evaluation window following a $30$-frame warm-up period. Results are averaged over at least three independent repetitions, with additional repetitions at the near-deadline boundary operating point. Statistical significance is reported only for single-camera comparisons, where the $24$ Argoverse-HD logs provide paired samples for a Wilcoxon signed-rank test. Multi-stream contention results are instead summarized as means over repeated runs, with run-to-run variability reported in Sec.~\ref{sec:discussion:limitations}, because three to ten repetitions do not support a meaningful hypothesis test.
 
 
 \paragraph{\textbf{Placement policies.}}
@@ -189,6 +189,9 @@ We evaluate two homogeneous placement policies. \textbf{All-GPU} assigns all for
 We additionally report a diagnostic \textbf{Oracle} over a restricted family of mixed placements. For a run with $N$ streams, the Oracle evaluates $N{+}1$ candidate placements from All-GPU to All-NPU. Starting from All-GPU, it moves one additional stream to the NPU at each step, following a fixed offline order given by each stream's large-object fraction. The Oracle reports the highest worst-stream sAP among these candidates. It is not an online scheduling policy, but a diagnostic upper bound within this restricted family of placements.
 
 Within this family, the simplest non-trivial placement moves only the single stream with the highest large-object fraction to the NPU. We call this the \emph{large-object-aware one-stream split}. Unlike the full Oracle, it does not evaluate multiple mixed placements. It simply selects the mixed placement that moves only the stream with the highest large-object fraction to the NPU.
+
+\paragraph{\textbf{Placement-selection policies.}}
+Beyond the placement configurations above, we evaluate the placement that common selection criteria would choose at each contention level. \emph{Isolated-accuracy selection} (P1) places all streams on the device with the higher isolated single-stream sAP, reflecting vendor-style FP32 preference. \emph{Latency-profiling selection} (P2) places all streams on the lowest-latency device that meets the frame budget, following transprecision-style profiling~\cite{tod}. \emph{Utilization-threshold selection} (P3) migrates streams to the NPU, large-object-first in the same order as the Oracle, once measured mean GPU utilization exceeds a threshold $\theta\in\{70,80,90\}\%$, reflecting the common use of GPU utilization as a scheduling and placement signal~\cite{gandiva,horus}. Finally, \emph{deadline-miss-aware selection} (P4) moves all streams to the NPU once the foreground GPU deadline-miss rate exceeds the measured homogeneous crossover; it is not a competing prior-work policy but a policized form of our own reporting recommendation, included as a diagnostic.
 
 
 We exclude CPU execution because it drops the vast majority of frames under co-tenancy and yields near-zero streaming accuracy.
@@ -278,7 +281,7 @@ Staleness
 \begin{figure} [tb]
 \centering
 \includegraphics[width=0.6\linewidth]{persize_sweep.pdf}
-\caption{Per-size sAP loss versus the measured GPU deadline-miss rate (All-GPU, $N{=}4$, ResNet50 $k$-sweep, mean over repeated runs). Large-object loss rises steeply while small-object loss stays nearly flat. The shaded band marks the crossover region near $48\%$ deadline-miss rate (Fig.~\ref{fig:sweeps}a). All-NPU per-size loss is approximately zero across the sweep and is omitted.}
+\caption{Per-size sAP loss versus the measured GPU deadline-miss rate (All-GPU, $N{=}4$, ResNet50 $k$-sweep, where $k$ is the number of GPU-pinned ResNet50 co-tenants; mean over repeated runs). Large-object loss rises steeply while small-object loss stays nearly flat. The shaded band marks the crossover region near $48\%$ deadline-miss rate (Fig.~\ref{fig:sweeps}a). All-NPU per-size loss is approximately zero across the sweep and is omitted.}
 \label{fig:persize-sweep}
 \end{figure}
 
@@ -382,7 +385,7 @@ As GPU deadline misses increase in the ResNet50 co-tenant sweep, All-GPU steadil
 The resulting crossover shows that complete GPU saturation is not required for the isolated ranking to reverse.
 
 \paragraph{\textbf{The reversal depends on which resource is saturated.}}
-The reversal is not caused by contention alone. Table~\ref{tab:main} shows that the outcome depends on which path is bottlenecked. Under the light CNN co-tenant, GPU placements remain competitive and no clear reversal is observed. Under the \Llm{} co-tenant, both paths are stressed: GPU deadline misses reach $83\%$ and NPU deadline misses reach $76\%$, so All-GPU still wins in worst-stream sAP despite substantial GPU contention. In contrast, under the \Lvlm{} co-tenant, GPU deadline misses reach $100\%$ while NPU deadline misses remain $1\%$, and the ranking reverses in favor of All-NPU. In our measurements, host CPU utilization rises from $17\%$ to $93\%$ under the \Llm{} co-tenant, stalling NPU host-side post-processing.
+The reversal is not caused by contention alone. Table~\ref{tab:main} shows that the outcome depends on which path is bottlenecked. Under the light CNN co-tenant, GPU placements remain competitive and no clear reversal is observed. Under the \Llm{} co-tenant, both paths are stressed: GPU deadline misses reach $83\%$ and NPU deadline misses reach $76\%$, so All-GPU still outperforms All-NPU in worst-stream sAP despite substantial GPU contention. The Oracle ($0.063$) is essentially tied with All-GPU ($0.062$) in this setting, indicating that mixed placements offer no benefit when both execution paths are bottlenecked. In contrast, under the \Lvlm{} co-tenant, GPU deadline misses reach $100\%$ while NPU deadline misses remain $1\%$, and the ranking reverses in favor of All-NPU. In our measurements, host CPU utilization rises from $17\%$ to $93\%$ under the \Llm{} co-tenant, stalling NPU host-side post-processing.
 %
 This is consistent with our earlier finding that NPU single-stream latency is dominated by host-side post-processing rather than on-chip inference, so CPU contention (not GPU contention) stalls the NPU path.
 
@@ -397,7 +400,7 @@ This is consistent with our earlier finding that NPU single-stream latency is do
  & \multicolumn{2}{c|}{All-GPU} & \multicolumn{2}{c|}{All-NPU} & \multicolumn{2}{c|}{Oracle} & GPU/NPU \\
 co-tenant & worst & mean & worst & mean & worst & mean & DM (\%) \\
 \midrule
-\Lcnn{} (ResNet)   & $0.098$ & $0.137$ & $0.083$ & $0.126$ & $0.103$ & $0.137$ & $24 / 1$ \\
+\Lcnn{} (ResNet50)   & $0.098$ & $0.137$ & $0.083$ & $0.126$ & $0.103$ & $0.137$ & $24 / 1$ \\
 \Llm{} ($+$LLM)   & $0.062$ & $0.100$ & $0.042$ & $0.088$ & $0.063$ & $0.099$ & $83 / 76$ \\
 \Lvlm{} ($+$VLM)  & $0.016$ & $0.047$ & $0.083$ & $0.126$ & $0.083$ & $0.120$ & $100 / 1$ \\
 \bottomrule
@@ -492,11 +495,33 @@ co-tenant & worst & mean & worst & mean & worst & mean & DM (\%) \\
 
 Figure~\ref{fig:sweeps} examines the complementary case where GPU-bound ResNet50 co-tenants localize contention to the GPU path. The NPU path remains largely unaffected, with NPU deadline-miss rate never exceeding $4.0\%$. As contention increases, All-GPU worst-stream sAP decreases monotonically, while All-NPU stays nearly constant. For the $N{=}4$ All-GPU curve, the All-GPU and All-NPU worst-stream curves cross at about $48\%$ GPU deadline-miss rate. This reversal pattern is not specific to $N{=}4$. In Fig.~\ref{fig:sweeps}a, the All-GPU curve crosses the All-NPU level at about $47$--$48\%$ GPU deadline-miss rate for $N{=}2$ and $N{=}4$, while for $N{=}8$ the All-GPU curve is already below the All-NPU level at the lowest measured ResNet50 contention point. Across $N{=}2,4,8$, All-NPU remains confined to a narrow band around $0.083$, indicating that the reversal is driven primarily by GPU-localized staleness rather than by a changing NPU baseline.
 
-The same sweep also explains why we use deadline misses, rather than aggregate GPU utilization, as the contention coordinate. After a ResNet50 co-tenant is introduced, average GPU utilization remains nearly flat at about $68\%$, while the foreground GPU deadline-miss rate rises from $24.3\%$ to $67.3\%$. The placement reversal therefore follows missed real-time deadlines rather than aggregate GPU utilization.
+The same sweep also explains why we use deadline misses, rather than aggregate GPU utilization, as the contention coordinate. After a ResNet50 co-tenant is introduced, average GPU utilization remains nearly flat at about $68\%$, while the foreground GPU deadline-miss rate rises from $24.3\%$ to $67.3\%$. In aggregate, mean utilization never exceeds $70\%$ at any sweep point (peaking at $69.7\%$, with p95 at most $86\%$), so common utilization thresholds of $80$--$90\%$ would never fire in this regime (Table~\ref{tab:policy-comparison}). The placement reversal therefore follows missed real-time deadlines rather than aggregate GPU utilization.
 
 Figure~\ref{fig:sweeps}b shows that neither homogeneous policy is optimal across the full GPU-localized contention sweep. All-GPU is best at low contention because the NPU's quantization loss dominates. All-NPU is best at high contention because GPU-resident streams suffer severe staleness. At low-to-moderate contention (about $24\%$ GPU deadline-miss rate), the Oracle-selected placement is the large-object-aware one-stream split, with a worst-stream sAP of $0.103$. This slightly exceeds All-GPU at $0.098$ and All-NPU at $0.083$. The split helps because moving the most affected large-object stream to the NPU removes it from GPU-induced staleness and reduces contention on the remaining GPU streams.
 
 Overall, the preferred placement changes with the contention level, and the crossover occurs before complete GPU saturation.
+
+\paragraph{\textbf{Common selection criteria miss the reversal together.}}
+To rule out a strawman comparison, Table~\ref{tab:policy-comparison} reports the placement each selection criterion chooses at representative contention levels, together with its worst-stream regret against the post-hoc Oracle over the same restricted placement family. Isolated-accuracy (P1) and latency-profiling (P2) selection both pick All-GPU at every operating point, since the GPU wins isolated sAP ($0.196$ vs.\ $0.186$) and isolated latency ($8.3$ vs.\ $10.0$~ms, both within the $33.3$~ms budget); their regret grows from $+0.005$ at low contention to $+0.012$ at the heaviest ResNet50 point and reaches $+0.068$ under the \Lvlm{} co-tenant. Utilization-threshold selection (P3) fails differently. Mean GPU utilization peaks at $69.7\%$ at the lightest sweep point and stays near $68\%$ thereafter, while foreground deadline misses climb from $24\%$ to $67\%$, so thresholds of $80$--$90\%$ never fire on the sweep. A $70\%$ threshold is borderline only at the lightest point, where run-to-run variability ($69.7\pm2.9\%$, exceeding $70\%$ in $4$ of $10$ runs) flips its selection between All-GPU ($+0.005$ regret) and All-NPU ($+0.020$ regret). The threshold fires decisively only once the GPU is fully saturated by the \Lvlm{} co-tenant. A utilization threshold is therefore a lagging signal that reacts only after collapse, and an unstable one near its boundary. Deadline-miss-aware selection (P4) tracks the reversal on the sweep with near-zero regret past the crossover, but mis-selects All-NPU under the \Llm{} co-tenant ($+0.020$ regret), where host-CPU contention stalls the NPU path as well. Placement selection therefore requires deadline-miss visibility on \emph{both} execution paths, which isolated profiling and aggregate utilization do not provide.
+
+\begin{table}
+\centering
+\caption{Worst-stream sAP and regret (in parentheses, vs.\ the post-hoc Oracle) of the placement chosen by each selection criterion at $N{=}4$. Isolated-accuracy (P1) and latency-profiling (P2) selection choose All-GPU everywhere. The utilization threshold (P3, $\theta{=}80\%$ shown) fires only at full GPU saturation; $\theta{=}90\%$ behaves identically, while $\theta{=}70\%$ is additionally unstable at the lightest point. Deadline-miss-aware selection (P4) tracks the reversal but errs at \Llm{}, where the NPU path is also stalled.}
+\label{tab:policy-comparison}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lccc|c}
+\toprule
+contention point & P1/P2 acc./lat. & P3 util-$\theta$ & P4 DM-aware & Oracle worst \\
+\midrule
+\Lcnn{} (24\%) & 0.098 (+0.005) & 0.098 (+0.005) & 0.098 (+0.005) & 0.103 \\
+ResNet (52\%) & 0.082 (+0.002) & 0.082 (+0.002) & 0.083 (+0.000) & 0.084 \\
+ResNet (67\%) & 0.071 (+0.012) & 0.071 (+0.012) & 0.084 (+0.000) & 0.084 \\
+\Llm{} (83\%) & 0.062 (+0.001) & 0.062 (+0.001)$^\dagger$ & 0.042 (+0.020) & 0.063 \\
+\Lvlm{} (100\%) & 0.016 (+0.068) & 0.083 (+0.000) & 0.083 (+0.000) & 0.083 \\
+\bottomrule
+\multicolumn{5}{p{0.93\linewidth}}{\footnotesize $^\dagger$At \Llm{}, the utilization input is a co-tenant-only proxy ($49.5\%$), as All-GPU utilization under this co-tenant was not directly logged. Even if utilization exceeded the threshold, the migrated All-NPU placement would yield the same $+0.020$ regret as P4, so the conclusion is unchanged.} \\
+\end{tabular}
+\end{table}
 
 
 
@@ -547,7 +572,7 @@ Our results concern how streaming perception is evaluated. The field commonly re
 
 \paragraph{\textbf{A deployment-faithful reporting protocol.}}
 
-We do not propose a general robustness framework. Instead, we distill our findings into three reporting recommendations for shared platforms. First, report sAP under co-tenancy localized to the shared accelerator, not only in isolation. Second, report worst-stream sAP alongside mean sAP. Third, report the contention sweep and crossover point. These measurements expose the reversal and its severity. The standard isolated single-stream evaluation protocol hides both. Table~\ref{tab:reporting} summarizes the contrast.
+We do not propose a general robustness framework. Instead, we distill our findings into three reporting recommendations for shared platforms. First, report sAP under co-tenancy localized to the shared accelerator, not only in isolation. Second, report worst-stream sAP alongside mean sAP. Third, report foreground deadline-miss rates on both the GPU and NPU paths, together with the contention sweep and crossover point; keying on GPU deadline misses alone mis-selects the placement under the \Llm{} co-tenant (Table~\ref{tab:policy-comparison}). These measurements expose the reversal and its severity. The standard isolated single-stream evaluation protocol hides both. Table~\ref{tab:reporting} summarizes the contrast.
 
 
 
@@ -562,7 +587,7 @@ Conventional reporting & Deployment-faithful reporting \\
 \midrule
 isolated single-stream sAP   & co-tenancy-aware multi-stream sAP \\
 mean sAP only                & mean $+$ worst-stream sAP \\
-aggregate GPU utilization    & foreground deadline-miss rate \\
+aggregate GPU utilization    & GPU and NPU deadline-miss rates \\
 single operating point       & contention sweep $+$ crossover point \\
 \bottomrule
 \end{tabular}
@@ -614,9 +639,9 @@ We evaluate a single NPU vendor and card, and emulate multi-camera workloads by 
 \section{Conclusion}
 \label{sec:conclusion}
 
-We showed that isolated streaming-perception evaluation can mis-rank accelerator placement on a heterogeneous GPU--NPU platform. In isolation, the FP32 GPU is preferred because the INT8 NPU loses accuracy mainly on small objects. Under deployment-time contention, however, GPU deadline misses introduce staleness that mainly hurts medium and large objects. This shift in the dominant loss mechanism can reverse the placement ranking before complete GPU saturation. The reversal also depends on whether the bottleneck affects GPU execution or host-side CPU post-processing, so placement cannot be inferred from isolated accuracy or aggregate GPU utilization alone.
+We showed that isolated streaming-perception evaluation can mis-rank accelerator placement on a heterogeneous GPU--NPU platform. In isolation, the FP32 GPU is preferred because the INT8 NPU loses accuracy mainly on small objects. Under deployment-time contention, however, GPU deadline misses introduce staleness that mainly hurts medium and large objects. This shift in the dominant loss mechanism can reverse the placement ranking before complete GPU saturation. The reversal also depends on whether the bottleneck affects GPU execution or host-side CPU post-processing, so placement cannot be inferred from isolated accuracy or aggregate GPU utilization alone; indeed, accuracy-, latency-, and utilization-based selection criteria all miss the reversal in the moderate-contention regime.
 
-In the ResNet50 sweep, foreground deadline misses track the reversal more directly than aggregate GPU utilization, and a simple split placement helps at low-to-moderate contention. Under the GPU-saturating \Lvlm{} co-tenant, All-NPU improves worst-stream sAP over All-GPU by $5.2\times$. We also showed that mean sAP can hide severe degradation in one stream, while worst-stream sAP exposes this failure directly. Deployment-faithful streaming-perception evaluation should therefore report co-tenancy-aware contention sweeps, foreground deadline-miss rates, crossover points, and worst-stream sAP alongside mean sAP.
+In the ResNet50 sweep, foreground deadline misses track the reversal more directly than aggregate GPU utilization, and a simple split placement helps at low-to-moderate contention. Under the GPU-saturating \Lvlm{} co-tenant, All-NPU improves worst-stream sAP over All-GPU by $5.2\times$. We also showed that mean sAP can hide severe degradation in one stream, while worst-stream sAP exposes this failure directly. Deployment-faithful streaming-perception evaluation should therefore report co-tenancy-aware contention sweeps, foreground deadline-miss rates on both execution paths, crossover points, and worst-stream sAP alongside mean sAP.
 
 
 
@@ -690,6 +715,19 @@ In the ResNet50 sweep, foreground deadline misses track the reversal more direct
 % \bottomrule
 % \end{tabular}
 % \end{table}
+%
+% \begin{figure}[tb]
+% \centering
+% \includegraphics[width=0.62\linewidth]{a3_util_vs_dm.pdf}
+% \caption{GPU utilization versus foreground deadline-miss rate across the
+% ResNet50 $k$-sweep ($N{=}4$, All-GPU). Mean utilization stays near $68\%$
+% (peaking at $69.7\%$ at $k{=}1$; p95 at most $86\%$) while the deadline-miss
+% rate climbs from $24\%$ to $67\%$, so utilization thresholds of
+% $\theta\in\{70,80,90\}\%$ (dotted lines) never fire on the sweep. Graphical
+% form of Table~\ref{tab:gpu-util}; see Table~\ref{tab:policy-comparison} for
+% the resulting placement-selection regret.}
+% \label{fig:util-vs-dm}
+% \end{figure}
 % ===============================================================
 
 % ===============================================================
