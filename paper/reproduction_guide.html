@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reproduction Guide — Placement Reversal in Multi-Camera Streaming Detection</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --card2:#1d2129; --ink:#e6e8ee; --mut:#9aa3b2;
+    --acc:#5aa9ff; --acc2:#7ee0a0; --warn:#ffce6b; --bad:#ff8b8b; --line:#2a2f3a;
+    --code:#0b0d11; --chip:#222836;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;}
+  header{padding:34px 28px 22px;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#141821,#0f1115);}
+  header h1{margin:0 0 6px;font-size:23px;letter-spacing:.2px}
+  header p{margin:3px 0;color:var(--mut);font-size:13.5px}
+  .wrap{max-width:1100px;margin:0 auto;padding:26px 22px 80px}
+  h2{margin:34px 0 12px;font-size:19px;border-left:3px solid var(--acc);padding-left:10px}
+  h3{margin:0 0 4px;font-size:16.5px}
+  a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:var(--chip);color:#cdd4e0;font-weight:600}
+  td code,th code{font-size:12.5px}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+    background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12.8px;color:#d8def0}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;overflow:auto;margin:8px 0;font-size:12.7px;color:#cfe3ff}
+  pre code{background:none;padding:0;color:inherit}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;margin:16px 0;box-shadow:0 1px 0 #0006}
+  .card h3 .tag{font-size:11.5px;font-weight:700;color:#0b0d11;background:var(--acc2);
+    border-radius:5px;padding:1px 7px;margin-left:8px;vertical-align:middle}
+  .grid{display:grid;grid-template-columns:140px 1fr;gap:6px 14px;margin-top:8px}
+  .grid .k{color:var(--mut);font-size:12.8px;padding-top:2px}
+  .grid .v{font-size:13.8px}
+  .chips span{display:inline-block;background:var(--chip);border:1px solid var(--line);
+    border-radius:20px;padding:2px 10px;margin:2px 4px 2px 0;font-size:12.3px}
+  .note{background:var(--card2);border-left:3px solid var(--warn);padding:9px 12px;
+    border-radius:6px;margin:9px 0;font-size:13px;color:#e9e2cf}
+  .good{border-left-color:var(--acc2);color:#dff3e6}
+  .bad{border-left-color:var(--bad);color:#f6dede}
+  .muted{color:var(--mut);font-size:12.8px}
+  .toc{columns:2;gap:24px;font-size:13.6px}
+  .toc a{display:block;padding:2px 0}
+  .pill{font-size:11px;border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--mut)}
+  hr{border:none;border-top:1px solid var(--line);margin:24px 0}
+  .legend span{margin-right:14px;font-size:12.5px;color:var(--mut)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  footer{color:var(--mut);font-size:12.3px;border-top:1px solid var(--line);padding:18px 0;margin-top:30px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Reproduction Guide</h1>
+  <p><b>Paper:</b> Placement Reversal in Multi-Camera Streaming Detection Under Deployment-Time Contention (<code>paper/main_vision.tex</code>)</p>
+  <p><b>What this is:</b> for every table and figure, the data file(s) that hold the numbers and the script/command that reproduces them.</p>
+  <p class="muted">All paths are relative to the repository root. Scripts live in <code>accv_experiments/scripts/</code>, data in <code>accv_experiments/results/</code>. Run with the project venv: <code>.venv/bin/python</code>.</p>
+</header>
+
+<div class="wrap">
+
+<div class="card">
+  <h3>Conventions &amp; environment</h3>
+  <div class="grid">
+    <div class="k">Detector</div><div class="v">YOLOv11s (FP32 PyTorch on GPU; vendor INT8 <code>.mxq</code> on NPU), 640×640 letterbox</div>
+    <div class="k">Dataset</div><div class="v">Argoverse-HD validation split (24 logs), COCO category mapping per Li <i>et al.</i></div>
+    <div class="k">Platform</div><div class="v">Intel Core Ultra 9 285K · NVIDIA RTX 5090 · Mobilint MLA100 NPU</div>
+    <div class="k">Protocol</div><div class="v">14&nbsp;s window, 30-frame warm-up, host post-proc threads = 4, deadline = 1000/30 = <b>33.333&nbsp;ms</b>, ≥3 reps (10 at the k=1 boundary)</div>
+    <div class="k">Core eval</div><div class="v"><code>_step_d_common.py</code> (<code>fg_worker</code>, <code>per_stream_sap</code>); <b>never modified</b> by the drivers below</div>
+  </div>
+  <div class="note good"><b>Single-run unification (rev30).</b> The ResNet50 contention axis (Table&nbsp;4 ResNet row, Fig.&nbsp;2, Fig.&nbsp;3, appendix tables) is now produced from <b>one</b> canonical dataset <code>accv_experiments/results/rev30_clean_resnet/rev30_raw.csv</code> (273 rows, <code>per_stream_json</code> retained so Oracle candidates are recomputable). Earlier these came from four separate runs (rev20/21, rev22/24, rev29, rev25).</div>
+</div>
+
+<h2>Contents</h2>
+<div class="card toc">
+  <a href="#t1">Table 1 — GPU co-tenant workloads (<code>tab:cotenants</code>)</a>
+  <a href="#t2">Table 2 — Single-camera GPU vs NPU (<code>tab:single-stream</code>)</a>
+  <a href="#f1">Figure 1 — Qualitative quantization failures (<code>fig:failures</code>)</a>
+  <a href="#t3">Table 3 — Quantization/staleness decomposition (<code>tab:decomp</code>)</a>
+  <a href="#f2">Figure 2 — Per-size sAP loss vs frame skip (<code>fig:persize-sweep</code>)</a>
+  <a href="#t4">Table 4 — Worst/mean sAP at N=4 (<code>tab:main</code>)</a>
+  <a href="#f3">Figure 3 — Worst-stream sAP vs frame skip (<code>fig:sweeps</code>)</a>
+  <a href="#qos">§ QoS result (CUDA stream priority)</a>
+  <a href="#t5">Table 5 — Metric sensitivity (<code>tab:metric-sensitivity</code>)</a>
+  <a href="#t6">Table 6 — Reporting protocol (<code>tab:reporting</code>)</a>
+  <a href="#t7">Table 7 — Cross-detector generality (<code>tab:detector-generality</code>)</a>
+  <a href="#app">Appendix tables (commented) — per-size &amp; GPU-util</a>
+  <a href="#misc">Inline numbers (on-chip 4 ms, CPU 17→93%, …)</a>
+</div>
+
+<!-- ================= TABLE 1 ================= -->
+<div class="card" id="t1">
+  <h3>Table 1 — GPU co-tenant workloads <span class="tag">descriptive</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">The three co-tenant levels: \Lcnn (ResNet50), \Llm (+TinyLLaMA-1.1B), \Lvlm (+Qwen2-VL-2B).</div>
+    <div class="k">Data file</div><div class="v">None — definitional. Co-tenants are launched by <code>step_h2_robustness.py</code> (<code>_bg_resnet50_loop</code>) and <code>preload_background_models()</code> in <code>_step_d_common.py</code>.</div>
+    <div class="k">Reproduce</div><div class="v">No measurement; the table is hand-authored from the setup.</div>
+  </div>
+</div>
+
+<!-- ================= TABLE 2 ================= -->
+<div class="card" id="t2">
+  <h3>Table 2 — Single-camera evaluation, negligible skip <span class="tag">tab:single-stream</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">GPU vs NPU end-to-end latency + per-size sAP (small/medium/large) in isolation, with Wilcoxon p-values.</div>
+    <div class="k">Primary data</div><div class="v"><code>results/rev19_table1_threads4.csv</code> — columns <code>infer_ms</code>, <code>sap_s/m/l</code>, <code>skip_pct</code>, 3 reps × {GPU,NPU}, 24 logs.</div>
+    <div class="k">Script</div><div class="v"><code>scripts/phase_rev19_measure.py</code> → <code>step2_table1()</code> (uses <code>measure_single_stream</code> → <code>per_stream_sap</code>).</div>
+    <div class="k">Reproduce</div><div class="v"><pre><code>.venv/bin/python accv_experiments/scripts/phase_rev19_measure.py</code></pre></div>
+    <div class="k">p-values</div><div class="v">Wilcoxon signed-rank across logs — <code>scripts/phase_rev12_aggregate.py</code> / <code>phase_rev9_aggregate.py</code> (<code>scipy.stats.wilcoxon</code>).</div>
+    <div class="k">Cell mapping</div><div class="v">sAP rows: GPU 0.016/0.184/0.477, NPU 0.008/0.148/0.478 ← csv <code>sap_s/m/l</code>. Latency: NPU <b>10.0</b> = NPU <code>infer_ms</code> mean (10.012) ✓.</div>
+  </div>
+  <div class="note bad"><b>GPU latency cell 8.5 — flagged.</b> The canonical same-run value is GPU <code>infer_ms</code> mean = <b>8.258 → 8.3</b> (<code>rev19_table1_threads4.csv</code>, the same file as NPU 10.0). The printed <code>8.5</code> traces to <code>results/compiler_check_summary.md:53</code> ("reused, not re-measured") and matches a different run (<code>gen_decomp.csv</code> GPU L0 ≈ 8.43) / a p95 statistic — i.e. cross-run. Recommended correction: <code>8.5 → 8.3</code> (NPU 10.0 unchanged).</div>
+  <div class="note">Latency definition (verified): end-to-end per-frame wall-clock = image read + preprocess + inference + host post-processing (dequant/decode/NMS), streaming queueing excluded (skip≈0 so equals delivery latency). Timer: <code>_step_d_common.py:208–211</code> (<code>rt = time.time()-t0</code>). Same definition for GPU and NPU.</div>
+</div>
+
+<!-- ================= FIGURE 1 ================= -->
+<div class="card" id="f1">
+  <h3>Figure 1 — Qualitative quantization failures <span class="tag">fig:failures</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">Green = FP32 GPU detections, red = objects missed by INT8 NPU (mostly small/distant).</div>
+    <div class="k">Asset</div><div class="v"><code>paper/figures/vis_failure_examples.pdf</code></div>
+    <div class="k">Script</div><div class="v"><code>scripts/phase_vis_failure_examples.py</code> (high-res variant: <code>scripts/fig1_hires_regen.py</code>).</div>
+    <div class="k">Reproduce</div><div class="v"><pre><code>.venv/bin/python accv_experiments/scripts/phase_vis_failure_examples.py</code></pre></div>
+  </div>
+</div>
+
+<!-- ================= TABLE 3 ================= -->
+<div class="card" id="t3">
+  <h3>Table 3 — Quantization vs staleness decomposition <span class="tag">tab:decomp</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">Two rows: Quantization (4 threads, ~0 skip) and Staleness (24 threads, ≈55% skip), per object size.</div>
+    <div class="k">Primary data</div><div class="v"><code>results/rev18_postproc_levers.csv</code> — <code>threads</code>∈{4,24}, <code>npu_lat_ms</code>, <code>npu_skip_pct</code>, <code>gpu_sap_l</code>, <code>npu_sap_{s,m,l}</code>.</div>
+    <div class="k">Script</div><div class="v"><code>scripts/phase_thread_sweep.py</code> (thread-count latency lever; splits on-chip <code>onchip_ms</code> vs host <code>post_ms</code>).</div>
+    <div class="k">Reproduce</div><div class="v"><pre><code>.venv/bin/python accv_experiments/scripts/phase_thread_sweep.py</code></pre></div>
+    <div class="k">Cell mapping</div><div class="v">Quantization row = NPU−GPU per-size gap at 4 threads (= Table 2). Staleness row = additional NPU loss at 24 threads (npu_lat 36.5 ms, 55% skip) minus the 4-thread baseline.</div>
+  </div>
+  <div class="note">Supporting decomposition (on-chip ≈4 ms): <code>results/rev16_idle_skip_diag.md:29</code> ("on-chip = 4.16 ms"), <code>results/rev17_loss_separation.md</code>.</div>
+</div>
+
+<!-- ================= FIGURE 2 ================= -->
+<div class="card" id="f2">
+  <h3>Figure 2 — Per-size sAP loss vs GPU frame skip <span class="tag">fig:persize-sweep</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">All-GPU per-size loss (small/medium/large) vs measured GPU frame skip, N=4, ResNet50 k-sweep; large-biased.</div>
+    <div class="k">Asset</div><div class="v"><code>paper/figures/persize_sweep.pdf</code> ← copy of <code>results/rev30_clean_resnet/persize_sweep.pdf</code></div>
+    <div class="k">Primary data</div><div class="v"><code>results/rev30_clean_resnet/rev30_raw.csv</code> → derived <code>rev30_persize.csv</code> (columns <code>loss_small/medium/large</code> vs k=0).</div>
+    <div class="k">Scripts</div><div class="v">Measure: <code>scripts/phase_rev30_clean.py</code>. Aggregate + plot: <code>scripts/phase_rev30_aggregate.py</code> (figure has no internal title; caption is in the .tex).</div>
+    <div class="k">Reproduce</div><div class="v"><pre><code># 1) measure (≈1.5–2.5 h, GPU):
+.venv/bin/python accv_experiments/scripts/phase_rev30_clean.py
+# 2) derive tables + figures:
+.venv/bin/python accv_experiments/scripts/phase_rev30_aggregate.py</code></pre></div>
+  </div>
+</div>
+
+<!-- ================= TABLE 4 ================= -->
+<div class="card" id="t4">
+  <h3>Table 4 — Worst/mean sAP at N=4 under co-tenancy <span class="tag">tab:main</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">All-GPU / All-NPU / Oracle worst &amp; mean sAP, plus GPU/NPU skip, for the three co-tenant levels.</div>
+    <div class="k">ResNet row (\Lcnn)</div><div class="v"><b>rev30</b> N=4, k=1. Auto-emitted to <code>results/rev30_clean_resnet/rev30_tabmain_L1CNN.tex</code> (<code>0.098 / 0.137 / 0.083 / 0.126 / 0.103 / 0.137 / 24 / 1</code>).</div>
+    <div class="k">LLM / VLM rows</div><div class="v"><code>results/rev21_mean_worst_extract.csv</code> rows <code>L2_lm,4,*</code> and <code>L3_vlm,4,*</code> (upstream raw: <code>rev20_5strat_heavybg.csv</code>).</div>
+    <div class="k">Scripts</div><div class="v">ResNet: <code>phase_rev30_clean.py</code> + <code>phase_rev30_aggregate.py</code>. LLM/VLM: <code>phase_rev19_measure.py</code> (<code>step4_maincmp</code>) / rev20 extraction.</div>
+    <div class="k">Reproduce</div><div class="v"><pre><code># ResNet row (auto-emit):
+.venv/bin/python accv_experiments/scripts/phase_rev30_aggregate.py   # -> rev30_tabmain_L1CNN.tex
+# LLM/VLM rows:
+.venv/bin/python accv_experiments/scripts/phase_rev19_measure.py</code></pre></div>
+  </div>
+  <div class="note">The Oracle picks the highest-worst candidate among N+1 placements (NPU-first by large-object fraction). rev30 retains <code>per_stream_json</code>, so the Oracle is recomputed in <code>rev30_oracle_by_contention.csv</code>, not hand-entered.</div>
+</div>
+
+<!-- ================= FIGURE 3 ================= -->
+<div class="card" id="f3">
+  <h3>Figure 3 — Worst-stream sAP vs GPU frame skip <span class="tag">fig:sweeps</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">(a) <code>fig:sweep</code> homogeneous All-GPU N=2/4/8 + All-NPU, crossover ≈48%. (b) <code>fig:split</code> All-GPU/All-NPU/Oracle at N=4.</div>
+    <div class="k">Primary data</div><div class="v"><code>results/rev30_clean_resnet/rev30_raw.csv</code> (incl. N=2 high-k extension k∈{10,12,16}).</div>
+    <div class="k">TikZ coords</div><div class="v">Derived files pasted into the .tex: <code>rev30_fig3a_points.csv</code> → <code>rev30_fig3a_tikz.txt</code>; <code>rev30_fig3b_points.csv</code> → <code>rev30_fig3b_tikz.txt</code> (also <code>rev30_oracle_by_contention.csv</code>).</div>
+    <div class="k">Scripts</div><div class="v">Measure <code>phase_rev30_clean.py</code> (full + <code>RV30_EXT_N2KS="10,12,16"</code> for the N=2 tail); aggregate <code>phase_rev30_aggregate.py</code>.</div>
+    <div class="k">Reproduce</div><div class="v"><pre><code>.venv/bin/python accv_experiments/scripts/phase_rev30_clean.py
+RV30_EXT_N2KS="10,12,16" .venv/bin/python accv_experiments/scripts/phase_rev30_clean.py
+.venv/bin/python accv_experiments/scripts/phase_rev30_aggregate.py</code></pre></div>
+  </div>
+  <div class="note good">Crossover reproduced in one run for all N: N=2 ≈47%, N=4 ≈48–50%, N=8 already crossed at k=0. Tikz x-coordinates = measured GPU frame skip; y = worst-stream sAP.</div>
+</div>
+
+<!-- ================= QoS ================= -->
+<div class="card" id="qos">
+  <h3>§ QoS result — CUDA stream priority <span class="tag">sec:results:qos</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">Foreground inference on a max-priority CUDA stream; All-NPU still beats protected All-GPU by 2.5× under VLM.</div>
+    <div class="k">Data file</div><div class="v"><code>results/exp_qos_results.csv</code>, summary <code>results/exp_qos_summary.md</code>.</div>
+    <div class="k">Script</div><div class="v"><code>scripts/phase_qos_v2.py</code></div>
+    <div class="k">Reproduce</div><div class="v"><pre><code>.venv/bin/python accv_experiments/scripts/phase_qos_v2.py</code></pre></div>
+  </div>
+  <div class="note">There is a TODO in the .tex (line ~430) to cite the actual protected All-GPU worst-stream value backing the 2.5× — source it from <code>exp_qos_results.csv</code>, do not back-compute.</div>
+</div>
+
+<!-- ================= TABLE 5 ================= -->
+<div class="card" id="t5">
+  <h3>Table 5 — Metric sensitivity at a high-contention point <span class="tag">tab:metric-sensitivity</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">mean / median / p10 / worst for All-GPU &amp; All-NPU at a high-contention ResNet50 point (mean &amp; median hide the degraded camera).</div>
+    <div class="k">Data file</div><div class="v"><code>results/rev28_metric_sensitivity.csv</code> (mean 0.107/0.126, p10 0.072/0.091, worst 0.066/0.084). Worst-stream values = rev22 k=8 means (see <code>env_snapshot_norm.md:20</code>).</div>
+    <div class="k">Script</div><div class="v"><code>scripts/phase_rev28_analysis.py</code></div>
+    <div class="k">Reproduce</div><div class="v"><pre><code>.venv/bin/python accv_experiments/scripts/phase_rev28_analysis.py</code></pre></div>
+  </div>
+  <div class="note">Optional: the same statistics (median/p10/worst) are also present per-cell in <code>rev30_clean_resnet/rev30_canonical.csv</code> (<code>median_sap</code>, <code>p10_sap</code>, <code>worst_sap</code>) if you prefer to source Table 5 from the unified rev30 run.</div>
+</div>
+
+<!-- ================= TABLE 6 ================= -->
+<div class="card" id="t6">
+  <h3>Table 6 — Conventional vs deployment-faithful reporting <span class="tag">tab:reporting</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">Conceptual contrast of reporting protocols.</div>
+    <div class="k">Data file</div><div class="v">None — hand-authored summary of the paper's recommendations (P1/P2/P3).</div>
+  </div>
+</div>
+
+<!-- ================= TABLE 7 ================= -->
+<div class="card" id="t7">
+  <h3>Table 7 — Cross-detector generality <span class="tag">tab:detector-generality</span></h3>
+  <div class="grid">
+    <div class="k">Shows</div><div class="v">YOLO12s/v11s/v10s/v8s/v8n: isolated small/large preference, VLM worst NPU/GPU, crossover point.</div>
+    <div class="k">Data files</div><div class="v">Per-detector isolated + decomposition: <code>results/gen_decomp.csv</code> / <code>gen_decomp_summary.csv</code> (and v2/v4/v5), gain tables <code>gen_gain*.csv</code>; isolated baselines <code>results/p1_baseline_yolov8n.csv</code> (and siblings).</div>
+    <div class="k">Scripts</div><div class="v">Generality decomposition driver (<code>phase_*</code> generators that emit <code>gen_decomp*</code>/<code>gen_gain*</code>); per-detector baselines via the rev19/p1 path with the detector swapped in <code>DETECTORS</code>.</div>
+    <div class="k">Reproduce</div><div class="v" class="muted">Run the per-detector baseline + decomposition for each model; crossover = frame-skip where All-GPU worst meets the All-NPU floor.</div>
+  </div>
+  <div class="note">Numbers in the .tex are aggregated across these per-detector CSVs; verify each cell against the matching <code>gen_*</code> / <code>p1_baseline_*</code> row before camera-ready.</div>
+</div>
+
+<!-- ================= APPENDIX ================= -->
+<div class="card" id="app">
+  <h3>Appendix tables (commented out in .tex)</h3>
+  <table>
+    <tr><th>Table</th><th>Shows</th><th>Data file</th><th>Generator</th></tr>
+    <tr><td><code>tab:persize-contention</code></td><td>Per-size All-GPU sAP loss at ≈24/45/56/67% skip</td>
+        <td><code>rev30_clean_resnet/rev30_persize.csv</code></td><td><code>phase_rev30_aggregate.py</code></td></tr>
+    <tr><td><code>tab:gpu-util</code></td><td>Diagnostic counters per k: GPU skip, util mean/p95, mem, power</td>
+        <td><code>rev30_clean_resnet/rev30_canonical.csv</code> (util sliced from <code>util_samples.csv</code>)</td><td><code>phase_rev30_aggregate.py</code></td></tr>
+  </table>
+  <div class="muted">GPU util/mem/power per cell are sampled by a pinned <code>scripts/gpu_util_sampler.py</code> process during the rev30 run and sliced per measurement window in aggregation.</div>
+</div>
+
+<!-- ================= MISC ================= -->
+<div class="card" id="misc">
+  <h3>Inline numbers in the text</h3>
+  <table>
+    <tr><th>Claim (location)</th><th>Value</th><th>Source file</th></tr>
+    <tr><td>NPU on-chip inference time (§ decomp)</td><td>≈4 ms (4.16)</td><td><code>results/rev16_idle_skip_diag.md:29</code></td></tr>
+    <tr><td>Host CPU util under \Llm co-tenant (§ reversal)</td><td>17% → 93%</td><td><code>results/cpuload_raw.csv</code>, <code>cpuload_means.json</code></td></tr>
+    <tr><td>GPU util stays ≈68% across the k-sweep (§ crossover)</td><td>52→69% (mean ≈68)</td><td><code>rev30_clean_resnet/rev30_canonical.csv</code> (util columns)</td></tr>
+    <tr><td>Boundary stability (k=1): skip 24.3±2.2%, worst 0.098±0.004, Oracle 0.103±0.003, 9/10</td><td>—</td><td><code>rev30_clean_resnet/rev30_boundary_report.md</code></td></tr>
+    <tr><td>Frame-skip definition (end-to-end &gt; 33.3 ms)</td><td>period=1000/30=33.333 ms</td><td><code>_step_d_common.py:256</code> (<code>period_ms=1000.0/FPS</code>)</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>One-shot: regenerate the ResNet axis (Table 4 ResNet row, Fig 2, Fig 3, appendix)</h3>
+  <pre><code># from repository root
+.venv/bin/python accv_experiments/scripts/phase_rev30_clean.py                       # full 264-cell run
+RV30_EXT_N2KS="10,12,16" .venv/bin/python accv_experiments/scripts/phase_rev30_clean.py   # N=2 crossover tail
+.venv/bin/python accv_experiments/scripts/phase_rev30_aggregate.py                   # derive all tables/figures
+
+# outputs (accv_experiments/results/rev30_clean_resnet/):
+#   rev30_raw.csv / rev30_canonical.csv      canonical data (+ per-cell GPU util)
+#   rev30_tabmain_L1CNN.tex                   Table 4 ResNet row
+#   rev30_fig3a_tikz.txt / rev30_fig3b_tikz.txt   Fig 3 coordinates
+#   persize_sweep.pdf                         Fig 2
+#   rev30_oracle_by_contention.csv, rev30_persize.csv, rev30_fig3a_points.csv, rev30_fig3b_points.csv
+#   rev30_boundary_report.md, FINDINGS_rev30.md</code></pre>
+  <div class="note">Copy figures into the paper: <code>cp accv_experiments/results/rev30_clean_resnet/persize_sweep.pdf paper/figures/</code>. Paste the <code>*_tikz.txt</code> coordinate blocks into the corresponding <code>\addplot</code> lines of <code>main_vision.tex</code>.</div>
+</div>
+
+<footer>
+  Generated as a reproduction map for <code>paper/main_vision.tex</code>. Data provenance verified against the listed CSV/script files in <code>accv_experiments/</code>.
+  The ResNet50 contention axis is unified under <code>results/rev30_clean_resnet/</code>; legacy runs (rev18–rev29) remain for the non-ResNet artifacts and cross-checks.
+</footer>
+
+</div>
+</body>
+</html>
