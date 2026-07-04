@@ -164,11 +164,12 @@ def tabmain_row(oracle):
 def fig_persize(ps):
     fig, ax = plt.subplots(figsize=(4.2, 3.0))
     x = ps["gpu_skip"]
-    ax.plot(x, ps["loss_large"], "-o", label="large", color="tab:red")
-    ax.plot(x, ps["loss_medium"], "-s", label="medium", color="tab:orange")
-    ax.plot(x, ps["loss_small"], "-^", label="small", color="tab:blue")
-    ax.set_xlabel("GPU frame skip (%)"); ax.set_ylabel("sAP loss vs no contention")
+    ax.plot(x, ps["loss_large"] * 100, "-o", label="large", color="tab:red")
+    ax.plot(x, ps["loss_medium"] * 100, "-s", label="medium", color="tab:orange")
+    ax.plot(x, ps["loss_small"] * 100, "-^", label="small", color="tab:blue")
+    ax.set_xlabel("GPU frame skip (%)"); ax.set_ylabel("sAP loss vs no contention (%)")
     ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+    ax.set_ylim(0, 12)
     # NO title (caption handled by tex)
     fig.tight_layout(); fig.savefig(RES / "persize_sweep.pdf"); plt.close(fig)
 

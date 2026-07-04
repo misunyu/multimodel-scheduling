@@ -117,20 +117,22 @@ for i, mech in enumerate(mechs):
     vals = [TAB3_LABEL[(mech, sz)] for sz in SIZES]
     errs = [c2[(c2.mechanism == mech) & (c2["size"] == sz)]["std"].iloc[0] for sz in SIZES]
     errs = [e if e > 0 else None for e in errs]  # omit zero-std bars
-    bars = ax.bar(x + (i - 0.5) * w, vals, w, label=mech, color=colors[mech],
-                  yerr=[e if e else 0 for e in errs],
+    bars = ax.bar(x + (i - 0.5) * w, [v * 100 for v in vals], w, label=mech, color=colors[mech],
+                  yerr=[(e * 100) if e else 0 for e in errs],
                   error_kw=dict(elinewidth=0.8, capsize=2), capsize=2)
     for xi, v in zip(x + (i - 0.5) * w, vals):
-        off = -0.006 if v < 0 else 0.004
-        ax.text(xi, v + off, f"{v:+.3f}", ha="center",
-                va="top" if v < 0 else "bottom", fontsize=7)
+        v100 = v * 100
+        off = -0.6 if v100 < 0 else 0.4
+        ax.text(xi, v100 + off, f"{v100:+.1f}", ha="center",
+                va="top" if v100 < 0 else "bottom", fontsize=7)
 ax.axhline(0, color="k", lw=0.6)
 ax.set_xticks(x); ax.set_xticklabels(SIZES)
-ax.set_ylabel(r"$\Delta$sAP (absolute)")
+ax.set_ylabel(r"$\Delta$sAP (%)")
 ax.set_xlabel("object size")
 ax.legend(fontsize=8, loc="lower left")
 ax.grid(True, axis="y", alpha=0.3)
-ax.set_ylim(-0.115, 0.03)
+ax.set_ylim(-11.5, 3.0)
+ax.set_yticks([-10, -8, -6, -4, -2, 0, 2])
 fig.tight_layout()
 fig.savefig(OUT / "c2_q_vs_l_bar.pdf")
 PAPER_FIG.mkdir(exist_ok=True)

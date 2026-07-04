@@ -74,6 +74,13 @@ print("wrote", csv_path)
 for r in recs: print(r)
 
 # ---- bar chart (paper style) ----
+# NOTE: c2_q_vs_l_bar.pdf is currently UNUSED in the paper (its \includegraphics
+# in main_vision.tex is commented out). Do NOT regenerate it as part of the
+# percent-scale figure refresh. If this figure is ever re-activated, it MUST be
+# converted to the percent (x100) sAP scale first: the paper reports sAP in
+# percent (main_vision.tex L169), so the Q_b / L_b bars (currently plotted as
+# raw ΔsAP fractions) and their value labels / y-axis ("ΔsAP") need x100 and a
+# "(%)" unit to stay consistent with persize_sweep.pdf and b1_iou_decay.pdf.
 q_vals = [r["Q_abs"] for r in recs]
 l_vals = [r["L_abs"] for r in recs]
 q_err  = [r["Q_abs_std"] for r in recs]
