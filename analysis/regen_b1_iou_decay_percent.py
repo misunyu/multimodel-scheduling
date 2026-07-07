@@ -24,13 +24,15 @@ from pathlib import Path
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
+matplotlib.rcParams["pdf.fonttype"] = 42   # Type 3 -> TrueType(42)
+matplotlib.rcParams["ps.fonttype"] = 42
 import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parent.parent
 DECAY_CSV = ROOT / "analysis/b1_temporal_iou_decay.csv"
 PROXY_CSV = ROOT / "analysis/b1_staleness_sap_proxy.csv"
 OUT_PDF = ROOT / "analysis/b1_iou_decay_percent.pdf"
-PAPER_PDF = ROOT / "paper/figures/b1_iou_decay.pdf"
+PAPER_PDF = ROOT / "paper/figures/b1_iou_decay_percent.pdf"
 
 FPS = 30.0
 BINS = ["small", "medium", "large"]
@@ -75,11 +77,11 @@ def main():
     for b in BINS:
         xs, ys = series(proxy, b, "delta_ms", "sap_loss_proxy")
         ax3.plot(xs, [y * 100 for y in ys], "^-", color=COLORS[b],
-                 label=f"{b} (proxy)", lw=1.8, ms=5)
+                 label=b, lw=1.8, ms=5)
         ax3.axhline(L_B_MEASURED_PCT[b], color=COLORS[b], ls=":", lw=1.3, alpha=0.8)
     ax3.set_xlabel("temporal offset δ (ms)")
-    ax3.set_ylabel(r"staleness sAP-loss proxy (%)")
-    ax3.set_title("(c) Proxy vs measured $L_b$ (dotted)")
+    ax3.set_ylabel(r"estimated staleness sAP loss (%)")
+    ax3.set_title("(c) Estimated vs measured sAP loss")
     ax3.grid(True, alpha=0.3)
     ax3.set_ylim(0, 22)  # headroom so the δ=5 large proxy (20.8%) is not clipped
     ax3.legend(frameon=False, fontsize=8)

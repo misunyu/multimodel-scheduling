@@ -244,6 +244,8 @@ def main():
     # ---- figure: per-bin matched-score distributions FP32 vs INT8 ----
     import matplotlib
     matplotlib.use("Agg")
+    matplotlib.rcParams["pdf.fonttype"] = 42   # Type 3 -> TrueType(42)
+    matplotlib.rcParams["ps.fonttype"] = 42
     import matplotlib.pyplot as plt
     colors = {"small": "#4477AA", "medium": "#EE6677", "large": "#228833"}
     fig, axes = plt.subplots(1, 3, figsize=(11.5, 3.4), sharey=True)
@@ -259,7 +261,6 @@ def main():
         ax.set_xlabel("matched detection score")
         ax.legend(frameon=False, fontsize=8)
     axes[0].set_ylabel("density")
-    fig.suptitle("Per-size matched-detection confidence: FP32 vs INT8", y=1.02)
     fig.tight_layout()
     fig.savefig(OUT_PDF, bbox_inches="tight")
     print(f"\nwrote {OUT_PDF}")
