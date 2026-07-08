@@ -2,11 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 [Train]
- 1) Using directory (two_target):
-    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_dir ./results_recompute --schedule_dir ./gen_schedules --model_out ./xgboost_model/artifacts/gpu/xgb_model
-
- 2) Using CSV (two_target, Random split):
-    python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_random.csv --schedule_csv train_schedules_random.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_random
 
  3) Using CSV (two_target, Pattern x3 split):
     python ./xgboost_model/deploy_selector_xgb_suite.py train --perf_csv train_x3.csv --schedule_csv train_schedules_x3.csv --model_out ./xgboost_model/artifacts/gpu/xgb_model_x3
@@ -20,17 +15,6 @@
 [Predict / Validate]
   python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv ./xgboost_model/dataset/gpu/test_x3.csv --schedule_csv ./xgboost_model/dataset/gpu/test_schedules_x3.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_x3_double --alpha 0.2
 
- 1) Predict for new schedules (Top-K output):
-    python ./xgboost_model/deploy_selector_xgb_suite.py predict --schedule_dir ./gen_schedules --model_in ./xgboost_model/artifacts/gpu/xgb_model_random --topk 5 --alpha 0.2
-
- 2) Validate with test CSV (Random split):
-    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_random.csv --schedule_csv test_schedules_random.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_random --alpha 0.2
-
- 3) Validate with test CSV (Pattern x3 split):
-    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_x3.csv --schedule_csv test_schedules_x3.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_x3 --alpha 0.2
-
- 4) Validate with Score/Rank model:
-    python ./xgboost_model/deploy_selector_xgb_suite.py predict --perf_csv test_x3.csv --schedule_csv test_schedules_x3.csv --model_in ./xgboost_model/artifacts/gpu/xgb_model_score --alpha 0.2
 """
 
 import hashlib
