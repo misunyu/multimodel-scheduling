@@ -4,13 +4,10 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 
-import npu
-from NeublaDriver import NeublaDriver
-
 from typing import List, Tuple, Dict, Any, Optional
 
-# Custom operation prefixes for detection
-CUSTOM_OP_PREFIXES = ["com.neubla"]
+# Custom operation prefixes for detection (Mobilint / vendor NPU ops)
+CUSTOM_OP_PREFIXES = ["com.mobilint", "mobilint"]
 
 class ModelProfiler:
     """
@@ -152,91 +149,49 @@ class ModelProfiler:
 
     def profile_model_npu(self, o_path: str, label: str) -> Tuple[float, float, Dict[str, Any]]:
         """
-        Profile a model on NPU.
-        
+        Profile a vision model on the Mobilint Aries NPU.
+
         Args:
-            o_path: Path to the .o model file
-            label: NPU label (e.g., "NPU1", "NPU2")
-            
+            o_path: Model reference (path or name); the vision model is inferred
+                    from it ("yolo*" -> yolo11s, "resnet*" -> resnet50).
+            label: NPU label (informational).
+
         Returns:
             Tuple of (load_time_ms, inference_time_ms, model_info)
+
+        NOTE: For full multi-device profiling (CPU/GPU/NPU + LLM tokens/sec) use
+        the standalone `profile_models.py` tool, which is the canonical profiler.
         """
-        # Previous simulated implementation (commented out as per requirement):
-        # load_time = np.random.uniform(5, 15)
-        # inference_time = np.random.uniform(2, 10)
-        # model_info = {
-        #     "path": o_path,
-        #     "device": label,
-        #     "load_time_ms": load_time,
-        #     "inference_time_ms": inference_time
-        # }
-        # return load_time, inference_time, model_info
+        from runtime.mobilint_vision import build_vision_npu
 
-        # Determine NPU index from label (e.g., "NPU1" -> 0, "NPU2" -> 1)
-        npu_num = 0
-        try:
-            lbl = label.strip().upper()
-            if lbl.startswith("NPU"):
-                idx = int(lbl[3:])
-                # Convert to zero-based index
-                npu_num = max(0, idx - 1)
-            else:
-                # Try parse as integer directly
-                npu_num = int(lbl)
-        except Exception:
-            npu_num = 0
-
-        # Choose input shape based on model type inferred from file path/name
         path_lower = (o_path or "").lower()
-        if "yolo" in path_lower:
-            c, h, w = 3, 608, 608
-        elif "resnet" in path_lower:
-            c, h, w = 3, 224, 224
-        else:
-            # Default to resnet-like input if unknown
-            c, h, w = 3, 224, 224
+        model_name = "yolo11s" if "yolo" in path_lower else "resnet50"
+        h = w = 640 if model_name.startswith("yolo") else 224
+        frame = (np.random.rand(h, w, 3) * 255).astype(np.uint8)
 
-        driver = None
+        model = None
         try:
-            driver = NeublaDriver()
-            assert driver.Init(npu_num) == 0
-
             start_load = time.time()
-            assert driver.LoadModel(o_path) == 0
-            end_load = time.time()
-            load_time_ms = (end_load - start_load) * 1000.0
+            model = build_vision_npu(model_name, infer_mode="global8")
+            load_time_ms = (time.time() - start_load) * 1000.0
 
-            # Generate dummy uint8 input matching expected size
-            random_input = np.random.rand(c, h, w).astype(np.uint8)
-            input_data = random_input.tobytes()
-
+            pre = model.preprocess(frame)
+            model(pre)  # warmup
             start_infer = time.time()
-            assert driver.SendInput(input_data, c * h * w) == 0
-            assert driver.Launch() == 0
-            _ = driver.ReceiveOutputs()
-            end_infer = time.time()
-            infer_time_ms = (end_infer - start_infer) * 1000.0
-
-            assert driver.Close() == 0
-            driver = None
+            model(pre)
+            infer_time_ms = (time.time() - start_infer) * 1000.0
         except Exception as e:
-            # Ensure the driver is closed if initialized
-            try:
-                if driver is not None:
-                    driver.Close()
-            except:
-                pass
             self.log(f"[Error] {label}: {e}")
-            # Re-raise to allow caller to handle/log if needed
             raise
+        finally:
+            try:
+                if model is not None:
+                    model.dispose()
+            except Exception:
+                pass
 
-        model_info = {
-            "path": o_path,
-            "device": label,
-            "load_time_ms": load_time_ms,
-            "inference_time_ms": infer_time_ms
-        }
-
+        model_info = {"path": o_path, "device": label,
+                      "load_time_ms": load_time_ms, "inference_time_ms": infer_time_ms}
         return load_time_ms, infer_time_ms, model_info
 
     def contains_custom_op(self, onnx_path: str) -> bool:

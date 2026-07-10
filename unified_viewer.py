@@ -41,14 +41,18 @@ except Exception:
 
 # Import local modules
 from utils import get_cpu_metrics
-from view_handlers import ModelSignals, YoloViewHandler, ResNetViewHandler, VideoFeeder, ResnetImageFeeder
+from view_handlers import (
+    ModelSignals, YoloViewHandler, ResNetViewHandler, LLMViewHandler,
+    VideoFeeder, ResnetImageFeeder,
+)
 from model_processors import (
     video_reader_process,
-    run_yolo_cpu_process,
-    run_yolo_npu_process,
-    run_resnet_cpu_process,
-    run_resnet_npu_process
+    run_detection_process,
+    run_classification_process,
+    run_llm_process,
+    run_vlm_process,
 )
+import model_registry as reg
 
 class InfoWindow(QWidget):
     """Main window for displaying system and model information."""
@@ -339,35 +343,21 @@ class UnifiedViewer(QMainWindow):
                     self.views_without_model.add(view)
                     # Still add default settings for compatibility with existing code
                     self.model_settings[view] = {
-                        "model": "yolov3_small" if view in ["view1", "view3"] else "resnet50_small",
+                        "model": "yolo11s" if view in ["view1", "view3"] else "resnet50",
                         "execution": "cpu"
                     }
                     # Informational: this view is simply unused by the selected combination
                     print(f"[UnifiedViewer] {view} not used in this combination (no model assigned) [{os.path.basename(self.schedule_file)}]")
-
-            # Detect PyTorch availability for NPU execution and remap to CPU if unavailable
-            torch_available = True
-            try:
-                import torch  # noqa: F401
-            except Exception:
-                torch_available = False
-            if not torch_available:
-                # Remap any NPU executions to CPU to avoid runtime import errors
-                for v, cfg in self.model_settings.items():
-                    exec_dev = (cfg or {}).get("execution", "cpu")
-                    if isinstance(exec_dev, str) and exec_dev.lower().startswith("npu"):
-                        cfg["execution"] = "cpu"
-                        print(f"[UnifiedViewer] PyTorch not found; falling back to CPU for {v} (was {exec_dev})")
 
             print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file} for {self.current_combination}")
         except Exception as e:
             print(f"[UnifiedViewer ERROR] Failed to load {self.schedule_file}: {e}")
             # Set default settings if file loading fails
             self.model_settings = {
-                "view1": {"model": "yolov3_small", "execution": "cpu"},
-                "view2": {"model": "resnet50_small", "execution": "cpu"},
-                "view3": {"model": "yolov3_small", "execution": "cpu"},
-                "view4": {"model": "resnet50_small", "execution": "cpu"}
+                "view1": {"model": "yolo11s", "execution": "cpu"},
+                "view2": {"model": "resnet50", "execution": "cpu"},
+                "view3": {"model": "yolo11s", "execution": "cpu"},
+                "view4": {"model": "resnet50", "execution": "cpu"}
             }
             # No views are marked as without model in case of error
     
@@ -406,28 +396,29 @@ class UnifiedViewer(QMainWindow):
         
         # View1 queues and events
         self.view1_frame_queue = Queue(maxsize=10)
-        self.view1_output_queue = Queue(maxsize=5)
+        self.view1_output_queue = Queue(maxsize=10)
         self.view1_shutdown_event = Event()
         
         # View2 queues and events
         self.view2_frame_queue = Queue(maxsize=10)
-        self.view2_output_queue = Queue(maxsize=5)
+        self.view2_output_queue = Queue(maxsize=10)
         self.view2_shutdown_event = Event()
         
         # View3 queues and events
         self.view3_frame_queue = Queue(maxsize=10)
-        self.view3_result_queue = Queue(maxsize=5)
+        self.view3_result_queue = Queue(maxsize=10)
         self.view3_shutdown_event = Event()
         
         # View4 queues and events
         self.view4_frame_queue = Queue(maxsize=10)
-        self.view4_result_queue = Queue(maxsize=5)
+        self.view4_result_queue = Queue(maxsize=10)
         self.view4_shutdown_event = Event()
         
-        # Initialize a dictionary to track which views are running YOLO models (need video frames)
-        self.yolo_views = set()
-        # Track ResNet views that need image feeder at 10 Hz
-        self.resnet_views = set()
+        # Track which views need which feeder / handler.
+        self.yolo_views = set()    # detection: video frames
+        self.resnet_views = set()  # classification: image feeder
+        self.vlm_views = set()     # VLM: video frames (headless generation)
+        self.llm_views = set()     # LLM: no feeder (self-generated prompts)
     
     def initialize_processes(self):
         """Initialize and start model processes."""
@@ -459,44 +450,44 @@ class UnifiedViewer(QMainWindow):
         
         model = self.model_settings.get(view_name, {}).get("model", "")
         execution = self.model_settings.get(view_name, {}).get("execution", "cpu")
-        
+        infps = self.model_settings.get(view_name, {}).get("infps", None)
+        device = reg.norm_device(execution)
+
         frame_queue = getattr(self, f"{view_name}_frame_queue")
         output_queue = getattr(self, f"{view_name}_output_queue") if view_name in ["view1", "view2"] else getattr(self, f"{view_name}_result_queue")
         shutdown_event = getattr(self, f"{view_name}_shutdown_event")
-        
-        if model.startswith("yolov3"):
-            # YOLO model
+
+        try:
+            kind = reg.kind_of(model)
+            task = reg.get(model).get("task")
+        except Exception:
+            kind, task = "vision", "detection"
+
+        if kind == "vision" and task == "detection":
             self.yolo_views.add(view_name)
-            if execution == "npu0" or execution == "npu1":
-                npu_id = 0 if execution == "npu0" else 1
-                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
-                process = Process(
-                    target=run_yolo_npu_process,
-                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name, model),
-                )
-            else:
-                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
-                process = Process(
-                    target=run_yolo_cpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
-                )
-        else:
-            # ResNet model
+            print(f"[UnifiedViewer] Starting {view_name} with {model} on {device.upper()} (detection)")
+            process = Process(target=run_detection_process,
+                              args=(frame_queue, output_queue, shutdown_event, device, view_name, model))
+        elif kind == "vision" and task == "classification":
             self.resnet_views.add(view_name)
-            if execution == "npu0" or execution == "npu1":
-                npu_id = 0 if execution == "npu0" else 1
-                print(f"[UnifiedViewer] Starting {view_name} with {model} NPU{npu_id}")
-                process = Process(
-                    target=run_resnet_npu_process,
-                    args=(frame_queue, output_queue, shutdown_event, npu_id, view_name),
-                )
-            else:
-                print(f"[UnifiedViewer] Starting {view_name} with {model} CPU")
-                process = Process(
-                    target=run_resnet_cpu_process,
-                    args=(frame_queue, output_queue, shutdown_event, view_name),
-                )
-        
+            print(f"[UnifiedViewer] Starting {view_name} with {model} on {device.upper()} (classification)")
+            process = Process(target=run_classification_process,
+                              args=(frame_queue, output_queue, shutdown_event, device, view_name, model))
+        elif kind == "vlm":
+            # VLM consumes video frames but is not rendered (headless generation).
+            self.vlm_views.add(view_name)
+            print(f"[UnifiedViewer] Starting {view_name} with {model} on {device.upper()} (VLM, headless)")
+            process = Process(target=run_vlm_process,
+                              args=(frame_queue, output_queue, shutdown_event, device, view_name, model,
+                                    float(infps) if infps else 1.0))
+        else:
+            # LLM: no input feeder (self-generated prompts), headless.
+            self.llm_views.add(view_name)
+            print(f"[UnifiedViewer] Starting {view_name} with {model} on {device.upper()} (LLM, headless)")
+            process = Process(target=run_llm_process,
+                              args=(frame_queue, output_queue, shutdown_event, device, view_name, model,
+                                    float(infps) if infps else 1.0))
+
         setattr(self, f"{view_name}_process", process)
         process.start()
     
@@ -510,127 +501,55 @@ class UnifiedViewer(QMainWindow):
             "view4": self.view4_frame_queue
         }
         
-        # Start video feeder thread (for YOLO models)
+        # All frame-consuming views (detection, classification, VLM) are fed from
+        # the video stream, honoring each view's infps. LLM views need no feeder.
         self.video_feeder = VideoFeeder(
             self.video_frame_queue,
             view_frame_queues,
-            self.yolo_views,
+            self.yolo_views | self.vlm_views | self.resnet_views,
             self.shutdown_flag,
             model_settings=self.model_settings
         )
         self.video_feeder.start_feed_thread()
 
-        # Start ResNet image feeder honoring per-view infps (defaulting to 2 FPS)
-        self.resnet_feeder = ResnetImageFeeder(
-            image_dir="./imagenet-sample-images",
-            view_frame_queues=view_frame_queues,
-            resnet_views=self.resnet_views,
-            shutdown_flag=self.shutdown_flag,
-            model_settings=self.model_settings,
-            default_interval_sec=0.5
-        )
-        self.resnet_feeder.start_feed_thread()
-        
         # Start view handler threads
         self.initialize_view_handlers()
     
+    def _handler_class_for(self, model_name):
+        """Pick the view-handler class for a model by its registry kind/task."""
+        try:
+            kind = reg.kind_of(model_name)
+            task = reg.get(model_name).get("task")
+        except Exception:
+            return ResNetViewHandler
+        if kind == "vision" and task == "detection":
+            return YoloViewHandler
+        if kind == "vision" and task == "classification":
+            return ResNetViewHandler
+        return LLMViewHandler  # llm / vlm -> headless stats handler
+
     def initialize_view_handlers(self):
-        """Initialize and start view handler threads."""
-        # View1 handler
-        view1_model = self.model_settings.get("view1", {}).get("model", "")
-        if view1_model.startswith("yolov3"):
-            self.view1_handler = YoloViewHandler(
-                "view1",
+        """Initialize and start view handler threads (one per view, by model kind)."""
+        view_queues = {
+            "view1": self.view1_output_queue,
+            "view2": self.view2_output_queue,
+            "view3": self.view3_result_queue,
+            "view4": self.view4_result_queue,
+        }
+        for view_name, result_queue in view_queues.items():
+            model_name = self.model_settings.get(view_name, {}).get("model", "")
+            handler_cls = self._handler_class_for(model_name)
+            handler = handler_cls(
+                view_name,
                 self.model_settings,
-                self.view1_frame_queue,
-                self.view1_output_queue,
+                getattr(self, f"{view_name}_frame_queue"),
+                result_queue,
                 self.shutdown_flag,
                 self.model_signals,
-                self.views_without_model
+                self.views_without_model,
             )
-        else:
-            self.view1_handler = ResNetViewHandler(
-                "view1",
-                self.model_settings,
-                self.view1_frame_queue,
-                self.view1_output_queue,
-                self.shutdown_flag,
-                self.model_signals,
-                self.views_without_model
-            )
-        self.view1_handler.start_display_thread()
-        
-        # View2 handler
-        view2_model = self.model_settings.get("view2", {}).get("model", "")
-        if view2_model.startswith("yolov3"):
-            self.view2_handler = YoloViewHandler(
-                "view2",
-                self.model_settings,
-                self.view2_frame_queue,
-                self.view2_output_queue,
-                self.shutdown_flag,
-                self.model_signals,
-                self.views_without_model
-            )
-        else:
-            self.view2_handler = ResNetViewHandler(
-                "view2",
-                self.model_settings,
-                self.view2_frame_queue,
-                self.view2_output_queue,
-                self.shutdown_flag,
-                self.model_signals,
-                self.views_without_model
-            )
-        self.view2_handler.start_display_thread()
-        
-        # View3 handler
-        view3_model = self.model_settings.get("view3", {}).get("model", "")
-        if view3_model.startswith("yolov3"):
-            self.view3_handler = YoloViewHandler(
-                "view3",
-                self.model_settings,
-                self.view3_frame_queue,
-                self.view3_result_queue,
-                self.shutdown_flag,
-                self.model_signals,
-                self.views_without_model
-            )
-        else:
-            self.view3_handler = ResNetViewHandler(
-                "view3",
-                self.model_settings,
-                self.view3_frame_queue,
-                self.view3_result_queue,
-                self.shutdown_flag,
-                self.model_signals,
-                self.views_without_model
-            )
-        self.view3_handler.start_display_thread()
-        
-        # View4 handler
-        view4_model = self.model_settings.get("view4", {}).get("model", "")
-        if view4_model.startswith("yolov3"):
-            self.view4_handler = YoloViewHandler(
-                "view4",
-                self.model_settings,
-                self.view4_frame_queue,
-                self.view4_result_queue,
-                self.shutdown_flag,
-                self.model_signals,
-                self.views_without_model
-            )
-        else:
-            self.view4_handler = ResNetViewHandler(
-                "view4",
-                self.model_settings,
-                self.view4_frame_queue,
-                self.view4_result_queue,
-                self.shutdown_flag,
-                self.model_signals,
-                self.views_without_model
-            )
-        self.view4_handler.start_display_thread()
+            setattr(self, f"{view_name}_handler", handler)
+            handler.start_display_thread()
     
     # View update methods
     def update_view1_display(self, pixmap):
@@ -1036,17 +955,25 @@ class UnifiedViewer(QMainWindow):
                 except Exception:
                     pass
             max_q_wait = max(q_waits) if q_waits else 0.0
-            # drop_rate_fps from feeder drops per window
-            window_sec = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
-            drop_counts = getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}) or {}
-            total_drops = sum(int(drop_counts.get(v, 0) or 0) for v in scheduled_views)
-            drop_rate_fps = total_drops / window_sec if window_sec > 0 else 0.0
-            score = total_fps - 0.2 * drop_rate_fps
+            # Deadline miss rate: (late completions + queue-full drops) / offered
+            feeder = getattr(self, 'video_feeder', None)
+            fdrop = getattr(feeder, 'drop_counts', {}) or {}
+            foffered = getattr(feeder, 'offered_counts', {}) or {}
+            miss = offered = 0
+            for v in scheduled_views:
+                h = getattr(self, f"{v}_handler", None)
+                late = int(getattr(h, 'late_count', 0) or 0)
+                dropped = int(fdrop.get(v, 0) or 0)
+                off = int(foffered.get(v, 0) or 0) or (int(getattr(h, 'infer_count', 0) or 0) + dropped)
+                miss += late + dropped
+                offered += off
+            miss_rate = (miss / offered) if offered > 0 else 0.0
+            score = total_fps - 100.0 * miss_rate
             # Show each metric on its own line
             metrics_line = (
                 f"Total: {total_fps:.2f} FPS\n"
                 f"q95: {max_q_wait:.1f} ms\n"
-                f"Drop: {drop_rate_fps:.2f} FPS\n"
+                f"Deadline miss: {miss_rate*100:.1f}%\n"
                 f"Score: {score:.2f}"
             )
             try:
@@ -1131,6 +1058,40 @@ class UnifiedViewer(QMainWindow):
             scheduled_count = len(scheduled_views)
             total_avg_fps = total_fps / scheduled_count if scheduled_count > 0 else 0.0
 
+            # Per-view token throughput (non-zero only for LLM/VLM views)
+            tokens_by_view = {
+                v: float(getattr(getattr(self, f"{v}_handler", None), "avg_tokens_per_s", 0.0) or 0.0)
+                for v in ["view1", "view2", "view3", "view4"]
+            }
+            total_tokens_per_s = sum(tokens_by_view[v] for v in scheduled_views)
+
+            # Deadline-miss accounting per view (demand-based):
+            #   offered  = requests demanded over the window = infps * window_sec
+            #   on_time  = completions whose end-to-end latency <= deadline
+            #   miss     = offered - on_time  (dropped, late, and undelivered all count)
+            wsec = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
+            miss_by_view = {}
+            for v in ["view1", "view2", "view3", "view4"]:
+                handler = getattr(self, f"{v}_handler", None)
+                completed = int(getattr(handler, "infer_count", 0) or 0)
+                late = int(getattr(handler, "late_count", 0) or 0)
+                on_time = max(0, completed - late)
+                try:
+                    infps = float((self.model_settings.get(v, {}) or {}).get("infps", 0.0) or 0.0)
+                except Exception:
+                    infps = 0.0
+                offered = int(round(infps * wsec)) if infps > 0 else completed
+                offered = max(offered, completed)  # never fewer than what completed
+                misses = max(0, offered - on_time)
+                rate = (misses / offered) if offered > 0 else 0.0
+                miss_by_view[v] = {"miss": misses, "offered": offered, "rate": rate,
+                                   "late": late, "on_time": on_time}
+            # Window-level miss rate = mean of per-application miss rates (each
+            # application instance weighted equally, so it is not dominated by the
+            # highest-rate model when request rates are heterogeneous).
+            per_view_rates = [miss_by_view[v]["rate"] for v in scheduled_views]
+            total_miss_rate = min(1.0, (sum(per_view_rates) / len(per_view_rates)) if per_view_rates else 0.0)
+
             # Prepare throughput data including all scheduled views (even if 0 inferences)
             throughput_data = {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1139,22 +1100,29 @@ class UnifiedViewer(QMainWindow):
                 "models": {},
                 "total": {
                     "total_throughput_fps": round(total_fps, 2),
-                    "avg_throughput_fps": round(total_avg_fps, 2)
+                    "avg_throughput_fps": round(total_avg_fps, 2),
+                    "total_tokens_per_s": round(total_tokens_per_s, 2),
+                    "deadline_miss_rate": round(total_miss_rate, 4)
                 }
             }
-            
+
             # Add all scheduled views to the models dictionary (include zeros if no inferences)
             devices_used = set()
             for v in scheduled_views:
                 avg_fps, avg_time, infer_cnt, model_name, exec_mode, avg_wait_ms, dropped = per_view_stats[v]
+                mv = miss_by_view[v]
                 throughput_data["models"][v] = {
                     "model": model_name,
                     "execution": exec_mode,
                     "throughput_fps": round(avg_fps, 2),
+                    "tokens_per_s": round(tokens_by_view.get(v, 0.0), 2),
                     "avg_inference_time_ms": round(avg_time, 2),
                     "inference_count": int(infer_cnt),
                     "avg_wait_to_preprocess_ms": round(avg_wait_ms or 0.0, 2),
-                    "dropped_frames_due_to_full_queue": int(dropped or 0)
+                    "deadline_miss_count": int(mv["miss"]),
+                    "frames_total": int(mv["offered"]),
+                    "on_time_count": int(mv["on_time"]),
+                    "deadline_miss_rate": round(mv["rate"], 4)
                 }
                 devices_used.add(exec_mode)
 

@@ -1,31 +1,35 @@
 #!/usr/bin/env python3
-"""
-Schedule Generator Main Script
-This script launches the Schedule Generator GUI application.
+"""Schedule generation entry point (Mobilint NPU + GPU stack).
 
-Usage:
-    python schedule_generator_main.py [--target-device TARGET_DEVICE_FILE]
+The legacy Neubla profiler GUI has been retired. Profiling and schedule
+generation are now handled by two standalone tools:
+
+  1. Profile every model on CPU / GPU / NPU (writes the static profile):
+        source runtime_env.sh
+        $PYTHON_BIN profile_models.py \
+            --out xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json
+
+  2. Generate placement combinations (writes model_schedules.yaml):
+        $PYTHON_BIN generate_schedules.py \
+            --out xgboost_model/schedules/model_schedules.yaml
+
+Then collect training data and train the XGBoost model:
+        $PYTHON_BIN schedule_executor_main.py --schedule model_schedules.yaml \
+            --duration 10 --auto_start_all
+        $PYTHON_BIN xgboost_model/deploy_selector_xgb_suite.py train ...
+
+The GUI-driven best-deployment finder lives in best_deploy_finder_executor.py.
 """
 
 import sys
-import argparse
-from PyQt5.QtWidgets import QApplication
-from backup.schedule_generator_app import ONNXProfilerApp
 
-def parse_arguments():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Schedule Generator Application')
-    parser.add_argument('--target-device', type=str, help='Path to target device information file (e.g., target_device.yaml)')
-    return parser.parse_args()
 
 def main():
-    """Main entry point for the application."""
-    args = parse_arguments()
-    
-    app = QApplication(sys.argv)
-    window = ONNXProfilerApp(target_device_file=args.target_device)
-    window.show()
-    sys.exit(app.exec_())
+    print(__doc__)
+    print("[schedule_generator_main] Deprecated launcher. Use profile_models.py "
+          "and generate_schedules.py (see above).")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

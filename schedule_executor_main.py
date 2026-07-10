@@ -231,33 +231,34 @@ class ScheduleExecutor:
                 except Exception:
                     total_fps = 0.0
 
-                # 2) 드롭 개수 합산
-                drop = 0
+                # 2) Deadline-miss rate (0..1). Prefer the window-level value; else
+                #    aggregate per-model misses / offered.
+                total_obj = d.get('total', {}) or {}
+                miss_rate = total_obj.get('deadline_miss_rate', None)
+                miss = offered = 0
                 try:
                     models = d.get('models', {}) or {}
                     for mv in models.values():
-                        drop += int(mv.get('dropped_frames_due_to_full_queue', 0) or 0)
-                        # 다른 드롭 원인도 있으면 같이 더합니다(옵션)
-                        drop += int(mv.get('dropped_frames_due_to_deadline', 0) or 0)
-                        drop += int(mv.get('dropped_frames_cancelled', 0) or 0)
+                        miss += int(mv.get('deadline_miss_count', 0) or 0)
+                        offered += int(mv.get('frames_total', 0) or 0)
                 except Exception:
-                    drop = 0
+                    pass
+                if miss_rate is None:
+                    miss_rate = (miss / offered) if offered > 0 else 0.0
 
-                # 3) window_sec으로 나눠 drops/s로 변환
                 window = float(d.get('window_sec', 1.0) or 1.0)
-                drop_rate = drop / window
-
-                # (선택) 투명성 위해 필드 추가
-                d.setdefault('derived', {})['drop_rate_fps'] = round(drop_rate, 4)
-                d['derived']['drop_count'] = int(drop)
+                d.setdefault('derived', {})['deadline_miss_rate'] = round(float(miss_rate), 4)
+                d['derived']['deadline_miss_count'] = int(miss)
+                d['derived']['frames_total'] = int(offered)
                 d['derived']['window_sec'] = window
 
-                return total_fps, drop_rate
+                return total_fps, float(miss_rate)
 
-            # 점수 계산부
+            # 점수 계산부: FPS - PENALTY * deadline_miss_rate (miss_rate in [0,1])
+            PENALTY = 100.0
             for ent in entries:
-                total_fps, drop_rate = _metrics(ent)
-                score = total_fps - 0.2 * drop_rate
+                total_fps, miss_rate = _metrics(ent)
+                score = total_fps - PENALTY * miss_rate
                 ent['score'] = round(score, 4)
 
             # Determine best by highest score
@@ -293,6 +294,14 @@ class Controller:
 
 def main():
     """Entry point: parse args, create app/windows, and run event loop."""
+    # Use 'spawn' so per-view worker processes initialize CUDA / Mobilint NPU
+    # cleanly (fork after Qt/driver init deadlocks and leaves NPU workers idle).
+    import multiprocessing as _mp
+    try:
+        _mp.set_start_method('spawn')
+    except RuntimeError:
+        pass
+
     parser = argparse.ArgumentParser(description='Schedule Executor GUI application')
     parser.add_argument('--schedule', '-s', type=str, default='model_schedules.yaml',
                         help='Path to the model scheduling information file (default: model_schedules.yaml)')

@@ -60,7 +60,26 @@ class ViewHandler:
         # Get model type and execution mode
         self.model_type = model_settings.get(view_name, {}).get("model", "")
         self.execution_mode = model_settings.get(view_name, {}).get("execution", "cpu")
-        
+
+        # Per-view request deadline (period-based): deadline_ms = 1000/infps * factor.
+        # A request whose end-to-end latency exceeds this is a deadline miss.
+        cfg = model_settings.get(view_name, {}) or {}
+        try:
+            from model_registry import DEADLINE_FACTOR as _DF
+        except Exception:
+            _DF = 1.0
+        if cfg.get("deadline_ms"):
+            self.deadline_ms = float(cfg["deadline_ms"])
+        else:
+            infps = cfg.get("infps", None)
+            try:
+                infps = float(infps) if infps else 0.0
+            except Exception:
+                infps = 0.0
+            self.deadline_ms = (1000.0 / infps) * float(_DF) if infps > 0 else float("inf")
+        # Count of completed requests whose latency exceeded the deadline.
+        self.late_count = 0
+
     def start_display_thread(self):
         """Start the display thread for this view."""
         thread = threading.Thread(target=self.display_frames, daemon=True)
@@ -80,7 +99,16 @@ class ViewHandler:
         self.total_wait_ms = 0.0
         self.wait_count = 0
         self.avg_wait_ms = 0.0
-        
+        self.late_count = 0
+
+    def note_latency(self, latency_ms):
+        """Record a completed request's end-to-end latency; count deadline misses."""
+        try:
+            if latency_ms is not None and float(latency_ms) > self.deadline_ms:
+                self.late_count += 1
+        except Exception:
+            pass
+
     def update_stats(self, model_name, infer_time, log_enabled=0):
         """
         Update performance statistics for this view.
@@ -118,9 +146,12 @@ class YoloViewHandler(ViewHandler):
             
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
-                # For YOLO models, the result queue contains (frame, infer_time[, wait_ms])
+                # (frame, infer_time, wait_ms, latency_ms)
                 item = self.result_queue.get(timeout=1)
-                if isinstance(item, tuple) and len(item) == 3:
+                latency_ms = None
+                if isinstance(item, tuple) and len(item) == 4:
+                    frame, infer_time, wait_ms, latency_ms = item
+                elif isinstance(item, tuple) and len(item) == 3:
                     frame, infer_time, wait_ms = item
                 else:
                     frame, infer_time = item
@@ -145,6 +176,7 @@ class YoloViewHandler(ViewHandler):
                 if not pixmap.isNull():
                     self.update_signal.emit(pixmap)
                     self.update_stats(self.model_type, infer_time)
+                    self.note_latency(latency_ms)
                     # Update wait statistics if available
                     if wait_ms is not None:
                         self.total_wait_ms += float(wait_ms)
@@ -173,8 +205,13 @@ class ResNetViewHandler(ViewHandler):
             
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
-                # For ResNet models, the result queue contains (frame, class_name, infer_time)
-                frame, class_name, infer_time = self.result_queue.get(timeout=1)
+                # (frame, class_name, infer_time, latency_ms)
+                item = self.result_queue.get(timeout=1)
+                latency_ms = None
+                if isinstance(item, tuple) and len(item) == 4:
+                    frame, class_name, infer_time, latency_ms = item
+                else:
+                    frame, class_name, infer_time = item
             except queue.Empty:
                 continue
             except BrokenPipeError:
@@ -195,10 +232,66 @@ class ResNetViewHandler(ViewHandler):
                 if not pixmap.isNull():
                     self.update_signal.emit(pixmap)
                     self.update_stats(self.model_type, infer_time)
+                    self.note_latency(latency_ms)
                 else:
                     print(f"[{self.view_name}] Pixmap is null")
             except Exception as e:
                 print(f"[{self.view_name} Display ERROR] {e}")
+
+class LLMViewHandler(ViewHandler):
+    """Headless handler for LLM / VLM views.
+
+    LLM/VLM are profiling + placement only: their output is NOT rendered in the
+    4-view GUI. This handler still consumes the worker's output queue so the
+    per-view throughput statistics (generations/sec) and tokens/sec are
+    aggregated into the performance logs like any other view.
+
+    Worker emits (None, gen_ms, tokens_per_s). `avg_fps` becomes generations/sec
+    (1000/avg gen time); `avg_tokens_per_s` carries the token throughput.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.total_tokens_per_s = 0.0
+        self.tok_count = 0
+        self.avg_tokens_per_s = 0.0
+
+    def reset_stats(self):
+        super().reset_stats()
+        self.total_tokens_per_s = 0.0
+        self.tok_count = 0
+        self.avg_tokens_per_s = 0.0
+
+    def display_frames(self):
+        if self.view_name in self.views_without_model:
+            return
+        while not self.shutdown_flag.is_set():
+            try:
+                item = self.result_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            except (BrokenPipeError, EOFError, OSError):
+                if self.shutdown_flag.is_set():
+                    break
+                continue
+            except Exception as e:
+                print(f"[{self.view_name} LLM ERROR] {e}")
+                continue
+            try:
+                # (status_img_or_None, gen_ms, tokens_per_s, latency_ms)
+                latency_ms = None
+                if isinstance(item, tuple) and len(item) == 4:
+                    _, gen_ms, tokens_per_s, latency_ms = item
+                else:
+                    _, gen_ms, tokens_per_s = item
+                self.update_stats(self.model_type, gen_ms)
+                self.note_latency(latency_ms)
+                self.total_tokens_per_s += float(tokens_per_s or 0.0)
+                self.tok_count += 1
+                self.avg_tokens_per_s = self.total_tokens_per_s / self.tok_count if self.tok_count else 0.0
+            except Exception as e:
+                print(f"[{self.view_name} LLM stat ERROR] {e}")
+
 
 class VideoFeeder:
     """Class for feeding video frames to model queues, honoring per-view input FPS (infps)."""
@@ -219,8 +312,11 @@ class VideoFeeder:
         self.yolo_views = set(yolo_views or [])
         self.shutdown_flag = shutdown_flag
         self.model_settings = model_settings or {}
-        # Track dropped frames per view due to full queue
+        # Track dropped frames per view due to full queue (these are deadline misses:
+        # a request that cannot be admitted never completes in time).
         self.drop_counts = {v: 0 for v in view_frame_queues.keys()}
+        # Total requests offered per view (admitted + dropped) — denominator for miss rate.
+        self.offered_counts = {v: 0 for v in view_frame_queues.keys()}
         # Compute per-view enqueue intervals from infps
         self.view_intervals = {}
         for v in self.yolo_views:
@@ -248,41 +344,53 @@ class VideoFeeder:
         try:
             for v in list(self.drop_counts.keys()):
                 self.drop_counts[v] = 0
+                self.offered_counts[v] = 0
         except Exception:
             pass
         # We intentionally do not reset last_enqueue_ts to preserve pacing; only metrics reset is needed.
         
     def feed_queues(self):
-        """Feed video frames to model queues, enforcing per-view infps intervals when provided."""
-        global_exit_flag = False  # This should be passed from the main application
-        # Source video FPS only limits max rate; per-view infps throttles enqueueing
-        source_fps = 30.0
-        try:
-            import cv2
-            cap = cv2.VideoCapture("./stockholm_1280x720.mp4")
-            fps_read = cap.get(cv2.CAP_PROP_FPS)
-            if fps_read > 1.0:
-                source_fps = fps_read
-            cap.release()
-        except Exception as e:
-            print(f"[feed_queues] Failed to read FPS, using default 30.0: {e}")
-        min_sleep = max(0.001, 1.0 / (source_fps * 2.0))  # small sleep to avoid busy loop
+        """Generate requests at each view's infps, decoupled from source frame rate.
+
+        Pacing is driven by the wall clock, not by frame arrival, so target rates
+        above the source FPS are met by duplicating the most recent frame. Every
+        due enqueue counts as an offered request; a full queue counts as a drop
+        (an inadmissible request = a deadline miss).
+        """
+        global_exit_flag = False
+        last_frame = None
+        # Small tick to support high rates (e.g., 4ms tick -> up to ~250 req/s pacing).
+        min_sleep = 0.002
 
         while not self.shutdown_flag.is_set() and not global_exit_flag:
             try:
-                frame = self.video_queue.get(timeout=1)
+                # Refresh the latest frame without blocking (drain any backlog).
+                try:
+                    while True:
+                        last_frame = self.video_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                if last_frame is None:
+                    try:
+                        last_frame = self.video_queue.get(timeout=1)
+                    except queue.Empty:
+                        continue
+
                 now = time.time()
-                # Feed frames to all views that are running YOLO models
                 for view_name in list(self.yolo_views):
                     if view_name not in self.view_frame_queues:
                         continue
-                    interval = self.view_intervals.get(view_name)  # None means no throttle (enqueue every frame)
+                    interval = self.view_intervals.get(view_name)  # None -> every tick
                     last_ts = self.last_enqueue_ts.get(view_name, 0.0)
                     if (interval is None) or ((now - last_ts) >= interval):
+                        self.last_enqueue_ts[view_name] = now
+                        try:
+                            self.offered_counts[view_name] += 1
+                        except Exception:
+                            pass
                         frame_q = self.view_frame_queues[view_name]
                         try:
-                            frame_q.put_nowait((frame.copy(), now))
-                            self.last_enqueue_ts[view_name] = now
+                            frame_q.put_nowait((last_frame.copy(), now))
                         except queue.Full:
                             try:
                                 self.drop_counts[view_name] += 1
@@ -291,8 +399,6 @@ class VideoFeeder:
                         except (EOFError, BrokenPipeError, OSError):
                             pass
                 time.sleep(min_sleep)
-            except queue.Empty:
-                continue
             except Exception as e:
                 print(f"[feed_queues ERROR] {e}")
                 if self.shutdown_flag.is_set() or global_exit_flag:

@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Load the Mobilint + GPU runtime environment (PYTHON_BIN, HF caches).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/runtime_env.sh"
+
 # Default schedule file
 SCHEDULE_FILE="./model_schedules.yaml"
 SCHEDULE_NAME=""
@@ -60,7 +65,8 @@ if [[ ! -f "$SCHEDULE_FILE" && "$SCHEDULE_FILE" != */* ]]; then
 fi
 
 # Build command: always pass --schedule; append --schedule_name only when provided
-CMD=(sudo /opt/.pyenv/shims/python3 schedule_executor_main.py --schedule "$SCHEDULE_FILE")
+# Mobilint NPU + GPU are accessible as the current user (no sudo needed).
+CMD=("$PYTHON_BIN" schedule_executor_main.py --schedule "$SCHEDULE_FILE")
 if [[ -n "$SCHEDULE_NAME" ]]; then
   CMD+=(--schedule_name "$SCHEDULE_NAME")
 fi
