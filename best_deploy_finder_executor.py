@@ -12,51 +12,69 @@ Usage:
 import os
 import sys
 import argparse
+from pathlib import Path
 from PyQt5 import uic
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileSystemModel, QFileDialog, QDialog, QLabel, QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout
-from schedule_generator.file_manager import FileManager
+from PyQt5.QtGui import QStandardItemModel, QStandardItem
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QDialog, QLabel, QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout
 
 
-class CheckableFileSystemModel(QFileSystemModel):
-    """QFileSystemModel where only immediate children of the root are checkable (directories)."""
+def discover_file_backed_models(models_root: str):
+    """Vision models deployable from the models/ folder.
+
+    `models/onnx/<name>.onnx`     -> runnable on CPU
+    `models/mobilint/<name>.mxq`  -> the compiled form, runnable on the Mobilint NPU
+
+    A model is deployable when both exist. Returns (deployable, cpu_only, npu_only)
+    as sorted lists of bare names (no extension).
+    """
+    def _names(d, ext):
+        if not os.path.isdir(d):
+            return set()
+        return {os.path.splitext(f)[0] for f in os.listdir(d) if f.lower().endswith(ext)}
+
+    cpu = _names(os.path.join(models_root, 'onnx'), '.onnx')
+    npu = _names(os.path.join(models_root, 'mobilint'), '.mxq')
+    return sorted(cpu & npu), sorted(cpu - npu), sorted(npu - cpu)
+
+
+def discover_hf_backed_models(static_json_path):
+    """Generative models (LLM / VLM) deployable from HuggingFace checkpoints.
+
+    These have no local .onnx/.mxq — the Mobilint runtime loads them from the Hub —
+    so availability is gated on having a static profile entry (i.e. they were
+    profiled and therefore have the features the predictor needs).
+    """
+    try:
+        import json
+        import model_registry as reg
+        profiled = {r.get('model') for r in
+                    json.loads(Path(static_json_path).read_text()).get('total_data', [])}
+        return sorted(m for m in reg.model_names()
+                      if reg.kind_of(m) in ('llm', 'vlm') and m in profiled)
+    except Exception:
+        return []
+
+
+class ModelChecklistModel(QStandardItemModel):
+    """Checkable list of model names (no extension) shown in model_tree_view."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._root_index = None
-        self._check_states = {}  # path -> Qt.CheckState
+        self.setHorizontalHeaderLabels(["Model"])
 
-    def set_root_index(self, index):
-        self._root_index = index
+    def populate(self, names):
+        self.removeRows(0, self.rowCount())
+        for name in names:
+            item = QStandardItem(name)
+            item.setCheckable(True)
+            item.setCheckState(Qt.Unchecked)
+            item.setEditable(False)
+            self.appendRow(item)
 
-    def is_top_level_child(self, index):
-        if not index.isValid() or self._root_index is None:
-            return False
-        return self.parent(index) == self._root_index
-
-    def flags(self, index):
-        base = super().flags(index)
-        if index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
-            return base | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable | Qt.ItemIsEnabled
-        return base
-
-    def data(self, index, role=Qt.DisplayRole):
-        if role == Qt.CheckStateRole and index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
-            path = self.filePath(index)
-            return self._check_states.get(path, Qt.Unchecked)
-        return super().data(index, role)
-
-    def setData(self, index, value, role=Qt.EditRole):
-        if role == Qt.CheckStateRole and index.column() == 0 and self.isDir(index) and self.is_top_level_child(index):
-            path = self.filePath(index)
-            self._check_states[path] = Qt.Checked if value == Qt.Checked else Qt.Unchecked
-            self.dataChanged.emit(index, index, [Qt.CheckStateRole])
-            return True
-        return super().setData(index, value, role)
-
-    def get_checked_top_level_dirs(self):
-        """Return absolute paths of checked immediate child directories under the current root."""
-        return [path for path, state in self._check_states.items() if state == Qt.Checked]
+    def checked_model_names(self):
+        return [self.item(r).text() for r in range(self.rowCount())
+                if self.item(r).checkState() == Qt.Checked]
 
 
 class BestDeployFinderApp(QMainWindow):
@@ -67,20 +85,12 @@ class BestDeployFinderApp(QMainWindow):
         # Default models root to ./models
         self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models')
 
-        # Setup file system model and tree view
-        self.fs_model = CheckableFileSystemModel(self)
-        self.fs_model.setRootPath(self.models_root)
-        root_index = self.fs_model.index(self.models_root)
-        self.fs_model.set_root_index(root_index)
-
-        # Hook the model to the tree view defined in the UI
-        self.model_tree_view.setModel(self.fs_model)
-        self.model_tree_view.setRootIndex(root_index)
-        # Show only name column
-        for col in range(1, self.fs_model.columnCount()):
-            self.model_tree_view.setColumnHidden(col, True)
-        # Expand one level for visibility
-        self.model_tree_view.expand(root_index)
+        # The tree view lists deployable model NAMES (no extension) with checkboxes.
+        self.model_list = ModelChecklistModel(self)
+        self.model_tree_view.setModel(self.model_list)
+        self.model_tree_view.setRootIsDecorated(False)
+        self.model_tree_view.setHeaderHidden(False)
+        self._reload_model_list()
 
         # Wire up browse buttons if present
         if hasattr(self, 'deploy_model_browse_button'):
@@ -100,6 +110,15 @@ class BestDeployFinderApp(QMainWindow):
         # Initialize line edits if present
         if hasattr(self, 'deployment_model_input'):
             self.deployment_model_input.setText(self.models_root)
+        # Default the placement predictor to the CPU + Mobilint-NPU model. Set it
+        # explicitly (not just when empty) so the .ui's directory default does not
+        # cause an ambiguous prefix among the several trained models.
+        _cpu_npu_prefix = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'deploy_cpu_npu')
+        if hasattr(self, 'prediction_model_input') and os.path.exists(_cpu_npu_prefix + '_y1.json'):
+            self.prediction_model_input.setText(_cpu_npu_prefix)
+        if hasattr(self, 'device_config_input') and not self.device_config_input.text():
+            self.device_config_input.setText(
+                os.path.join(os.path.dirname(__file__), 'target_device_cpu_npu.yaml'))
 
         # Initialize log window if present
         if hasattr(self, 'log_text_edit'):
@@ -118,20 +137,33 @@ class BestDeployFinderApp(QMainWindow):
         else:
             print(message)
 
+    def _reload_model_list(self):
+        """Rescan and show every deployable model name in the tree view.
+
+        Vision models come from models/onnx + models/mobilint; generative models
+        (LLM/VLM) come from the registry and load from HuggingFace.
+        """
+        file_backed, cpu_only, npu_only = discover_file_backed_models(self.models_root)
+        try:
+            hf_backed = discover_hf_backed_models(self._resolve_static_json())
+        except Exception:
+            hf_backed = []
+        deployable = sorted(set(file_backed) | set(hf_backed))
+        self.model_list.populate(deployable)
+        self._log(f"[Models] vision (onnx + mxq): {', '.join(file_backed) or 'none'}")
+        if hf_backed:
+            self._log(f"[Models] generative (HuggingFace): {', '.join(hf_backed)}")
+        if cpu_only:
+            self._log(f"[Models] Skipped (no .mxq for NPU): {', '.join(cpu_only)}")
+        if npu_only:
+            self._log(f"[Models] Skipped (no .onnx for CPU): {', '.join(npu_only)}")
+
     def _get_selected_model_names(self):
-        # Prefer checked top-level directories (checkbox state) as the source of truth
-        if hasattr(self.fs_model, 'get_checked_top_level_dirs'):
-            checked_dirs = self.fs_model.get_checked_top_level_dirs()
-            if checked_dirs:
-                # Map to folder basenames (model names)
-                models = [os.path.basename(p) for p in checked_dirs if os.path.isdir(p)]
-                models = sorted([m for m in models if m])
-                if models:
-                    self._log(f"[Info] Using checked models: {', '.join(models)}")
-                    return models
-        # Fallback to highlighted selection for compatibility
-        fm = FileManager(log_callback=self._log)
-        return fm.get_models_from_selection(self.model_tree_view, self.fs_model, self.models_root)
+        """Model names checked in the tree view."""
+        models = self.model_list.checked_model_names()
+        if models:
+            self._log(f"[Info] Selected models: {', '.join(models)}")
+        return models
 
     def on_input_rate_clicked(self):
         models = self._get_selected_model_names()
@@ -218,12 +250,7 @@ class BestDeployFinderApp(QMainWindow):
             self.models_root = folder
             if hasattr(self, 'deployment_model_input'):
                 self.deployment_model_input.setText(folder)
-            root_index = self.fs_model.setRootPath(self.models_root)
-            if isinstance(root_index, bool):
-                root_index = self.fs_model.index(self.models_root)
-            self.fs_model.set_root_index(root_index)
-            self.model_tree_view.setRootIndex(root_index)
-            self.model_tree_view.expand(root_index)
+            self._reload_model_list()
 
     def select_prediction_model(self):
         # Expect a folder that contains <prefix>_y1.json and <prefix>_y2.json
@@ -237,17 +264,8 @@ class BestDeployFinderApp(QMainWindow):
             self.device_config_input.setText(path)
 
     def get_checked_top_level_dirs(self):
-        """Return a list of absolute paths for checked top-level directories under models_root."""
-        checked = []
-        root_index = self.fs_model.index(self.models_root)
-        rows = self.fs_model.rowCount(root_index)
-        for r in range(rows):
-            idx = self.fs_model.index(r, 0, root_index)
-            path = self.fs_model.filePath(idx)
-            state = self.fs_model.data(idx, Qt.CheckStateRole)
-            if state == Qt.Checked:
-                checked.append(path)
-        return checked
+        """Backwards-compatible alias: the tree now holds model names, not folders."""
+        return self.model_list.checked_model_names()
 
     def log(self, msg):
         from datetime import datetime
@@ -257,133 +275,121 @@ class BestDeployFinderApp(QMainWindow):
             self.log_text_edit.appendPlainText(text)
         print(text)
 
-    def build_schedule_from_selection(self, models_root: str, checked_dirs, device_conf_path: str, out_path: str) -> str:
-        """Generate a schedule YAML (model_schedules.yaml) from selected top-level model folders and device config.
-        Returns the output path. Mirrors the approach from backup.schedule_generator_app.generate_all_combinations.
+    def _resolve_static_json(self):
+        """Locate the static profile JSON (feature source), preferring the xgboost_model path."""
+        root = Path(__file__).resolve().parent
+        candidates = [
+            root / "xgboost_model" / "performance_data" / "sample_profiling_data" / "sample_profiling_data.json",
+            root / "sample_profiling_data.json",
+        ]
+        p = next((c for c in candidates if c.exists()), None)
+        if p is None:
+            raise FileNotFoundError(f"Static profiling JSON not found in: {[str(c) for c in candidates]}")
+        return p
+
+    def build_schedule_from_selection(self, model_names, out_path: str) -> str:
+        """Generate CPU + Mobilint-NPU placement candidates for the selected models.
+
+        Replaces the legacy CPU + Neubla-NPU flow: the platform is fixed to
+        CPU + NPU (both devices shareable, matching the trained `deploy_cpu_npu`
+        predictor). Every checked model is placed on cpu or npu; per-view infps
+        defaults to the model's baseline rate (overridable via the input-rate
+        dialog). Writes the schedule YAML plus a `<out>.meta.json` sidecar.
         """
+        import json
         import yaml
-        # Derive model names from checked directories (top-level under models_root)
-        models = [os.path.basename(d) for d in checked_dirs if os.path.isdir(d)]
-        models = [m for m in models if m]
+        import model_registry as reg
+        import generate_schedules as gs
+
+        models = [m for m in (model_names or []) if m in reg.MODELS]
+        unknown = [m for m in (model_names or []) if m not in reg.MODELS]
+        if unknown:
+            self.log(f"[Warn] Not in the model registry, ignored: {', '.join(unknown)}")
         if not models:
-            raise ValueError("No models selected. Please check at least one top-level model folder.")
+            raise ValueError("No models selected. Check at least one model in the list.")
         if len(models) > 4:
-            self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
-            models = models[:4]
+            self.log(f"[Warn] {len(models)} models selected; the executor renders at most 4 views.")
 
-        # Load device info
+        self.log(f"[Info] Platform: CPU + Mobilint NPU (both shareable). Models: {', '.join(models)}")
+
+        # Baseline rates for default infps (1x). Overridable per model via the dialog.
+        static_json = self._resolve_static_json()
+        baseline = {}
         try:
-            import yaml as _yaml
-            with open(device_conf_path, 'r') as f:
-                device_config = _yaml.safe_load(f) or {}
-            cpu_count = device_config.get("devices", {}).get("cpu", {}).get("count", 1)
-            npu_cfg = device_config.get("devices", {}).get("npu", {})
-            npu_count = npu_cfg.get("count", 0)
-            npu_ids = list(npu_cfg.get("ids", []))
-            self.log(f"[Info] Device config: CPU={cpu_count}, NPU={npu_count}, NPU IDs={npu_ids}")
+            baseline = {r['model']: r.get('baseline_rate')
+                        for r in json.loads(Path(static_json).read_text()).get('total_data', [])}
         except Exception as e:
-            raise RuntimeError(f"Failed to load device config '{device_conf_path}': {e}")
+            self.log(f"[Warn] Could not load baseline rates: {e}")
 
-        # Generate all combinations (CPU multi-assign allowed; NPU unique per model)
-        combinations = []
-
-        def rec(idx, assign, available_npus: set):
-            if idx >= len(models):
-                combinations.append(assign.copy())
-                return
-            model = models[idx]
-            # Option 1: CPU
-            assign[model] = "cpu"
-            rec(idx + 1, assign, available_npus)
-            # Option 2: each available NPU
-            for nid in list(available_npus):
-                assign[model] = f"npu{nid}"
-                new_avail = set(available_npus)
-                new_avail.remove(nid)
-                rec(idx + 1, assign, new_avail)
-
-        rec(0, {}, set(npu_ids))
-
-        # Build schedules dict
-        schedules = {}
-        for i, combo in enumerate(combinations):
-            combo_name = f"combination_{i+1}"
-            schedules[combo_name] = {}
-            for j, (model, device) in enumerate(combo.items()):
-                model_id = f"{model}_{device}"
-                # Determine default infps
+        platform_devices = ["cpu", "npu"]
+        workload_id = next((m for m in models if reg.get(m).get("task") == "detection"), models[0])
+        schedules, meta = {}, {}
+        for idx, placement in enumerate(gs.enumerate_placements(models, platform_devices), start=1):
+            name = f"combination_{idx}"
+            entry = {}
+            for j, (model, dev) in enumerate(placement.items()):
                 infps = None
-                # Prefer explicit input rates if provided by the dialog
-                if isinstance(getattr(self, 'input_fps_by_model', None), dict):
-                    v = self.input_fps_by_model.get(model)
+                v = (getattr(self, 'input_fps_by_model', {}) or {}).get(model)
+                if v is not None:
                     try:
-                        if v is not None:
-                            infps = float(v)
+                        infps = float(v)
                     except Exception:
                         infps = None
-                # Fallback heuristics if not provided
                 if infps is None:
-                    lname = model.lower()
-                    if "resnet50" in lname:
-                        infps = 2.0
-                    elif "yolov3" in lname:
-                        infps = 30.0
-                entry = {
-                    "model": model,
-                    "execution": device,
-                    "display": f"view{j+1}",
+                    infps = float(baseline.get(model) or 1.0)
+                entry[f"{model}_{dev}"] = {
+                    "model": model, "execution": dev,
+                    "display": f"view{j + 1}", "infps": round(infps, 3),
                 }
-                if infps is not None:
-                    entry["infps"] = float(infps)
-                schedules[combo_name][model_id] = entry
-        # Write YAML
+            schedules[name] = entry
+            meta[name] = {"rate_factor": 1.0, "workload": workload_id}
+
         try:
             with open(out_path, 'w', encoding='utf-8') as f:
-                f.write("# model_schedules.yaml\n")
-                f.write("# Auto-generated\n\n")
-                f.write(yaml.dump(schedules, default_flow_style=False))
+                f.write("# model_schedules.yaml - CPU + Mobilint NPU placement candidates\n\n")
+                f.write(yaml.dump(schedules, default_flow_style=False, sort_keys=False))
+            Path(str(out_path) + ".meta.json").write_text(json.dumps(meta, indent=2))
         except Exception as e:
             raise RuntimeError(f"Failed to write schedule YAML '{out_path}': {e}")
+        self.log(f"[Info] Wrote {len(schedules)} CPU/NPU combinations to {out_path}")
         return out_path
 
     def generate_all_combinations(self) -> str:
-        """Generate all possible model-to-device combinations into model_schedules.yaml using:
-        - Checked top-level model folders in the tree.
-        - Device config path from self.device_config_input.
-        - Per-model input rates from input_rate_dialog (self.input_fps_by_model).
-        Returns the output YAML path.
-        """
-        # Resolve selections
-        models_root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
-        checked_dirs = self.get_checked_top_level_dirs()
-        if not checked_dirs:
-            raise ValueError("No model folders selected. Please check model folders in the tree.")
-        device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
-        if not device_conf or not os.path.exists(device_conf):
-            raise FileNotFoundError(f"Device config not found: {device_conf}")
-        out_path = self.generated_schedule_path
-        # Delegate to existing builder (kept for compatibility)
-        return self.build_schedule_from_selection(models_root, checked_dirs, device_conf, out_path)
+        """Enumerate CPU/NPU placements of the models checked in the tree view.
 
-    def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.2):
-        """Predict best combination using two-target XGBoost JSON models.
+        The platform is fixed to CPU + Mobilint NPU, so no device config is needed.
+        Per-model input rates come from the input-rate dialog, else the baseline rate.
+        Returns the generated schedule YAML path.
+        """
+        models = self._get_selected_model_names()
+        if not models:
+            raise ValueError("No models selected. Check at least one model in the list.")
+        return self.build_schedule_from_selection(models, self.generated_schedule_path)
+
+    def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.3, beta: float = 0.5):
+        """Predict best combination using three-target XGBoost JSON models.
         - model_input_path can be either:
-          - A directory containing two files: <prefix>_y1.json and <prefix>_y2.json
-          - One of the two JSON files (we'll infer the prefix and the counterpart)
+          - A directory containing files: <prefix>_y1.json, <prefix>_y2.json (and _y3.json)
+          - One of the JSON files (we'll infer the prefix and counterparts)
         Returns (best_combination_name, df) where df contains columns:
-          [source, combination, pred_total_throughput_fps, pred_drop_rate_fps, pred_score].
+          [source, combination, pred_total_throughput_fps, pred_drop_rate_fps,
+           pred_tokens_per_s, pred_score].
+        Score = fps + beta*tokens_per_s - alpha*drop_rate.
         """
         import pandas as pd
         from pathlib import Path
         from xgboost_model.deploy_selector_xgb_suite import (
             load_static_profiles,
             featurize_from_combo,
-            predict_two_targets,
+            predict_targets,
             _load_yaml_or_json,
             _iter_combos_from_schedule,
         )
 
         def _infer_model_prefix(p: Path) -> Path:
+            # Bare prefix (e.g. .../deploy_cpu_npu) whose _y1.json exists.
+            if not p.is_dir() and Path(str(p) + "_y1.json").exists():
+                return p
             if p.is_dir():
                 y1_files = sorted(p.glob("*_y1.json"))
                 for y1 in y1_files:
@@ -413,10 +419,7 @@ class BestDeployFinderApp(QMainWindow):
             raise FileNotFoundError(f"Schedule YAML not found: {schedule_yaml_path}")
         model_prefix = _infer_model_prefix(Path(model_input_path))
 
-        # Use project root sample_profiling_data.json as required
-        static_json_path = Path(__file__).resolve().parent / "sample_profiling_data.json"
-        if not static_json_path.exists():
-            raise FileNotFoundError(f"Static profiling JSON not found: {static_json_path}")
+        static_json_path = self._resolve_static_json()
 
         S = load_static_profiles(static_json_path)
         schedule_doc = _load_yaml_or_json(sched_path)
@@ -427,14 +430,16 @@ class BestDeployFinderApp(QMainWindow):
         rows = []
         for name, combo_blob in combos:
             X = featurize_from_combo(S, combo_blob)
-            y1_pred, y2_pred = predict_two_targets(model_prefix, X)
-            fps = float(y1_pred[0]); drop = float(y2_pred[0])
-            score = fps - float(alpha) * drop
+            y1_pred, y2_pred, y3_pred = predict_targets(model_prefix, X)
+            # y1 = norm throughput, y2 = deadline miss rate, y3 = norm tokens
+            fps = float(y1_pred[0]); miss = float(y2_pred[0]); tok = float(y3_pred[0])
+            score = fps + float(beta) * tok - float(alpha) * miss
             rows.append({
                 "source": sched_path.name,
                 "combination": str(name),
-                "pred_total_throughput_fps": fps,
-                "pred_drop_rate_fps": drop,
+                "pred_norm_throughput": fps,
+                "pred_deadline_miss_rate": miss,
+                "pred_norm_tokens": tok,
                 "pred_score": score,
             })
 
@@ -449,17 +454,15 @@ class BestDeployFinderApp(QMainWindow):
         best_combo = str(df.iloc[0]["combination"]) if len(df) > 0 else None
         return best_combo, df
 
-    def _build_cpu_only_schedule(self, checked_dirs, out_path: str) -> str:
+    def _build_cpu_only_schedule(self, model_names, out_path: str) -> str:
         """Build a schedule with a single combination where all selected models run on CPU
         using the per-model input rates previously set by the user (input_rate_dialog).
         Returns the output YAML path.
         """
         import yaml
-        # Derive model names
-        models = [os.path.basename(d) for d in checked_dirs if os.path.isdir(d)]
-        models = [m for m in models if m]
+        models = [m for m in (model_names or []) if m]
         if not models:
-            raise ValueError("No models selected. Please check model folders in the tree.")
+            raise ValueError("No models selected. Please check at least one model in the list.")
         # Limit to 4 views for viewer layout consistency (mirrors other code paths)
         if len(models) > 4:
             self.log(f"[Warn] More than 4 models selected. Using only the first 4.")
@@ -542,12 +545,12 @@ class BestDeployFinderApp(QMainWindow):
                 self.log(f"[Warn] Failed to parse predictions.csv: {e}")
         # 2) If no predictions, create a CPU-only schedule for the selected models
         if not best_combo:
-            checked_dirs = self.get_checked_top_level_dirs()
-            if not checked_dirs:
-                self.log("[Error] No model folders selected. Please check model folders in the tree.")
+            selected = self._get_selected_model_names()
+            if not selected:
+                self.log("[Error] No models selected. Please check at least one model in the list.")
                 return
             try:
-                schedule_path = self._build_cpu_only_schedule(checked_dirs, schedule_path)
+                schedule_path = self._build_cpu_only_schedule(selected, schedule_path)
                 best_combo = 'combination_1'
                 self.log(f"[Build] Created CPU-only schedule: {schedule_path}")
             except Exception as e:
@@ -568,22 +571,20 @@ class BestDeployFinderApp(QMainWindow):
         pred_model = self.prediction_model_input.text() if hasattr(self, 'prediction_model_input') else ''
         device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
 
-        # Collect selected (checked) top-level model folders
-        checked_dirs = self.get_checked_top_level_dirs()
+        # Models checked in the tree view (names, no extension)
+        selected = self._get_selected_model_names()
 
         # Log inputs
         self.log(f"[Predict] models_root={models_root}")
         self.log(f"[Predict] prediction_model={pred_model}")
-        self.log(f"[Predict] device_config={device_conf}")
-        self.log(f"[Predict] checked_top_level_dirs={checked_dirs}")
+        self.log(f"[Predict] selected_models={selected}")
 
-        # Validate
+        # Validate. The platform is fixed to CPU + Mobilint NPU, so no device
+        # config is required. `pred_model` may be a prefix, a directory, or a _y*.json.
         try:
-            if not checked_dirs:
-                raise ValueError("No model folders selected. Please check model folders in the tree.")
-            if not device_conf or not os.path.exists(device_conf):
-                raise FileNotFoundError(f"Device config not found: {device_conf}")
-            if not pred_model or not os.path.exists(pred_model):
+            if not selected:
+                raise ValueError("No models selected. Please check at least one model in the list.")
+            if not pred_model or not (os.path.exists(pred_model) or os.path.exists(pred_model + '_y1.json')):
                 raise FileNotFoundError(f"Prediction model not found: {pred_model}")
         except Exception as e:
             self.log(f"[Error] {e}")
