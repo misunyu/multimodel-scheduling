@@ -1,0 +1,57 @@
+==================== PLATFORM: cpu_gpu ====================
+[collect] cpu_gpu ...
+[collect] cpu_gpu done: 160 ok
+[train] cpu_gpu (rates 1x/2x/4x)
+[train] y1 (y1_total_throughput_fps): params max_depth=6 eta=0.1 cv_mae=0.0407
+[train] y2 (y2_deadline_miss_rate): params max_depth=6 eta=0.1 cv_mae=0.1145
+[train] y3 (y3_total_tokens_per_s): params max_depth=4 eta=0.1 cv_mae=0.1030
+[OK] saved -> xgboost_model/artifacts/deploy_cpu_gpu_y1.json, xgboost_model/artifacts/deploy_cpu_gpu_y2.json, xgboost_model/artifacts/deploy_cpu_gpu_y3.json (rows=120)
+--- 3-fold CV ---
+[cv] 120 windows, 37 features, 3-fold
+target                 MAE      RMSE      R2    MAPE%      mean
+y1 norm throughput     0.042     0.058   0.974     15.0     0.488
+y2 deadline miss     0.118     0.160   0.652     21.0     0.675
+y3 norm tokens       0.107     0.163   0.716     39.5     0.395
+--- 3x rate hold-out ---
+[holdout] test windows: 40 (rate factors [3.0])
+=== Rate hold-out test set (production model) ===
+target                 MAE      RMSE      R2    MAPE%      mean
+y1 norm throughput     0.018     0.023   0.996      8.2     0.509
+y2 deadline miss     0.156     0.232  -2.281     20.0     0.873
+y3 norm tokens       0.086     0.137   0.805     18.5     0.482
+--- placement selection (Top-1/Top-5) ---
+workload groups evaluated: 5  (rate factors [3.0])
+Top-1 hit rate: 1.000
+Top-5 hit rate: 1.000
+avg predicted-pick score / oracle score: 1.000
+avg Spearman rank corr (within group): 0.976
+
+==================== PLATFORM: cpu_npu ====================
+[collect] cpu_npu ...
+[collect] cpu_npu done: 160 ok
+[train] cpu_npu (rates 1x/2x/4x)
+[train] y1 (y1_total_throughput_fps): params max_depth=5 eta=0.05 cv_mae=0.0552
+[train] y2 (y2_deadline_miss_rate): params max_depth=3 eta=0.1 cv_mae=0.1472
+[train] y3 (y3_total_tokens_per_s): params max_depth=5 eta=0.05 cv_mae=0.0774
+[OK] saved -> xgboost_model/artifacts/deploy_cpu_npu_y1.json, xgboost_model/artifacts/deploy_cpu_npu_y2.json, xgboost_model/artifacts/deploy_cpu_npu_y3.json (rows=120)
+--- 3-fold CV ---
+[cv] 120 windows, 37 features, 3-fold
+target                 MAE      RMSE      R2    MAPE%      mean
+y1 norm throughput     0.056     0.077   0.944     17.4     0.482
+y2 deadline miss     0.156     0.179  -0.318     20.7     0.860
+y3 norm tokens       0.079     0.156   0.741     16.4     0.578
+--- 3x rate hold-out ---
+[holdout] test windows: 40 (rate factors [3.0])
+=== Rate hold-out test set (production model) ===
+target                 MAE      RMSE      R2    MAPE%      mean
+y1 norm throughput     0.048     0.070   0.952     12.1     0.469
+y2 deadline miss     0.048     0.059  -1.073      5.1     0.961
+y3 norm tokens       0.081     0.167   0.679     18.2     0.594
+--- placement selection (Top-1/Top-5) ---
+workload groups evaluated: 5  (rate factors [3.0])
+Top-1 hit rate: 0.200
+Top-5 hit rate: 1.000
+avg predicted-pick score / oracle score: 0.931
+avg Spearman rank corr (within group): 0.890
+
+ALL_DONE
