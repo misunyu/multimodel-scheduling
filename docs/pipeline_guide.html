@@ -167,6 +167,7 @@
     <div class="grp">Setup</div>
     <a href="#env">Environment</a>
     <a href="#models">Models &amp; devices</a>
+    <a href="#assets">Model assets</a>
     <a href="#constants">Constants &amp; defaults</a>
     <div class="grp">Pipeline</div>
     <a href="#profile">1 · profile_models</a>
@@ -175,10 +176,13 @@
     <a href="#train">4 · train</a>
     <a href="#predict">5 · predict</a>
     <a href="#evaluate">evaluate_model</a>
+    <div class="grp">Applications</div>
+    <a href="#gui">Best-deploy finder (GUI)</a>
+    <a href="#platform">Two-platform study</a>
+    <a href="#concurrency">Concurrency study</a>
     <div class="grp">Reference</div>
     <a href="#xgb">XGBoost model</a>
     <a href="#metrics">Metrics</a>
-    <a href="#platform">Two-platform study</a>
     <a href="#e2e">End-to-end example</a>
   </nav>
 
@@ -216,6 +220,17 @@
       <p class="callout"><b>Device constraint.</b> <code>qwen2_vl</code> is restricted to <span class="chip gpu">gpu</span>
         <span class="chip npu">npu</span> (CPU prefill ≈ 13&nbsp;s is impractical). All other models may use any device.
         Both accelerators are <b>shareable</b> — multiple models can co-reside on one GPU or on the Mobilint MLA100.</p>
+    </section>
+
+    <section id="assets">
+      <h2><span class="num">§1b</span>Model assets on disk</h2>
+      <p class="sec-note">Vision models ship as two matching files per model. Generative models have no local
+        binaries — the Mobilint runtime and <code>transformers</code> load them from HuggingFace.
+        <code>models/</code> is git-ignored (~900&nbsp;MB).</p>
+      <div class="cmd"><span class="ln">models/</span><span class="ln">├── onnx/       <span class="cm"># CPU (and GPU) execution — ONNX Runtime</span></span><span class="ln">│   ├── resnet50.onnx</span><span class="ln">│   └── yolo11{n,s,m,l,x}.onnx</span><span class="ln">├── mobilint/   <span class="cm"># the compiled form for the Mobilint NPU</span></span><span class="ln">│   ├── resnet50.mxq</span><span class="ln">│   └── yolo11{n,s,m,l,x}.mxq</span><span class="ln">└── pt/         <span class="cm"># ultralytics sources used to export the ONNX</span></span></div>
+      <p>A vision model is <b>deployable</b> when both its <code>.onnx</code> and <code>.mxq</code> exist. If the
+        <code>.mxq</code> is missing, the zoo fetches it from the Hub on first use and caches it under
+        <code>~/.mblt_model_zoo/vision/aries/global8/</code>; copy it into <code>models/mobilint/</code> to pin it.</p>
     </section>
 
     <section id="constants">
@@ -388,6 +403,25 @@
       </div>
     </section>
 
+    <section id="gui">
+      <h2><span class="num">§</span>Best-deploy finder (GUI)</h2>
+      <p class="sec-note">The interactive front-end for the <b>CPU + Mobilint NPU</b> platform. It replaces the legacy
+        CPU + Neubla flow and uses the trained <code>deploy_cpu_npu</code> predictor.</p>
+      <div class="cmd"><span class="ln"><span class="kw">source</span> runtime_env.sh &amp;&amp; <span class="kw">$PYTHON_BIN</span> best_deploy_finder_executor.py</span></div>
+      <ol class="tight">
+        <li>The tree lists <b>deployable model names</b> (no extensions): vision models discovered from
+          <code>models/onnx</code> ∩ <code>models/mobilint</code>, plus <code>llama1b</code> and <code>qwen2_vl</code>
+          from the registry.</li>
+        <li>Check the models to deploy. <b>Predict Best Deployment</b> enumerates every cpu/npu placement of exactly
+          those models (2<sup>N</sup>, with <code>qwen2_vl</code> pinned to the NPU), scores each with the predictor,
+          and writes <code>predictions.csv</code>.</li>
+        <li><b>Load &amp; Execute Best</b> launches <code>schedule_executor_main.py</code> on the winning combination.</li>
+      </ol>
+      <p class="callout">Per-view <code>infps</code> defaults to each model's <b>baseline rate</b>; override it per model
+        with the input-rate dialog. The executor renders at most 4 views — checking more models still predicts, but only
+        four are displayed.</p>
+    </section>
+
     <section id="platform">
       <h2><span class="num">§</span>Two-platform study</h2>
       <p class="sec-note">Reproduces the paper's per-platform evaluation: a CPU+GPU predictor and a CPU+NPU (MLA100)
@@ -396,6 +430,35 @@
       <div class="cmd"><span class="ln"><span class="kw">./run_platform_study.sh</span>   <span class="cm"># ~2.5 h; artifacts: deploy_cpu_gpu_*, deploy_cpu_npu_*</span></span></div>
       <p>To run one platform manually, generate its schedule with <code>--devices cpu gpu</code> (or <code>cpu npu</code>),
         collect against it, then train with <code>--model_out …/deploy_cpu_gpu</code>.</p>
+      <div class="tbl-scroll"><table>
+        <caption>Results on the unseen 3x input rate</caption>
+        <thead><tr><th>Platform</th><th>Top-1 hit</th><th>Top-5 hit</th><th>pick / oracle</th><th>CPU used in optimal</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip gpu">CPU+GPU</span></td><td>1.00</td><td>1.00</td><td>1.000</td><td>0 / 20 workloads</td></tr>
+          <tr><td><span class="chip npu">CPU+NPU</span></td><td>0.20</td><td>1.00</td><td>0.931</td><td>16 / 20 workloads</td></tr>
+        </tbody>
+      </table></div>
+      <p>Distributing work to the CPU is optimal on the NPU platform (the accelerator saturates) but never on the GPU
+        platform — the RTX&nbsp;5090 does not saturate.</p>
+    </section>
+
+    <section id="concurrency">
+      <h2><span class="num">§</span>Concurrency study (CPU+GPU, N = 4…8)</h2>
+      <p class="sec-note">Scales the number of concurrently running models from 4 to 8 by adding YOLO11 detectors
+        smallest-first (n, s, m, l, x) on top of <code>resnet50 + llama1b + qwen2_vl</code>, to test whether GPU
+        contention ever makes CPU placement optimal. A dedicated headless runner sidesteps the 4-view GUI.</p>
+      <div class="cmd"><span class="ln"><span class="kw">$PYTHON_BIN</span> generate_concurrency_schedules.py <span class="fl">--out</span> <span class="st">schedules_concurrency.yaml</span> <span class="fl">--cap</span> <span class="st">10</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> run_concurrency_study.py <span class="fl">--schedule</span> <span class="st">schedules_concurrency.yaml</span> <span class="fl">--duration</span> <span class="st">8</span> \</span><span class="ln">    <span class="fl">--out</span> <span class="st">xgboost_model/performance_data/concurrency_cpu_gpu/performance.json</span></span></div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Flag</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="p">--n_min / --n_max</td><td class="d">4 / 8</td><td>Concurrency range (models running at once).</td></tr>
+          <tr><td class="p">--cap</td><td class="d">10</td><td>Max placements sampled per N level (stratified by GPU-count).</td></tr>
+          <tr><td class="p">--duration / --warmup</td><td class="d">8 / 5</td><td>Measured seconds per combination, and warmup before it.</td></tr>
+        </tbody>
+      </table></div>
+      <p class="callout"><b>Finding.</b> All-GPU throughput <i>rises</i> with N (239 → 329&nbsp;FPS at N=8), so the GPU
+        never saturates and all-GPU stays optimal at every N and every α. The paper's "distribute to CPU under
+        contention" effect appears only on the weaker NPU.</p>
     </section>
 
     <section id="e2e">

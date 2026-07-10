@@ -138,7 +138,7 @@
       <div class="stat"><div class="n">120 / 40</div><div class="l">train / hold-out split</div></div>
       <div class="stat"><div class="n">37</div><div class="l">features (no leakage)</div></div>
       <div class="stat"><div class="n">3</div><div class="l">independent targets</div></div>
-      <div class="stat"><div class="n">4×</div><div class="l">input-rate levels</div></div>
+      <div class="stat"><div class="n">4</div><div class="l">datasets &amp; predictors</div></div>
     </div>
   </div>
 </header>
@@ -151,6 +151,8 @@
     <a href="#compose">Composition</a>
     <a href="#split">Train / test split</a>
     <a href="#stats">Dataset statistics</a>
+    <a href="#datasets">All datasets</a>
+    <a href="#results">Trained results</a>
     <div class="grp">Modeling</div>
     <a href="#features">Features</a>
     <a href="#targets">Targets &amp; normalization</a>
@@ -239,6 +241,46 @@
           <tr><td class="p">4×</td><td class="num">0.99 (0.94–1.00)</td><td class="num">75 (11–168)</td><td class="num">11.4</td></tr>
         </tbody>
       </table></div>
+    </section>
+
+    <section id="datasets">
+      <h2><span class="num">§4b</span>All datasets &amp; predictors</h2>
+      <p class="sec-note">Four datasets were collected on hardware, each training its own predictor. All use the same
+        window schema, feature set, and 1×/2×/4× ↔ 3× split.</p>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Dataset</th><th class="num">windows</th><th>Placement space</th><th>Predictor</th></tr></thead>
+        <tbody>
+          <tr><td class="p">train/ (3-device)</td><td class="num">160</td><td>cpu + gpu + npu, accelerators unique</td><td class="p">deploy_xgb</td></tr>
+          <tr><td class="p">cpu_gpu/</td><td class="num">160</td><td><span class="chip cpu">cpu</span><span class="chip gpu">gpu</span> both shareable</td><td class="p">deploy_cpu_gpu</td></tr>
+          <tr><td class="p">cpu_npu/</td><td class="num">160</td><td><span class="chip cpu">cpu</span><span class="chip npu">npu</span> both shareable</td><td class="p">deploy_cpu_npu</td></tr>
+          <tr><td class="p">concurrency_cpu_gpu/</td><td class="num">192</td><td>N = 4…8 concurrent models, cpu + gpu</td><td class="p">deploy_conc_cpu_gpu</td></tr>
+        </tbody>
+      </table></div>
+      <p>The concurrency dataset scales N by adding YOLO11 detectors smallest-first (n, s, m, l, x) on top of
+        <code>resnet50 + llama1b + qwen2_vl</code>; placements are sampled stratified by GPU-count so the whole
+        all-CPU…all-GPU spectrum is covered. Its <code>workload</code> id is <code>N4</code>…<code>N8</code>.</p>
+    </section>
+
+    <section id="results">
+      <h2><span class="num">§4c</span>Trained results</h2>
+      <p class="sec-note">Evaluated on the <b>unseen 3× input rate</b>. Placement selection is scored per
+        (workload, rate) group against the measured oracle.</p>
+      <div class="tbl-scroll"><table>
+        <caption>Rate hold-out (3×) — regression and placement ranking</caption>
+        <thead><tr><th>Predictor</th><th class="num">y1 R²</th><th class="num">y3 R²</th><th class="num">Top-1</th><th class="num">Top-5</th><th class="num">pick / oracle</th></tr></thead>
+        <tbody>
+          <tr><td class="p">deploy_cpu_gpu</td><td class="num">0.996</td><td class="num">0.805</td><td class="num">1.00</td><td class="num">1.00</td><td class="num">1.000</td></tr>
+          <tr><td class="p">deploy_cpu_npu</td><td class="num">0.952</td><td class="num">0.679</td><td class="num">0.20</td><td class="num">1.00</td><td class="num">0.931</td></tr>
+          <tr><td class="p">deploy_conc_cpu_gpu</td><td class="num">0.945</td><td class="num">0.905</td><td class="num">1.00</td><td class="num">1.00</td><td class="num">1.000</td></tr>
+        </tbody>
+      </table></div>
+      <p style="font-size:13.5px;color:var(--muted)">y2 (deadline miss) has a small MAE (0.02–0.16) but a meaningless R²
+        at 3×: under overload the miss rate saturates near 1.0, leaving almost no variance to explain.</p>
+      <div class="callout"><b>Where CPU placement wins.</b> The optimal placement uses the CPU in
+        <b>16 / 20</b> CPU+NPU workloads — the MLA100 saturates, so distributing helps. On CPU+GPU it is
+        <b>0 / 20</b>, and stays 0 even at N=8 concurrent models and any α: all-GPU throughput <i>rises</i> with N
+        (239 → 329&nbsp;FPS), so the RTX 5090 never saturates and the much slower CPU is worse on both throughput and
+        deadline miss.</div>
     </section>
 
     <hr class="soft">
@@ -338,8 +380,10 @@
           <tr><td class="p">performance_data/train/performance_ratesweep.json</td><td>3-device dataset · 160 windows.</td></tr>
           <tr><td class="p">performance_data/cpu_gpu/performance.json</td><td>CPU+GPU platform dataset · 160 windows.</td></tr>
           <tr><td class="p">performance_data/cpu_npu/performance.json</td><td>CPU+NPU (MLA100) platform dataset · 160 windows.</td></tr>
-          <tr><td class="p">schedules_cpu_gpu.yaml · schedules_cpu_npu.yaml (+ .meta.json)</td><td>Placement × rate schedules + rate/workload tags.</td></tr>
-          <tr><td class="p">artifacts/deploy_cpu_gpu_y{1,2,3}.json · deploy_cpu_npu_y{1,2,3}.json</td><td>Trained per-platform predictors (+ _features.json).</td></tr>
+          <tr><td class="p">performance_data/concurrency_cpu_gpu/performance.json</td><td>Concurrency dataset, N=4…8 · 192 windows.</td></tr>
+          <tr><td class="p">schedules_{cpu_gpu,cpu_npu,concurrency}.yaml (+ .meta.json)</td><td>Placement × rate schedules + rate/workload tags.</td></tr>
+          <tr><td class="p">artifacts/deploy_{xgb,cpu_gpu,cpu_npu,conc_cpu_gpu}_y{1,2,3}.json</td><td>Trained predictors (+ <code>_features.json</code> column order).</td></tr>
+          <tr><td class="p">platform_study_report.txt</td><td>Two-platform collect → train → evaluate report.</td></tr>
           <tr><td class="p">artifacts/train_dataset.csv</td><td>Engineered feature + target table (from <code>--dump_csv</code>).</td></tr>
         </tbody>
       </table></div>
