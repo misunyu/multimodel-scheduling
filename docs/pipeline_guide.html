@@ -312,8 +312,9 @@
       <h2><span class="num">4</span>deploy_selector_xgb_suite.py&nbsp;train</h2>
       <p class="sec-note">Trains three independent XGBoost regressors — normalized throughput (y1), deadline-miss rate
         (y2), normalized token throughput (y3) — on the training rate levels only. Hyperparameters are chosen per target
-        by 3-fold cross-validation over a small grid (MAE). Writes <code>&lt;prefix&gt;_y{1,2,3}.json</code> and a
-        <code>_features.json</code> column order.</p>
+        by 3-fold cross-validation over a small grid (MAE). Writes <code>&lt;prefix&gt;_y{1,2,3}.json</code>, a
+        <code>_features.json</code> column order, and a <code>_coverage.json</code> record of the model sets,
+        view counts, devices and rate levels the predictor actually saw.</p>
       <div class="cmd"><span class="ln"><span class="kw">$PYTHON_BIN</span> xgboost_model/deploy_selector_xgb_suite.py train \</span><span class="ln">    <span class="fl">--perf_dir</span> <span class="st">xgboost_model/performance_data/train</span> \</span><span class="ln">    <span class="fl">--schedule_dir</span> <span class="st">xgboost_model/schedules</span> \</span><span class="ln">    <span class="fl">--static_json</span> <span class="st">…/sample_profiling_data.json</span> \</span><span class="ln">    <span class="fl">--model_out</span> <span class="st">xgboost_model/artifacts/deploy_xgb</span></span></div>
       <div class="tbl-scroll"><table>
         <thead><tr><th>Flag</th><th></th><th>Default</th><th>Description</th></tr></thead>
@@ -321,7 +322,7 @@
           <tr><td class="p">--perf_dir</td><td><span class="req">req</span></td><td class="d">—</td><td>Directory of <code>performance_*.json</code> contention windows (searched recursively).</td></tr>
           <tr><td class="p">--schedule_dir</td><td><span class="req">req</span></td><td class="d">—</td><td>Directory of schedule YAMLs (provides per-view <code>infps</code> features).</td></tr>
           <tr><td class="p">--static_json</td><td><span class="req">req</span></td><td class="d">—</td><td>Static profile (device latency / tokens features).</td></tr>
-          <tr><td class="p">--model_out</td><td><span class="req">req</span></td><td class="d">—</td><td>Output prefix; produces <code>_y1/_y2/_y3.json</code> + <code>_features.json</code>.</td></tr>
+          <tr><td class="p">--model_out</td><td><span class="req">req</span></td><td class="d">—</td><td>Output prefix; produces <code>_y1/_y2/_y3.json</code> + <code>_features.json</code> + <code>_coverage.json</code>.</td></tr>
           <tr><td class="p">--rate_factors</td><td><span class="opt">opt</span></td><td class="d">1 2 4</td><td>Input-rate levels to train on (3× held out).</td></tr>
           <tr><td class="p">--dump_csv</td><td><span class="opt">opt</span></td><td class="d">"" (off)</td><td>Optional path to dump the engineered feature+target table for inspection.</td></tr>
         </tbody>
@@ -418,8 +419,14 @@
         <li><b>Load &amp; Execute Best</b> launches <code>schedule_executor_main.py</code> on the winning combination.</li>
       </ol>
       <p class="callout">Per-view <code>infps</code> defaults to each model's <b>baseline rate</b>; override it per model
-        with the input-rate dialog. The executor renders at most 4 views — checking more models still predicts, but only
-        four are displayed.</p>
+        with the input-rate dialog. The executor runs up to <b>8 views</b> (<code>MAX_VIEWS</code>) and renders the first
+        four; the rest execute headless and still contribute to throughput and deadline-miss statistics.</p>
+      <p class="callout"><b>Out-of-distribution warning.</b> Before predicting, the GUI compares the checked models with
+        <code>&lt;prefix&gt;_coverage.json</code>. Every training working set was
+        {one yolo11 variant, <code>resnet50</code>, <code>llama1b</code>, <code>qwen2_vl</code>} at rates 1–4×, so a
+        vision-only or larger selection triggers a dialog naming the mismatch (unseen model, unseen view count, or an
+        always-present model that was omitted). Prediction proceeds only if confirmed, and the ranking is then an
+        extrapolation.</p>
     </section>
 
     <section id="platform">

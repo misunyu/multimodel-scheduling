@@ -259,6 +259,12 @@
       <p>The concurrency dataset scales N by adding YOLO11 detectors smallest-first (n, s, m, l, x) on top of
         <code>resnet50 + llama1b + qwen2_vl</code>; placements are sampled stratified by GPU-count so the whole
         all-CPU…all-GPU spectrum is covered. Its <code>workload</code> id is <code>N4</code>…<code>N8</code>.</p>
+      <p class="callout"><b>Coverage records.</b> Training writes <code>&lt;prefix&gt;_coverage.json</code> next to each
+        predictor: the exact model sets, model names, view counts, devices and rate levels it saw. Every predictor except
+        <code>deploy_conc_cpu_gpu</code> covers only <b>4-view</b> working sets of
+        {one yolo11 variant, <code>resnet50</code>, <code>llama1b</code>, <code>qwen2_vl</code>};
+        <code>deploy_conc_cpu_gpu</code> covers view counts 4–8. All four cover rate factors 1–4×. The deploy-finder GUI
+        reads this file and warns before predicting on a selection outside it.</p>
     </section>
 
     <section id="results">
@@ -382,7 +388,7 @@
           <tr><td class="p">performance_data/cpu_npu/performance.json</td><td>CPU+NPU (MLA100) platform dataset · 160 windows.</td></tr>
           <tr><td class="p">performance_data/concurrency_cpu_gpu/performance.json</td><td>Concurrency dataset, N=4…8 · 192 windows.</td></tr>
           <tr><td class="p">schedules_{cpu_gpu,cpu_npu,concurrency}.yaml (+ .meta.json)</td><td>Placement × rate schedules + rate/workload tags.</td></tr>
-          <tr><td class="p">artifacts/deploy_{xgb,cpu_gpu,cpu_npu,conc_cpu_gpu}_y{1,2,3}.json</td><td>Trained predictors (+ <code>_features.json</code> column order).</td></tr>
+          <tr><td class="p">artifacts/deploy_{xgb,cpu_gpu,cpu_npu,conc_cpu_gpu}_y{1,2,3}.json</td><td>Trained predictors (+ <code>_features.json</code> column order, <code>_coverage.json</code> training coverage).</td></tr>
           <tr><td class="p">platform_study_report.txt</td><td>Two-platform collect → train → evaluate report.</td></tr>
           <tr><td class="p">artifacts/train_dataset.csv</td><td>Engineered feature + target table (from <code>--dump_csv</code>).</td></tr>
         </tbody>
