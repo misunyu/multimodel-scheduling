@@ -54,6 +54,14 @@ from model_processors import (
 )
 import model_registry as reg
 
+# The .ui provides four QLabel slots and four display signals. A schedule may
+# activate more concurrent models than that; the extra views run headless —
+# they execute and contribute to the statistics, they just aren't rendered.
+DISPLAY_SLOTS = ["view1", "view2", "view3", "view4"]
+MAX_VIEWS = 8
+# Colors cycled through when rendering the per-view performance summary.
+VIEW_COLORS = ["gray", "purple", "green", "blue", "darkorange", "brown", "teal", "magenta"]
+
 class InfoWindow(QWidget):
     """Main window for displaying system and model information."""
     
@@ -334,20 +342,24 @@ class UnifiedViewer(QMainWindow):
                                 "infps": model_config.get("infps", None)
                             }
             
-            # Assign model configurations to views
-            for view in ["view1", "view2", "view3", "view4"]:
-                if view in view_to_model_map:
-                    self.model_settings[view] = view_to_model_map[view]
-                else:
-                    # Mark this view as not having a specified model
+            # Views actually scheduled, in numeric order (view1..viewN, N <= MAX_VIEWS).
+            def _view_index(v):
+                digits = ''.join(ch for ch in v if ch.isdigit())
+                return int(digits) if digits else 0
+
+            scheduled = sorted(view_to_model_map.keys(), key=_view_index)[:MAX_VIEWS]
+            self.view_names = scheduled
+            for view in scheduled:
+                self.model_settings[view] = view_to_model_map[view]
+
+            # Display slots with no model just show the placeholder image.
+            for view in DISPLAY_SLOTS:
+                if view not in view_to_model_map:
                     self.views_without_model.add(view)
-                    # Still add default settings for compatibility with existing code
-                    self.model_settings[view] = {
-                        "model": "yolo11s" if view in ["view1", "view3"] else "resnet50",
-                        "execution": "cpu"
-                    }
-                    # Informational: this view is simply unused by the selected combination
                     print(f"[UnifiedViewer] {view} not used in this combination (no model assigned) [{os.path.basename(self.schedule_file)}]")
+            extra = [v for v in scheduled if v not in DISPLAY_SLOTS]
+            if extra:
+                print(f"[UnifiedViewer] Running headless (no display slot) for: {', '.join(extra)}")
 
             print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file} for {self.current_combination}")
         except Exception as e:
@@ -359,6 +371,7 @@ class UnifiedViewer(QMainWindow):
                 "view3": {"model": "yolo11s", "execution": "cpu"},
                 "view4": {"model": "resnet50", "execution": "cpu"}
             }
+            self.view_names = list(DISPLAY_SLOTS)
             # No views are marked as without model in case of error
     
     def initialize_ui_components(self):
@@ -393,27 +406,19 @@ class UnifiedViewer(QMainWindow):
         # Initialize queues and events
         self.video_frame_queue = Queue(maxsize=10)
         self.video_shutdown_event = Event()
-        
-        # View1 queues and events
-        self.view1_frame_queue = Queue(maxsize=10)
-        self.view1_output_queue = Queue(maxsize=10)
-        self.view1_shutdown_event = Event()
-        
-        # View2 queues and events
-        self.view2_frame_queue = Queue(maxsize=10)
-        self.view2_output_queue = Queue(maxsize=10)
-        self.view2_shutdown_event = Event()
-        
-        # View3 queues and events
-        self.view3_frame_queue = Queue(maxsize=10)
-        self.view3_result_queue = Queue(maxsize=10)
-        self.view3_shutdown_event = Event()
-        
-        # View4 queues and events
-        self.view4_frame_queue = Queue(maxsize=10)
-        self.view4_result_queue = Queue(maxsize=10)
-        self.view4_shutdown_event = Event()
-        
+
+        # Per-view queues and events, created for every scheduled view (any N).
+        # Both `_output_queue` and `_result_queue` name the same queue so all
+        # existing lookups resolve regardless of which alias they use.
+        if not getattr(self, 'view_names', None):
+            self.view_names = list(DISPLAY_SLOTS)
+        for v in self.view_names:
+            result_queue = Queue(maxsize=10)
+            setattr(self, f"{v}_frame_queue", Queue(maxsize=10))
+            setattr(self, f"{v}_output_queue", result_queue)
+            setattr(self, f"{v}_result_queue", result_queue)
+            setattr(self, f"{v}_shutdown_event", Event())
+
         # Track which views need which feeder / handler.
         self.yolo_views = set()    # detection: video frames
         self.resnet_views = set()  # classification: image feeder
@@ -430,11 +435,9 @@ class UnifiedViewer(QMainWindow):
         )
         self.video_reader_proc.start()
         
-        # Start view processes
-        self.start_view_process("view1")
-        self.start_view_process("view2")
-        self.start_view_process("view3")
-        self.start_view_process("view4")
+        # Start a worker process for every scheduled view
+        for v in self.view_names:
+            self.start_view_process(v)
     
     def start_view_process(self, view_name):
         """
@@ -454,7 +457,7 @@ class UnifiedViewer(QMainWindow):
         device = reg.norm_device(execution)
 
         frame_queue = getattr(self, f"{view_name}_frame_queue")
-        output_queue = getattr(self, f"{view_name}_output_queue") if view_name in ["view1", "view2"] else getattr(self, f"{view_name}_result_queue")
+        output_queue = getattr(self, f"{view_name}_result_queue")
         shutdown_event = getattr(self, f"{view_name}_shutdown_event")
 
         try:
@@ -494,12 +497,7 @@ class UnifiedViewer(QMainWindow):
     def initialize_threads(self):
         """Initialize and start view handler threads."""
         # Create view frame queues dictionary
-        view_frame_queues = {
-            "view1": self.view1_frame_queue,
-            "view2": self.view2_frame_queue,
-            "view3": self.view3_frame_queue,
-            "view4": self.view4_frame_queue
-        }
+        view_frame_queues = {v: getattr(self, f"{v}_frame_queue") for v in self.view_names}
         
         # All frame-consuming views (detection, classification, VLM) are fed from
         # the video stream, honoring each view's infps. LLM views need no feeder.
@@ -530,12 +528,7 @@ class UnifiedViewer(QMainWindow):
 
     def initialize_view_handlers(self):
         """Initialize and start view handler threads (one per view, by model kind)."""
-        view_queues = {
-            "view1": self.view1_output_queue,
-            "view2": self.view2_output_queue,
-            "view3": self.view3_result_queue,
-            "view4": self.view4_result_queue,
-        }
+        view_queues = {v: getattr(self, f"{v}_result_queue") for v in self.view_names}
         for view_name, result_queue in view_queues.items():
             model_name = self.model_settings.get(view_name, {}).get("model", "")
             handler_cls = self._handler_class_for(model_name)
@@ -581,9 +574,7 @@ class UnifiedViewer(QMainWindow):
         self.global_exit_flag = True
         
         # Set all shutdown events to stop processes
-        for name in ['view1_shutdown_event', 'view2_shutdown_event',
-                     'view3_shutdown_event', 'view4_shutdown_event',
-                     'video_shutdown_event']:
+        for name in [f"{v}_shutdown_event" for v in self.view_names] + ['video_shutdown_event']:
             event = getattr(self, name, None)
             if event:
                 event.set()
@@ -607,9 +598,7 @@ class UnifiedViewer(QMainWindow):
             pass
 
         # Set all shutdown events to stop processes
-        for name in ['view1_shutdown_event', 'view2_shutdown_event',
-                     'view3_shutdown_event', 'view4_shutdown_event',
-                     'video_shutdown_event']:
+        for name in [f"{v}_shutdown_event" for v in self.view_names] + ['video_shutdown_event']:
             ev = getattr(self, name, None)
             try:
                 if ev:
@@ -707,7 +696,7 @@ class UnifiedViewer(QMainWindow):
     def _begin_measurement_window(self):
         """Reset all per-view and feeder counters after warmup to start measurement."""
         try:
-            for name in ['view1_handler', 'view2_handler', 'view3_handler', 'view4_handler']:
+            for name in [f"{v}_handler" for v in self.view_names]:
                 handler = getattr(self, name, None)
                 if handler and hasattr(handler, 'reset_stats'):
                     handler.reset_stats()
@@ -738,15 +727,13 @@ class UnifiedViewer(QMainWindow):
             pass
         
         # Set shutdown events to signal processes to stop
-        for name in ['view1_shutdown_event', 'view2_shutdown_event',
-                     'view3_shutdown_event', 'view4_shutdown_event',
-                     'video_shutdown_event']:
+        for name in [f"{v}_shutdown_event" for v in self.view_names] + ['video_shutdown_event']:
             event = getattr(self, name, None)
             if event:
                 event.set()
                 
         # Gracefully stop all processes first, then force terminate if needed
-        process_names = ['view1_process', 'view2_process', 'view3_process', 'view4_process', 'video_reader_proc']
+        process_names = [f"{v}_process" for v in self.view_names] + ['video_reader_proc']
         processes = [getattr(self, name, None) for name in process_names if hasattr(self, name) and getattr(self, name, None)]
         
         # Give processes time to exit their loops and run cleanup (e.g., NPU driver close in finally)
@@ -832,13 +819,9 @@ class UnifiedViewer(QMainWindow):
         except Exception:
             pass
         # List of queue attribute names to cleanup
-        q_names = [
-            'video_frame_queue',
-            'view1_frame_queue', 'view1_output_queue',
-            'view2_frame_queue', 'view2_output_queue',
-            'view3_frame_queue', 'view3_result_queue',
-            'view4_frame_queue', 'view4_result_queue',
-        ]
+        q_names = ['video_frame_queue']
+        for v in getattr(self, 'view_names', []):
+            q_names += [f"{v}_frame_queue", f"{v}_result_queue"]
         for name in q_names:
             q = getattr(self, name, None)
             try:
@@ -858,36 +841,25 @@ class UnifiedViewer(QMainWindow):
         delta_int = current["Interrupts"] - prev["Interrupts"]
         load1, load5, load15 = current["Load_Average"]
         
-        # Get performance statistics from view handlers if they exist
-        view1_avg_fps = getattr(self, 'view1_handler', None).avg_fps if hasattr(self, 'view1_handler') else 0.0
-        view1_avg_infer_time = getattr(self, 'view1_handler', None).avg_infer_time if hasattr(self, 'view1_handler') else 0.0
-        
-        view2_avg_fps = getattr(self, 'view2_handler', None).avg_fps if hasattr(self, 'view2_handler') else 0.0
-        view2_avg_infer_time = getattr(self, 'view2_handler', None).avg_infer_time if hasattr(self, 'view2_handler') else 0.0
-        
-        view3_avg_fps = getattr(self, 'view3_handler', None).avg_fps if hasattr(self, 'view3_handler') else 0.0
-        view3_avg_infer_time = getattr(self, 'view3_handler', None).avg_infer_time if hasattr(self, 'view3_handler') else 0.0
-        
-        view4_avg_fps = getattr(self, 'view4_handler', None).avg_fps if hasattr(self, 'view4_handler') else 0.0
-        view4_avg_infer_time = getattr(self, 'view4_handler', None).avg_infer_time if hasattr(self, 'view4_handler') else 0.0
-        
-        # Calculate total average FPS (total throughput)
-        total_fps = (view1_avg_fps + view2_avg_fps + view3_avg_fps + view4_avg_fps)
-        total_avg_fps = total_fps / 4 if total_fps > 0 else 0.0
-        
-        # Get model and execution mode for each view
-        view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
-        view1_mode = self.model_settings.get("view1", {}).get("execution", "cpu").upper()
-        
-        view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
-        view2_mode = self.model_settings.get("view2", {}).get("execution", "cpu").upper()
-        
-        view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
-        view3_mode = self.model_settings.get("view3", {}).get("execution", "cpu").upper()
-        
-        view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
-        view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
-        
+        # Per-view stats for every scheduled view (any N, not just the 4 display slots).
+        views = list(self.view_names)
+        stats = {}
+        for v in views:
+            cfg = self.model_settings.get(v, {}) or {}
+            h = getattr(self, f"{v}_handler", None)
+            stats[v] = {
+                "fps": getattr(h, 'avg_fps', 0.0),
+                "infer_ms": getattr(h, 'avg_infer_time', 0.0),
+                "count": getattr(h, 'infer_count', 0),
+                "model": cfg.get("model", ""),
+                "mode": str(cfg.get("execution", "cpu")).upper(),
+                "wait_ms": getattr(h, 'avg_wait_ms', 0.0),
+            }
+
+        # Calculate total / average FPS (total throughput)
+        total_fps = sum(st["fps"] for st in stats.values())
+        total_avg_fps = total_fps / len(views) if views else 0.0
+
         # Create performance text and append reallocation trigger status based on recent results
         # NOTE: Reallocation trigger condition checks are disabled per requirement.
         # The UI will display a fixed message to indicate triggers are disabled.
@@ -898,22 +870,21 @@ class UnifiedViewer(QMainWindow):
         self.info_window.update_trigger_below_metrics(line1 + "\n" + line2)
         trigger_text = ""
 
-        performance_text = (
-            f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>"
-            f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>"
-            f"<b>View1 ({view1_model} {view1_mode})</b> Avg FPS: {view1_avg_fps:.1f} "
-            f"(<span style='color: gray;'>{view1_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: purple;'>View2 ({view2_model} {view2_mode})</span></b> Avg FPS: "
-            f"<span style='color: purple;'>{view2_avg_fps:.1f}</span> "
-            f"(<span style='color: purple;'>{view2_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: green;'>View3 ({view3_model} {view3_mode})</span></b> Avg FPS: "
-            f"<span style='color: green;'>{view3_avg_fps:.1f}</span> "
-            f"(<span style='color: green;'>{view3_avg_infer_time:.1f} ms</span>)<br>"
-            f"<b><span style='color: blue;'>View4 ({view4_model} {view4_mode})</span></b> Avg FPS: "
-            f"<span style='color: blue;'>{view4_avg_fps:.1f}</span> "
-            f"(<span style='color: blue;'>{view4_avg_infer_time:.1f} ms</span>)"
-        )
-        
+        lines = [
+            f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>",
+            f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>",
+        ]
+        for idx, v in enumerate(views):
+            st = stats[v]
+            color = VIEW_COLORS[idx % len(VIEW_COLORS)]
+            suffix = "" if v in DISPLAY_SLOTS else " [headless]"
+            lines.append(
+                f"<b><span style='color: {color};'>{v.capitalize()} ({st['model']} {st['mode']}){suffix}</span></b> "
+                f"Avg FPS: <span style='color: {color};'>{st['fps']:.1f}</span> "
+                f"(<span style='color: {color};'>{st['infer_ms']:.1f} ms</span>)<br>"
+            )
+        performance_text = "".join(lines)
+
         # Create CPU info text
         cpu_info_text = (
             f"<b><span style='color: blue;'>CPU</span></b><br>"
@@ -937,13 +908,14 @@ class UnifiedViewer(QMainWindow):
 
         # Compute compact metrics line
         try:
-            scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
+            scheduled_views = views
+            drop_map = getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}) or {}
             # per_view_stats fields aligned with _get_device_metrics_default expectations
             per_view_stats = {
-                "view1": (view1_avg_fps, view1_avg_infer_time, getattr(self, 'view1_handler', None).infer_count if hasattr(self, 'view1_handler') else 0, view1_model, view1_mode, getattr(getattr(self, 'view1_handler', None), 'avg_wait_ms', 0.0), int(getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}).get('view1', 0))),
-                "view2": (view2_avg_fps, view2_avg_infer_time, getattr(self, 'view2_handler', None).infer_count if hasattr(self, 'view2_handler') else 0, view2_model, view2_mode, getattr(getattr(self, 'view2_handler', None), 'avg_wait_ms', 0.0), int(getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}).get('view2', 0))),
-                "view3": (view3_avg_fps, view3_avg_infer_time, getattr(self, 'view3_handler', None).infer_count if hasattr(self, 'view3_handler') else 0, view3_model, view3_mode, getattr(getattr(self, 'view3_handler', None), 'avg_wait_ms', 0.0), int(getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}).get('view3', 0))),
-                "view4": (view4_avg_fps, view4_avg_infer_time, getattr(self, 'view4_handler', None).infer_count if hasattr(self, 'view4_handler') else 0, view4_model, view4_mode, getattr(getattr(self, 'view4_handler', None), 'avg_wait_ms', 0.0), int(getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}).get('view4', 0))),
+                v: (stats[v]["fps"], stats[v]["infer_ms"], stats[v]["count"],
+                    stats[v]["model"], stats[v]["mode"], stats[v]["wait_ms"],
+                    int(drop_map.get(v, 0) or 0))
+                for v in scheduled_views
             }
             devices_used = set(self.model_settings.get(v, {}).get('execution', 'CPU').upper() for v in scheduled_views)
             dev_metrics = self._get_device_metrics_default(devices_used, per_view_stats, scheduled_views)
@@ -1003,55 +975,22 @@ class UnifiedViewer(QMainWindow):
                     self.results_path = results_path
                 except Exception:
                     pass
-            # Get model and execution mode for each view
-            view1_model = self.model_settings.get("view1", {}).get("model", "yolov3_small")
-            view1_mode = self.model_settings.get("view1", {}).get("execution", "cpu").upper()
-            
-            view2_model = self.model_settings.get("view2", {}).get("model", "resnet50_small")
-            view2_mode = self.model_settings.get("view2", {}).get("execution", "cpu").upper()
-            
-            view3_model = self.model_settings.get("view3", {}).get("model", "yolov3_small")
-            view3_mode = self.model_settings.get("view3", {}).get("execution", "cpu").upper()
-            
-            view4_model = self.model_settings.get("view4", {}).get("model", "resnet50_small")
-            view4_mode = self.model_settings.get("view4", {}).get("execution", "cpu").upper()
-            
-            # Get performance statistics from view handlers (safe defaults if a view is not configured)
-            view1_avg_fps = getattr(getattr(self, 'view1_handler', None), 'avg_fps', 0.0)
-            view1_avg_infer_time = getattr(getattr(self, 'view1_handler', None), 'avg_infer_time', 0.0)
-            view1_infer_count = getattr(getattr(self, 'view1_handler', None), 'infer_count', 0)
-            
-            view2_avg_fps = getattr(getattr(self, 'view2_handler', None), 'avg_fps', 0.0)
-            view2_avg_infer_time = getattr(getattr(self, 'view2_handler', None), 'avg_infer_time', 0.0)
-            view2_infer_count = getattr(getattr(self, 'view2_handler', None), 'infer_count', 0)
-            
-            view3_avg_fps = getattr(getattr(self, 'view3_handler', None), 'avg_fps', 0.0)
-            view3_avg_infer_time = getattr(getattr(self, 'view3_handler', None), 'avg_infer_time', 0.0)
-            view3_infer_count = getattr(getattr(self, 'view3_handler', None), 'infer_count', 0)
-            
-            view4_avg_fps = getattr(getattr(self, 'view4_handler', None), 'avg_fps', 0.0)
-            view4_avg_infer_time = getattr(getattr(self, 'view4_handler', None), 'avg_infer_time', 0.0)
-            view4_infer_count = getattr(getattr(self, 'view4_handler', None), 'infer_count', 0)
-            
-            # Determine which views are actually scheduled in this combination
-            scheduled_views = [v for v in ["view1", "view2", "view3", "view4"] if v not in self.views_without_model]
-
-            # Map helpers for per-view stats, including avg_wait_ms (if available) and dropped frames
-            view1_wait = getattr(getattr(self, 'view1_handler', None), 'avg_wait_ms', 0.0)
-            view2_wait = getattr(getattr(self, 'view2_handler', None), 'avg_wait_ms', 0.0)
-            view3_wait = getattr(getattr(self, 'view3_handler', None), 'avg_wait_ms', 0.0)
-            view4_wait = getattr(getattr(self, 'view4_handler', None), 'avg_wait_ms', 0.0)
-
-            # Drop counts from feeder (0 if not present)
-            drop_counts = getattr(self, 'video_feeder', None)
-            drop_map = getattr(drop_counts, 'drop_counts', {}) if drop_counts else {}
-
-            per_view_stats = {
-                "view1": (view1_avg_fps, view1_avg_infer_time, view1_infer_count, view1_model, view1_mode, view1_wait, int(drop_map.get("view1", 0))),
-                "view2": (view2_avg_fps, view2_avg_infer_time, view2_infer_count, view2_model, view2_mode, view2_wait, int(drop_map.get("view2", 0))),
-                "view3": (view3_avg_fps, view3_avg_infer_time, view3_infer_count, view3_model, view3_mode, view3_wait, int(drop_map.get("view3", 0))),
-                "view4": (view4_avg_fps, view4_avg_infer_time, view4_infer_count, view4_model, view4_mode, view4_wait, int(drop_map.get("view4", 0))),
-            }
+            # Per-view stats, gathered for every scheduled view (any N).
+            scheduled_views = list(self.view_names)
+            drop_map = getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}) or {}
+            per_view_stats = {}
+            for v in scheduled_views:
+                cfg = self.model_settings.get(v, {}) or {}
+                h = getattr(self, f"{v}_handler", None)
+                per_view_stats[v] = (
+                    getattr(h, 'avg_fps', 0.0),
+                    getattr(h, 'avg_infer_time', 0.0),
+                    getattr(h, 'infer_count', 0),
+                    cfg.get("model", ""),
+                    str(cfg.get("execution", "cpu")).upper(),
+                    getattr(h, 'avg_wait_ms', 0.0),
+                    int(drop_map.get(v, 0) or 0),
+                )
 
             # Calculate total throughput for scheduled views
             total_fps = sum(per_view_stats[v][0] for v in scheduled_views)
@@ -1061,7 +1000,7 @@ class UnifiedViewer(QMainWindow):
             # Per-view token throughput (non-zero only for LLM/VLM views)
             tokens_by_view = {
                 v: float(getattr(getattr(self, f"{v}_handler", None), "avg_tokens_per_s", 0.0) or 0.0)
-                for v in ["view1", "view2", "view3", "view4"]
+                for v in self.view_names
             }
             total_tokens_per_s = sum(tokens_by_view[v] for v in scheduled_views)
 
@@ -1071,7 +1010,7 @@ class UnifiedViewer(QMainWindow):
             #   miss     = offered - on_time  (dropped, late, and undelivered all count)
             wsec = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
             miss_by_view = {}
-            for v in ["view1", "view2", "view3", "view4"]:
+            for v in self.view_names:
                 handler = getattr(self, f"{v}_handler", None)
                 completed = int(getattr(handler, "infer_count", 0) or 0)
                 late = int(getattr(handler, "late_count", 0) or 0)

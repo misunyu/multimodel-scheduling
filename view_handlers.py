@@ -53,9 +53,10 @@ class ViewHandler:
         self.wait_count = 0
         self.avg_wait_ms = 0.0
         
-        # Get the signal method for this view
-        signal_method_name = f"update_{view_name}_display"
-        self.update_signal = getattr(model_signals, signal_method_name)
+        # Display signal for this view. Only the four UI slots have one; views
+        # beyond them run headless (stats still collected, nothing rendered).
+        self.update_signal = getattr(model_signals, f"update_{view_name}_display", None)
+        self.headless = self.update_signal is None
         
         # Get model type and execution mode
         self.model_type = model_settings.get(view_name, {}).get("model", "")
@@ -138,10 +139,10 @@ class YoloViewHandler(ViewHandler):
         # Check if this view has a specified model
         if self.view_name in self.views_without_model:
             # Display X image for this view
-            x_image = create_x_image()
-            pixmap = convert_cv_to_qt(x_image)
-            if not pixmap.isNull():
-                self.update_signal.emit(pixmap)
+            if self.update_signal is not None:
+                pixmap = convert_cv_to_qt(create_x_image())
+                if not pixmap.isNull():
+                    self.update_signal.emit(pixmap)
             return
             
         while not self.shutdown_flag.is_set() and not global_exit_flag:
@@ -172,6 +173,14 @@ class YoloViewHandler(ViewHandler):
                 continue
                 
             try:
+                if self.headless:
+                    self.update_stats(self.model_type, infer_time)
+                    self.note_latency(latency_ms)
+                    if wait_ms is not None:
+                        self.total_wait_ms += float(wait_ms)
+                        self.wait_count += 1
+                        self.avg_wait_ms = self.total_wait_ms / self.wait_count if self.wait_count > 0 else 0.0
+                    continue
                 pixmap = convert_cv_to_qt(frame)
                 if not pixmap.isNull():
                     self.update_signal.emit(pixmap)
@@ -197,10 +206,10 @@ class ResNetViewHandler(ViewHandler):
         # Check if this view has a specified model
         if self.view_name in self.views_without_model:
             # Display X image for this view
-            x_image = create_x_image()
-            pixmap = convert_cv_to_qt(x_image)
-            if not pixmap.isNull():
-                self.update_signal.emit(pixmap)
+            if self.update_signal is not None:
+                pixmap = convert_cv_to_qt(create_x_image())
+                if not pixmap.isNull():
+                    self.update_signal.emit(pixmap)
             return
             
         while not self.shutdown_flag.is_set() and not global_exit_flag:
@@ -228,6 +237,10 @@ class ResNetViewHandler(ViewHandler):
                 continue
                 
             try:
+                if self.headless:
+                    self.update_stats(self.model_type, infer_time)
+                    self.note_latency(latency_ms)
+                    continue
                 pixmap = convert_cv_to_qt(frame)
                 if not pixmap.isNull():
                     self.update_signal.emit(pixmap)
