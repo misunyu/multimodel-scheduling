@@ -1,0 +1,415 @@
+<title>Predictive Placement — Training & Inference Guide</title>
+<style>
+  :root {
+    --paper: #f6f5f1; --surface: #fffffe; --ink: #1b2029; --muted: #59616f;
+    --accent: #0d7a72; --accent-soft: rgba(13,122,114,0.10);
+    --border: #e2dfd6; --border-soft: #ece9e1;
+    --cpu: #5a6b8c; --gpu: #3d9a5b; --npu: #8163d4;
+    --req: #b3541e; --opt: #7a8290;
+    --code-bg: #0d1117; --code-fg: #c9d1d9; --code-kw: #57cabc;
+    --code-cm: #6b7686; --code-str: #9ecb8a; --code-flag: #d2a24c;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --maxw: 1200px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #10141b; --surface: #161b24; --ink: #e6e9ef; --muted: #8b93a2;
+      --accent: #46cabc; --accent-soft: rgba(70,202,188,0.13);
+      --border: #262d38; --border-soft: #1f2530;
+      --cpu: #8493b5; --gpu: #59c07d; --npu: #a28cf0;
+      --req: #e08a54; --opt: #7d8698;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f6f5f1; --surface: #fffffe; --ink: #1b2029; --muted: #59616f;
+    --accent: #0d7a72; --accent-soft: rgba(13,122,114,0.10);
+    --border: #e2dfd6; --border-soft: #ece9e1;
+    --cpu: #5a6b8c; --gpu: #3d9a5b; --npu: #8163d4; --req: #b3541e; --opt: #7a8290;
+  }
+  :root[data-theme="dark"] {
+    --paper: #10141b; --surface: #161b24; --ink: #e6e9ef; --muted: #8b93a2;
+    --accent: #46cabc; --accent-soft: rgba(70,202,188,0.13);
+    --border: #262d38; --border-soft: #1f2530;
+    --cpu: #8493b5; --gpu: #59c07d; --npu: #a28cf0; --req: #e08a54; --opt: #7d8698;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 15.5px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 clamp(16px, 4vw, 40px); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: 0.88em; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  /* ---- header ---- */
+  header.hero {
+    border-bottom: 1px solid var(--border);
+    background:
+      radial-gradient(120% 140% at 88% -20%, var(--accent-soft), transparent 60%);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(1.95rem, 4.3vw, 2.7rem); line-height: 1.08; margin: 0;
+    letter-spacing: -0.02em; text-wrap: balance; font-weight: 680;
+  }
+  .lede { color: var(--muted); max-width: 62ch; margin: 16px 0 0; font-size: 1.02rem; }
+  .hero .wrap { padding-top: clamp(40px, 7vw, 72px); padding-bottom: clamp(30px, 5vw, 48px); }
+
+  /* pipeline strip */
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 30px; align-items: center; }
+  .flow .step {
+    font-family: var(--mono); font-size: 12.5px; padding: 7px 12px; border-radius: 7px;
+    background: var(--surface); border: 1px solid var(--border); white-space: nowrap;
+  }
+  .flow .step b { color: var(--accent); font-weight: 600; }
+  .flow .arrow { color: var(--muted); font-size: 13px; }
+
+  /* ---- layout ---- */
+  .shell { display: grid; grid-template-columns: 232px minmax(0,1fr); gap: 44px; align-items: start; padding-top: 40px; padding-bottom: 80px; }
+  nav.toc { position: sticky; top: 22px; font-size: 13.5px; }
+  nav.toc .grp { text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; color: var(--muted); margin: 18px 0 7px; font-family: var(--mono); }
+  nav.toc a { display: block; padding: 4px 10px; color: var(--muted); border-left: 2px solid var(--border-soft); }
+  nav.toc a:hover { color: var(--ink); text-decoration: none; border-left-color: var(--accent); }
+  main { min-width: 0; }
+
+  section { margin-bottom: 46px; scroll-margin-top: 20px; }
+  h2 { font-size: 1.42rem; letter-spacing: -0.01em; margin: 0 0 6px; font-weight: 660; }
+  h2 .num { font-family: var(--mono); color: var(--accent); font-size: 0.8em; margin-right: 10px; font-weight: 600; }
+  h3 { font-size: 1.02rem; margin: 30px 0 10px; font-weight: 640; }
+  .sec-note { color: var(--muted); margin: 0 0 20px; max-width: 68ch; }
+  p { max-width: 70ch; }
+
+  /* code blocks */
+  .cmd {
+    background: var(--code-bg); color: var(--code-fg); border-radius: 10px;
+    font-family: var(--mono); font-size: 13.2px; line-height: 1.7;
+    padding: 16px 18px; overflow-x: auto; margin: 14px 0;
+    border: 1px solid #1c2530;
+  }
+  .cmd .cm { color: var(--code-cm); }
+  .cmd .kw { color: var(--code-kw); }
+  .cmd .fl { color: var(--code-flag); }
+  .cmd .st { color: var(--code-str); }
+  .cmd .ln { display: block; white-space: pre; }
+
+  /* param tables */
+  .tbl-scroll { overflow-x: auto; margin: 14px 0; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.8px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  thead th { background: var(--surface); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.p { font-family: var(--mono); font-size: 12.8px; color: var(--ink); white-space: nowrap; }
+  td.d { font-family: var(--mono); font-size: 12.6px; color: var(--accent); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .req, .opt { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.03em; padding: 2px 7px; border-radius: 20px; text-transform: uppercase; }
+  .req { color: var(--req); border: 1px solid var(--req); }
+  .opt { color: var(--opt); border: 1px solid var(--border); }
+
+  /* cards / panels */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; margin: 16px 0; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 14px; }
+  .kv { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .kv .k { font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .kv .v { font-family: var(--mono); font-size: 15px; color: var(--accent); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kv .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+
+  /* device chips */
+  .chip { font-family: var(--mono); font-size: 11.5px; padding: 2px 9px; border-radius: 6px; font-weight: 600; display: inline-block; }
+  .chip.cpu { color: var(--cpu); background: color-mix(in srgb, var(--cpu) 14%, transparent); }
+  .chip.gpu { color: var(--gpu); background: color-mix(in srgb, var(--gpu) 15%, transparent); }
+  .chip.npu { color: var(--npu); background: color-mix(in srgb, var(--npu) 15%, transparent); }
+
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 14px; }
+  .callout b { color: var(--accent); }
+  ul.tight { margin: 8px 0; padding-left: 20px; }
+  ul.tight li { margin: 4px 0; max-width: 68ch; }
+  .formula { font-family: var(--mono); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; font-size: 14px; overflow-x: auto; }
+  hr.soft { border: none; border-top: 1px solid var(--border-soft); margin: 34px 0; }
+  footer { border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  footer .wrap { padding-top: 26px; padding-bottom: 40px; }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; gap: 8px; }
+    nav.toc { position: static; display: flex; flex-wrap: wrap; gap: 6px 4px; border-bottom: 1px solid var(--border); padding-bottom: 18px; margin-bottom: 10px; }
+    nav.toc .grp { display: none; }
+    nav.toc a { border-left: none; border: 1px solid var(--border-soft); border-radius: 6px; padding: 4px 9px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Multimodel Scheduling · Mobilint NPU + GPU</p>
+    <h1>Predictive Placement — Training &amp; Inference Guide</h1>
+    <p class="lede">Every command, parameter, and default for the offline pipeline that profiles models across
+      CPU / GPU / NPU, sweeps input rates, and trains XGBoost predictors that rank device placements without
+      running them.</p>
+    <div class="flow" aria-label="pipeline stages">
+      <span class="step"><b>1</b> profile</span><span class="arrow">→</span>
+      <span class="step"><b>2</b> schedules</span><span class="arrow">→</span>
+      <span class="step"><b>3</b> collect</span><span class="arrow">→</span>
+      <span class="step"><b>4</b> train</span><span class="arrow">→</span>
+      <span class="step"><b>5</b> predict / evaluate</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<div class="shell">
+  <nav class="toc" aria-label="contents">
+    <div class="grp">Setup</div>
+    <a href="#env">Environment</a>
+    <a href="#models">Models &amp; devices</a>
+    <a href="#constants">Constants &amp; defaults</a>
+    <div class="grp">Pipeline</div>
+    <a href="#profile">1 · profile_models</a>
+    <a href="#schedules">2 · generate_schedules</a>
+    <a href="#collect">3 · run_collection</a>
+    <a href="#train">4 · train</a>
+    <a href="#predict">5 · predict</a>
+    <a href="#evaluate">evaluate_model</a>
+    <div class="grp">Reference</div>
+    <a href="#xgb">XGBoost model</a>
+    <a href="#metrics">Metrics</a>
+    <a href="#platform">Two-platform study</a>
+    <a href="#e2e">End-to-end example</a>
+  </nav>
+
+  <main>
+    <section id="env">
+      <h2><span class="num">§0</span>Environment</h2>
+      <p class="sec-note">Every command runs through <code>$PYTHON_BIN</code>, an interpreter that has the Mobilint
+        SDK (<code>qbruntime</code>, <code>mblt_model_zoo</code>), <code>onnxruntime-gpu</code>, CUDA-enabled
+        <code>torch</code>, and <code>transformers</code>. Source the env file once per shell — it sets
+        <code>PYTHON_BIN</code> and points HuggingFace at a writable, offline cache.</p>
+      <div class="cmd"><span class="ln"><span class="cm"># run from the project root, once per shell</span></span><span class="ln"><span class="kw">source</span> runtime_env.sh</span><span class="ln"><span class="cm"># -> exports PYTHON_BIN, HF_MODULES_CACHE, HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1</span></span></div>
+      <div class="grid2">
+        <div class="kv"><div class="k">PYTHON_BIN</div><div class="v">.venv → video .venv</div><div class="sub">local <code>.venv/bin/python</code> if present, else the reference env interpreter (read-only)</div></div>
+        <div class="kv"><div class="k">HF_HUB_OFFLINE</div><div class="v">1</div><div class="sub">all model assets are pre-cached; set to <code>0</code> only to download a new checkpoint</div></div>
+        <div class="kv"><div class="k">Runtime</div><div class="v">QT_QPA_PLATFORM=offscreen</div><div class="sub">headless execution for data collection; workers use the <code>spawn</code> start method</div></div>
+      </div>
+    </section>
+
+    <section id="models">
+      <h2><span class="num">§1</span>Models &amp; devices</h2>
+      <p class="sec-note">Defined in <code>model_registry.py</code> — the single source of truth. Every model runs on
+        <span class="chip cpu">cpu</span> <span class="chip gpu">gpu</span> <span class="chip npu">npu</span>.
+        Vision models report frames/sec; LLM/VLM report tokens/sec (headless, profiling + placement only).</p>
+      <div class="tbl-scroll">
+        <table>
+          <thead><tr><th>Name</th><th>Kind / task</th><th>NPU (Mobilint)</th><th>GPU / CPU</th></tr></thead>
+          <tbody>
+            <tr><td class="p">yolo11n·s·m·l·x</td><td>vision · detection</td><td><code>.mxq</code> (mblt_model_zoo)</td><td>ONNX Runtime</td></tr>
+            <tr><td class="p">resnet50</td><td>vision · classification</td><td><code>.mxq</code></td><td>ONNX Runtime</td></tr>
+            <tr><td class="p">llama1b</td><td>llm · text-generation</td><td>mobilint/Llama-3.2-1B-Instruct @W8</td><td>unsloth/Llama-3.2-1B-Instruct</td></tr>
+            <tr><td class="p">qwen2_vl</td><td>vlm · image-text-to-text</td><td>mobilint/Qwen2-VL-2B-Instruct</td><td>Qwen/Qwen2-VL-2B-Instruct</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="callout"><b>Device constraint.</b> <code>qwen2_vl</code> is restricted to <span class="chip gpu">gpu</span>
+        <span class="chip npu">npu</span> (CPU prefill ≈ 13&nbsp;s is impractical). All other models may use any device.
+        Both accelerators are <b>shareable</b> — multiple models can co-reside on one GPU or on the Mobilint MLA100.</p>
+    </section>
+
+    <section id="constants">
+      <h2><span class="num">§2</span>Constants &amp; defaults</h2>
+      <p class="sec-note">Global knobs in <code>model_registry.py</code> and <code>model_processors.py</code>. Change these
+        to re-tune the whole pipeline; they are not per-command flags.</p>
+      <div class="grid2">
+        <div class="kv"><div class="k">DEADLINE_FACTOR</div><div class="v">3.0</div><div class="sub">deadline = (1000 / infps) × factor [ms]</div></div>
+        <div class="kv"><div class="k">RATE_FACTORS</div><div class="v">[1, 2, 3, 4]</div><div class="sub">input-rate sweep levels</div></div>
+        <div class="kv"><div class="k">TRAIN_RATE_FACTORS</div><div class="v">[1, 2, 4]</div><div class="sub">rates used for training</div></div>
+        <div class="kv"><div class="k">HOLDOUT_RATE_FACTORS</div><div class="v">[3]</div><div class="sub">rate held out for the test</div></div>
+        <div class="kv"><div class="k">DEVICES</div><div class="v">cpu · gpu · npu</div><div class="sub">canonical device tokens</div></div>
+        <div class="kv"><div class="k">FEED_MAX_WIDTH</div><div class="v">640 px</div><div class="sub">frames downscaled before IPC (workers re-resize)</div></div>
+      </div>
+    </section>
+
+    <hr class="soft">
+
+    <section id="profile">
+      <h2><span class="num">1</span>profile_models.py</h2>
+      <p class="sec-note">Measures each model on each device and writes the static profile
+        (<code>sample_profiling_data.json</code>): load &amp; inference time (vision), prefill + tokens/sec (LLM/VLM),
+        and each model's <code>baseline_rate</code> (throughput on its slowest allowed device = the 1× input rate).
+        Writes incrementally, so it can be run one model at a time.</p>
+      <div class="cmd"><span class="ln"><span class="kw">$PYTHON_BIN</span> profile_models.py <span class="fl">--out</span> <span class="st">xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json</span></span></div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Flag</th><th></th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="p">--out</td><td><span class="req">req</span></td><td class="d">—</td><td>Output static-profile JSON path (merged in place across runs).</td></tr>
+          <tr><td class="p">--models</td><td><span class="opt">opt</span></td><td class="d">all 8</td><td>Subset of registry model names to profile.</td></tr>
+          <tr><td class="p">--devices</td><td><span class="opt">opt</span></td><td class="d">cpu gpu npu</td><td>Subset of devices to measure.</td></tr>
+          <tr><td class="p">--max_new_tokens</td><td><span class="opt">opt</span></td><td class="d">64</td><td>Generation length for LLM/VLM profiling (drives prefill/decode split).</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="schedules">
+      <h2><span class="num">2</span>generate_schedules.py</h2>
+      <p class="sec-note">Enumerates device placements for the working set (one detection model + resnet50 + llama1b +
+        qwen2_vl) and expands each across the input-rate sweep. Per-view <code>infps = rate_factor × baseline_rate</code>.
+        Writes the schedule YAML plus a <code>&lt;out&gt;.meta.json</code> sidecar (<code>rate_factor</code>,
+        <code>workload</code>) used for the train/hold-out split and normalization.</p>
+      <div class="cmd"><span class="ln"><span class="cm"># 3-device platform (cpu+gpu+npu, accelerators unique)</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> generate_schedules.py <span class="fl">--out</span> <span class="st">xgboost_model/schedules/model_schedules.yaml</span></span><span class="ln"></span><span class="ln"><span class="cm"># 2-device platform study (both devices shareable)</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> generate_schedules.py <span class="fl">--devices</span> <span class="st">cpu gpu</span> <span class="fl">--out</span> <span class="st">schedules_cpu_gpu.yaml</span></span></div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Flag</th><th></th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="p">--out</td><td><span class="opt">opt</span></td><td class="d">…/model_schedules.yaml</td><td>Schedule YAML output (a <code>.meta.json</code> sidecar is written alongside).</td></tr>
+          <tr><td class="p">--static_json</td><td><span class="opt">opt</span></td><td class="d">…/sample_profiling_data.json</td><td>Static profile providing each model's <code>baseline_rate</code>.</td></tr>
+          <tr><td class="p">--devices</td><td><span class="opt">opt</span></td><td class="d">cpu + device_conf</td><td>Platform device set, e.g. <code>cpu gpu</code> or <code>cpu npu</code>. When set, both devices are shareable (2ᴺ placements).</td></tr>
+          <tr><td class="p">--device_conf</td><td><span class="opt">opt</span></td><td class="d">target_device.yaml</td><td>Device config read when <code>--devices</code> is omitted.</td></tr>
+          <tr><td class="p">--rate_factors</td><td><span class="opt">opt</span></td><td class="d">1 2 3 4</td><td>Input-rate multipliers of each model's baseline rate.</td></tr>
+          <tr><td class="p">--models</td><td><span class="opt">opt</span></td><td class="d">all 8</td><td>Models to place; &gt;4 forms working sets (one detector + the rest).</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="collect">
+      <h2><span class="num">3</span>run_collection.py</h2>
+      <p class="sec-note">Runs each combination in its own executor subprocess with a hard OS-level timeout and
+        process-group kill, so a stuck worker can never stall the sweep. Each combination contributes one contention
+        window (throughput, tokens/sec, deadline-miss rate); windows are tagged with <code>rate_factor</code>/<code>workload</code>
+        from the meta sidecar and merged into one training JSON.</p>
+      <div class="cmd"><span class="ln"><span class="kw">$PYTHON_BIN</span> run_collection.py <span class="fl">--schedule</span> <span class="st">model_schedules.yaml</span> <span class="fl">--duration</span> <span class="st">8</span> \</span><span class="ln">    <span class="fl">--out</span> <span class="st">xgboost_model/performance_data/train/performance_ratesweep.json</span></span></div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Flag</th><th></th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="p">--schedule</td><td><span class="opt">opt</span></td><td class="d">model_schedules.yaml</td><td>Schedule YAML (its <code>.meta.json</code> sidecar is auto-loaded).</td></tr>
+          <tr><td class="p">--out</td><td><span class="opt">opt</span></td><td class="d">…/performance_collected.json</td><td>Merged training-window output; written incrementally per combo.</td></tr>
+          <tr><td class="p">--duration</td><td><span class="opt">opt</span></td><td class="d">8</td><td>Measured seconds per combination (Δ). Warmup is added on top.</td></tr>
+          <tr><td class="p">--warmup</td><td><span class="opt">opt</span></td><td class="d">5</td><td>Warmup seconds before measurement (stats reset after warmup).</td></tr>
+          <tr><td class="p">--buffer</td><td><span class="opt">opt</span></td><td class="d">12</td><td>Extra seconds before the per-combo timeout (load + cleanup headroom).</td></tr>
+        </tbody>
+      </table></div>
+      <p class="callout">Per-combo wall-clock budget ≈ <code>duration + warmup + buffer</code>. Anything past it is
+        SIGKILL'd and recorded as <code>NO DATA</code>, and the sweep advances.</p>
+    </section>
+
+    <section id="train">
+      <h2><span class="num">4</span>deploy_selector_xgb_suite.py&nbsp;train</h2>
+      <p class="sec-note">Trains three independent XGBoost regressors — normalized throughput (y1), deadline-miss rate
+        (y2), normalized token throughput (y3) — on the training rate levels only. Hyperparameters are chosen per target
+        by 3-fold cross-validation over a small grid (MAE). Writes <code>&lt;prefix&gt;_y{1,2,3}.json</code> and a
+        <code>_features.json</code> column order.</p>
+      <div class="cmd"><span class="ln"><span class="kw">$PYTHON_BIN</span> xgboost_model/deploy_selector_xgb_suite.py train \</span><span class="ln">    <span class="fl">--perf_dir</span> <span class="st">xgboost_model/performance_data/train</span> \</span><span class="ln">    <span class="fl">--schedule_dir</span> <span class="st">xgboost_model/schedules</span> \</span><span class="ln">    <span class="fl">--static_json</span> <span class="st">…/sample_profiling_data.json</span> \</span><span class="ln">    <span class="fl">--model_out</span> <span class="st">xgboost_model/artifacts/deploy_xgb</span></span></div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Flag</th><th></th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="p">--perf_dir</td><td><span class="req">req</span></td><td class="d">—</td><td>Directory of <code>performance_*.json</code> contention windows (searched recursively).</td></tr>
+          <tr><td class="p">--schedule_dir</td><td><span class="req">req</span></td><td class="d">—</td><td>Directory of schedule YAMLs (provides per-view <code>infps</code> features).</td></tr>
+          <tr><td class="p">--static_json</td><td><span class="req">req</span></td><td class="d">—</td><td>Static profile (device latency / tokens features).</td></tr>
+          <tr><td class="p">--model_out</td><td><span class="req">req</span></td><td class="d">—</td><td>Output prefix; produces <code>_y1/_y2/_y3.json</code> + <code>_features.json</code>.</td></tr>
+          <tr><td class="p">--rate_factors</td><td><span class="opt">opt</span></td><td class="d">1 2 4</td><td>Input-rate levels to train on (3× held out).</td></tr>
+          <tr><td class="p">--dump_csv</td><td><span class="opt">opt</span></td><td class="d">"" (off)</td><td>Optional path to dump the engineered feature+target table for inspection.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="predict">
+      <h2><span class="num">5</span>deploy_selector_xgb_suite.py&nbsp;predict</h2>
+      <p class="sec-note">Scores every combination in a schedule with the trained models and prints a ranking — no execution
+        required. The score combines the three predictions; α and β are runtime-only weights (never part of training),
+        so the throughput–stability trade-off is re-tunable without retraining.</p>
+      <div class="formula">S(x) = T<sub>throughput</sub> + β · T<sub>tokens</sub> − α · miss<sub>rate</sub></div>
+      <div class="cmd"><span class="ln"><span class="kw">$PYTHON_BIN</span> xgboost_model/deploy_selector_xgb_suite.py predict \</span><span class="ln">    <span class="fl">--schedule_yaml</span> <span class="st">model_schedules.yaml</span> \</span><span class="ln">    <span class="fl">--static_json</span> <span class="st">…/sample_profiling_data.json</span> \</span><span class="ln">    <span class="fl">--model_in</span> <span class="st">xgboost_model/artifacts/deploy_xgb</span> <span class="fl">--topk</span> <span class="st">5</span></span></div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Flag</th><th></th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="p">--schedule_yaml</td><td><span class="req">req</span></td><td class="d">—</td><td>Schedule whose combinations are scored and ranked.</td></tr>
+          <tr><td class="p">--static_json</td><td><span class="req">req</span></td><td class="d">—</td><td>Static profile (same one used for training).</td></tr>
+          <tr><td class="p">--model_in</td><td><span class="req">req</span></td><td class="d">—</td><td>Trained model prefix (expects <code>_y1/_y2/_y3.json</code>).</td></tr>
+          <tr><td class="p">--alpha</td><td><span class="opt">opt</span></td><td class="d">0.3</td><td>Deadline-miss penalty weight (normalized units).</td></tr>
+          <tr><td class="p">--beta</td><td><span class="opt">opt</span></td><td class="d">0.5</td><td>Token-throughput reward weight (normalized units).</td></tr>
+          <tr><td class="p">--topk</td><td><span class="opt">opt</span></td><td class="d">0 (off)</td><td>If &gt;0, also print the top-K combinations by score.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="evaluate">
+      <h2><span class="num">§</span>evaluate_model.py</h2>
+      <p class="sec-note">Accuracy validation in three modes. All targets are normalized to [0,1]; reported per target:
+        MAE, RMSE, R², MAPE. <code>select</code> reports paper-style per-workload Top-1 / Top-5 hit rate and the
+        predicted pick's score relative to the oracle.</p>
+      <div class="cmd"><span class="ln"><span class="cm"># 3-fold cross-validation on the training rates</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> evaluate_model.py cv <span class="fl">--perf_dir</span> <span class="st">…/train</span> <span class="fl">--schedule_dir</span> <span class="st">…/schedules</span> <span class="fl">--static_json</span> <span class="st">…</span></span><span class="ln"></span><span class="ln"><span class="cm"># unseen input-rate hold-out (3x)</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> evaluate_model.py holdout <span class="fl">--model_in</span> <span class="st">…/deploy_xgb</span> <span class="fl">--test_perf</span> <span class="st">…/train</span> <span class="fl">--schedule_dir</span> <span class="st">…</span> <span class="fl">--static_json</span> <span class="st">…</span></span><span class="ln"></span><span class="ln"><span class="cm"># placement selection: Top-1 / Top-5 hit rate vs oracle</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> evaluate_model.py select <span class="fl">--model_in</span> <span class="st">…/deploy_xgb</span> <span class="fl">--test_perf</span> <span class="st">…/train</span> <span class="fl">--schedule_dir</span> <span class="st">…</span> <span class="fl">--schedule_yaml</span> <span class="st">model_schedules.yaml</span> <span class="fl">--static_json</span> <span class="st">…</span></span></div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Mode</th><th>Key flags</th><th>Defaults</th></tr></thead>
+        <tbody>
+          <tr><td class="p">cv</td><td><code>--perf_dir --schedule_dir --static_json</code></td><td class="d">--folds 3 · --rate_factors 1 2 4</td></tr>
+          <tr><td class="p">holdout</td><td><code>--model_in --test_perf --schedule_dir --static_json</code></td><td class="d">--rate_factors 3</td></tr>
+          <tr><td class="p">select</td><td><code>--model_in --test_perf --schedule_dir --schedule_yaml --static_json</code></td><td class="d">--rate_factors 3 · --alpha 0.3 · --beta 0.5</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <hr class="soft">
+
+    <section id="xgb">
+      <h2><span class="num">§</span>XGBoost model</h2>
+      <h3>Three independent targets</h3>
+      <ul class="tight">
+        <li><b>y1 — normalized throughput</b>: sum of vision FPS, normalized to [0,1] by <code>Fmax</code> within each
+          (workload, rate) group: <code>T = F / Fmax</code>.</li>
+        <li><b>y2 — deadline-miss rate</b>: mean of per-application miss rates (already in [0,1]).</li>
+        <li><b>y3 — normalized token throughput</b>: sum of LLM/VLM tokens/sec, normalized like y1.</li>
+      </ul>
+      <p>Separate regressors let α/β be re-tuned at runtime without retraining. Predictions are clipped to [0,1].</p>
+      <h3>Features (no target leakage)</h3>
+      <p class="sec-note">Static profile only — device one-hot (<code>exec_cpu/gpu/npu</code>), kind flags, selected-device
+        inference / load / tokens, planned <code>infps</code>, device capacity and load factor — aggregated across views
+        by sum / mean / max plus a view count. Measured per-window throughput is <b>never</b> a feature.</p>
+      <h3>Hyperparameters</h3>
+      <div class="grid2">
+        <div class="kv"><div class="k">objective</div><div class="v">reg:squarederror</div><div class="sub">all three targets</div></div>
+        <div class="kv"><div class="k">num_boost_round</div><div class="v">300</div></div>
+        <div class="kv"><div class="k">CV grid (max_depth · eta)</div><div class="v">3·.1 / 4·.1 / 5·.05 / 6·.1</div><div class="sub">3-fold, selected by MAE per target</div></div>
+        <div class="kv"><div class="k">fixed base</div><div class="v">subsample .8 · colsample .8</div><div class="sub">min_child_weight 3 · seed 42</div></div>
+      </div>
+    </section>
+
+    <section id="metrics">
+      <h2><span class="num">§</span>Metrics</h2>
+      <div class="grid2">
+        <div class="card"><h3 style="margin-top:0">Deadline miss</h3>
+          <p style="font-size:14px;margin:0">A request misses if end-to-end latency &gt; <code>1000/infps × 3</code> ms.
+          Per view: <code>offered = infps × Δ</code>, <code>on_time =</code> completions within deadline,
+          <code>miss = (offered − on_time) / offered</code>. Window value = mean over applications.</p></div>
+        <div class="card"><h3 style="margin-top:0">Placement ranking</h3>
+          <p style="font-size:14px;margin:0">Per (workload, rate) group, placements are ranked by predicted score.
+          <b>Top-1 / Top-5 hit rate</b> = predicted best is (in the top-5 of) the measured oracle; the oracle-gap is the
+          predicted pick's measured score ÷ the best measured score.</p></div>
+      </div>
+    </section>
+
+    <section id="platform">
+      <h2><span class="num">§</span>Two-platform study</h2>
+      <p class="sec-note">Reproduces the paper's per-platform evaluation: a CPU+GPU predictor and a CPU+NPU (MLA100)
+        predictor, each trained and validated independently. One script runs collect → train → CV → hold-out → selection
+        for both, appending to <code>platform_study_report.txt</code>.</p>
+      <div class="cmd"><span class="ln"><span class="kw">./run_platform_study.sh</span>   <span class="cm"># ~2.5 h; artifacts: deploy_cpu_gpu_*, deploy_cpu_npu_*</span></span></div>
+      <p>To run one platform manually, generate its schedule with <code>--devices cpu gpu</code> (or <code>cpu npu</code>),
+        collect against it, then train with <code>--model_out …/deploy_cpu_gpu</code>.</p>
+    </section>
+
+    <section id="e2e">
+      <h2><span class="num">§</span>End-to-end example</h2>
+      <div class="cmd"><span class="ln"><span class="kw">source</span> runtime_env.sh</span><span class="ln"><span class="cm"># 1 · static profile (once)</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> profile_models.py <span class="fl">--out</span> <span class="st">xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json</span></span><span class="ln"><span class="cm"># 2 · schedules (placement × rate sweep)</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> generate_schedules.py <span class="fl">--out</span> <span class="st">xgboost_model/schedules/model_schedules.yaml</span></span><span class="ln"><span class="kw">cp</span> xgboost_model/schedules/model_schedules.yaml* .</span><span class="ln"><span class="cm"># 3 · collect contention windows</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> run_collection.py <span class="fl">--schedule</span> <span class="st">model_schedules.yaml</span> <span class="fl">--duration</span> <span class="st">8</span> <span class="fl">--out</span> <span class="st">xgboost_model/performance_data/train/performance_ratesweep.json</span></span><span class="ln"><span class="cm"># 4 · train (1x/2x/4x)</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> xgboost_model/deploy_selector_xgb_suite.py train <span class="fl">--perf_dir</span> <span class="st">xgboost_model/performance_data/train</span> <span class="fl">--schedule_dir</span> <span class="st">xgboost_model/schedules</span> <span class="fl">--static_json</span> <span class="st">…/sample_profiling_data.json</span> <span class="fl">--model_out</span> <span class="st">xgboost_model/artifacts/deploy_xgb</span></span><span class="ln"><span class="cm"># 5 · predict best placement</span></span><span class="ln"><span class="kw">$PYTHON_BIN</span> xgboost_model/deploy_selector_xgb_suite.py predict <span class="fl">--schedule_yaml</span> <span class="st">model_schedules.yaml</span> <span class="fl">--static_json</span> <span class="st">…/sample_profiling_data.json</span> <span class="fl">--model_in</span> <span class="st">xgboost_model/artifacts/deploy_xgb</span> <span class="fl">--topk</span> <span class="st">5</span></span></div>
+    </section>
+  </main>
+</div>
+</div>
+
+<footer>
+  <div class="wrap">
+    multimodel-scheduling-mobilint · Predictive placement on heterogeneous CPU / GPU / Mobilint&nbsp;NPU.
+    Device tokens are <code>cpu</code> / <code>gpu</code> / <code>npu</code> throughout. α and β are runtime scoring
+    weights, not training parameters.
+  </div>
+</footer>

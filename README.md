@@ -1,66 +1,81 @@
-# Multimodel Scheduling Application
+# Multimodel Scheduling (Mobilint NPU + GPU)
 
-## Project Structure
+Profiles multiple models across **CPU, GPU (CUDA) and the Mobilint Aries NPU**,
+runs them concurrently under a schedule, and trains an XGBoost model that
+recommends the best device placement (deployment) for a given workload.
 
-The application has been modularized to improve readability and maintainability. The code is now organized into the following modules:
+This replaces the previous Neubla-NPU integration. Each model runs on all three
+device types; the placement predictor is trained from real contention runs.
 
-### Main Files
-- `main.py`: Entry point for the application
-- `multimodel_gui.py`: Legacy entry point (for backward compatibility)
+## Models
 
-### Core Components
-- `unified_viewer.py`: Main viewer class that handles the UI and coordinates the different components
-- `view_handlers.py`: Classes for handling different views (YOLO, ResNet) and video feeding
-- `model_processors.py`: Functions for processing models on CPU and NPU
-- `image_processing.py`: Functions for image preprocessing, postprocessing, and visualization
-- `utils.py`: Utility functions for logging, metrics, and image conversion
+Every model runs on **both GPU and the Mobilint NPU** (CPU too):
 
-## Module Descriptions
+| Logical name | Kind | NPU (Mobilint) | GPU / CPU |
+|--------------|------|----------------|-----------|
+| `yolo11n/s/m/l/x` | detection (vision) | `.mxq` (mblt_model_zoo) | ONNX Runtime (`models/onnx/*.onnx`) |
+| `resnet50` | classification (vision) | `.mxq` | ONNX Runtime |
+| `llama1b` (Llama-3.2-1B) | text-generation (LLM) | `mobilint/Llama-3.2-1B-Instruct` @W8 | `unsloth/Llama-3.2-1B-Instruct` (transformers) |
+| `qwen2_vl` (Qwen2-VL-2B) | image-text-to-text (VLM) | `mobilint/Qwen2-VL-2B-Instruct` | `Qwen/Qwen2-VL-2B-Instruct` (transformers) |
 
-### utils.py
-Contains general utility functions:
-- `async_log`: Asynchronously log model performance data
-- `create_x_image`: Create a placeholder image with an X
-- `convert_cv_to_qt`: Convert OpenCV images to Qt pixmaps
-- `get_cpu_metrics`: Get CPU performance metrics
+The model registry (`model_registry.py`) is the single source of truth. Vision
+models report **FPS**; LLM/VLM report **tokens/sec** (a separate XGBoost target).
+LLM/VLM are profiling + placement only — they run headless (not rendered in the
+GUI) but participate in schedule generation, contention runs and prediction.
 
-### image_processing.py
-Contains image processing functions:
-- `image_preprocess`: Preprocess images for neural network input
-- `yolo_preprocess_local`: Preprocess images for YOLO model
-- `resnet50_preprocess_local`: Preprocess images for ResNet50 model
-- `draw_detection_boxes`: Draw detection boxes on images
-- `yolo_postprocess_cpu`: Post-process YOLO model output (CPU version)
-- `yolo_postprocess_npu`: Post-process YOLO model output (NPU version)
+## Runtime environment
 
-### model_processors.py
-Contains model processing functions:
-- `video_reader_process`: Process for reading video frames
-- `run_yolo_cpu_process`: Process for running YOLO model on CPU
-- `run_resnet_cpu_process`: Process for running ResNet model on CPU
-- `run_yolo_npu_process`: Process for running YOLO model on NPU
-- `run_resnet_npu_process`: Process for running ResNet model on NPU
+The Mobilint SDK (`qbruntime`, `mblt_model_zoo`), `onnxruntime-gpu`,
+CUDA-enabled `torch`, and `transformers` must be installed (see
+`requirements.txt`). `runtime_env.sh` sets `PYTHON_BIN` and HF cache/offline
+vars; source it before running anything:
 
-### view_handlers.py
-Contains view handling components:
-- `ModelSignals`: Signal class for updating model views
-- `ViewHandler`: Base class for handling model views
-- `YoloViewHandler`: Handler for YOLO model views
-- `ResNetViewHandler`: Handler for ResNet model views
-- `VideoFeeder`: Class for feeding video frames to model queues
+```bash
+source runtime_env.sh
+```
 
-### unified_viewer.py
-Contains the main viewer class:
-- `UnifiedViewer`: Main viewer class that handles the UI and coordinates the different components
-  - Initialization methods: `initialize_model_settings`, `initialize_ui_components`, etc.
-  - View update methods: `update_view1_display`, etc.
-  - Signal handling and shutdown methods: `signal_handler`, `closeEvent`, `shutdown_all`
-  - Monitoring and statistics methods: `update_cpu_npu_usage`, `save_throughput_data`
+## Workflow
 
-## Benefits of Modularization
+```bash
+# 1) Profile every model on CPU / GPU / NPU  ->  static profile JSON
+$PYTHON_BIN profile_models.py \
+    --out xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json
 
-1. **Improved Readability**: Each module has a clear purpose and contains related functionality.
-2. **Better Maintainability**: Changes to one component don't affect others, making it easier to update and fix bugs.
-3. **Code Reusability**: Functions and classes can be reused in other projects or components.
-4. **Easier Testing**: Smaller, focused modules are easier to test.
-5. **Collaboration**: Multiple developers can work on different modules simultaneously.
+# 2) Generate device-placement combinations  ->  model_schedules.yaml
+$PYTHON_BIN generate_schedules.py --out xgboost_model/schedules/model_schedules.yaml
+cp xgboost_model/schedules/model_schedules.yaml model_schedules.yaml
+
+# 3) Collect contention training data (headless). Writes results/performance_*.json
+QT_QPA_PLATFORM=offscreen $PYTHON_BIN schedule_executor_main.py \
+    --schedule model_schedules.yaml --duration 10 --auto_start_all
+
+# 4) Train the 3-target XGBoost model (throughput FPS, drop rate, tokens/sec)
+$PYTHON_BIN xgboost_model/deploy_selector_xgb_suite.py train \
+    --perf_dir xgboost_model/performance_data \
+    --schedule_dir xgboost_model/schedules \
+    --static_json xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json \
+    --model_out xgboost_model/artifacts/deploy_xgb
+
+# 5) Predict the best combination for a schedule
+$PYTHON_BIN xgboost_model/deploy_selector_xgb_suite.py predict \
+    --schedule_yaml model_schedules.yaml \
+    --static_json xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json \
+    --model_in xgboost_model/artifacts/deploy_xgb --topk 5
+```
+
+`best_deploy_finder_executor.py` is the GUI front-end for steps 2/5 (predict best
+placement, then launch the executor on the winning combination).
+
+## Key modules
+
+- `model_registry.py` — model set, kinds, devices, asset resolution.
+- `runtime/mobilint_vision.py` — Mobilint NPU vision wrapper (detection/classification).
+- `runtime/llm_engine.py` — LLM/VLM engine on GPU/CPU/NPU (tokens/sec, prefill).
+- `model_processors.py` — per-view worker processes (detection/classification/LLM/VLM × cpu/gpu/npu).
+- `unified_viewer.py` — orchestrates the 4-view run and aggregates per-view stats.
+- `profile_models.py` — static per-model per-device profiler.
+- `generate_schedules.py` — enumerates placement combinations.
+- `xgboost_model/deploy_selector_xgb_suite.py` — 3-target trainer/predictor.
+
+Device tokens everywhere are `cpu` / `gpu` / `npu`. Worker processes use the
+`spawn` start method so CUDA and the NPU initialize cleanly per process.

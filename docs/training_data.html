@@ -1,0 +1,356 @@
+<title>Predictive Placement — Training Data & Parameters</title>
+<style>
+  :root {
+    --paper: #f6f5f1; --surface: #fffffe; --ink: #1b2029; --muted: #59616f;
+    --accent: #0d7a72; --accent-soft: rgba(13,122,114,0.10);
+    --border: #e2dfd6; --border-soft: #ece9e1;
+    --cpu: #5a6b8c; --gpu: #3d9a5b; --npu: #8163d4;
+    --y1: #0d7a72; --y2: #b3541e; --y3: #7c6bd6;
+    --req: #b3541e; --opt: #7a8290;
+    --code-bg: #0d1117; --code-fg: #c9d1d9; --code-kw: #57cabc; --code-cm: #6b7686; --code-str: #9ecb8a;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --maxw: 1200px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #10141b; --surface: #161b24; --ink: #e6e9ef; --muted: #8b93a2;
+      --accent: #46cabc; --accent-soft: rgba(70,202,188,0.13);
+      --border: #262d38; --border-soft: #1f2530;
+      --cpu: #8493b5; --gpu: #59c07d; --npu: #a28cf0;
+      --y1: #46cabc; --y2: #e08a54; --y3: #a28cf0; --req: #e08a54; --opt: #7d8698;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f6f5f1; --surface: #fffffe; --ink: #1b2029; --muted: #59616f;
+    --accent: #0d7a72; --accent-soft: rgba(13,122,114,0.10);
+    --border: #e2dfd6; --border-soft: #ece9e1;
+    --cpu: #5a6b8c; --gpu: #3d9a5b; --npu: #8163d4;
+    --y1: #0d7a72; --y2: #b3541e; --y3: #7c6bd6; --req: #b3541e; --opt: #7a8290;
+  }
+  :root[data-theme="dark"] {
+    --paper: #10141b; --surface: #161b24; --ink: #e6e9ef; --muted: #8b93a2;
+    --accent: #46cabc; --accent-soft: rgba(70,202,188,0.13);
+    --border: #262d38; --border-soft: #1f2530;
+    --cpu: #8493b5; --gpu: #59c07d; --npu: #a28cf0;
+    --y1: #46cabc; --y2: #e08a54; --y3: #a28cf0; --req: #e08a54; --opt: #7d8698;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: 15.5px; line-height: 1.62; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 clamp(16px, 4vw, 40px); }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: 0.88em; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  header.hero { border-bottom: 1px solid var(--border); background: radial-gradient(120% 140% at 88% -20%, var(--accent-soft), transparent 60%); }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+  h1 { font-size: clamp(1.95rem, 4.3vw, 2.7rem); line-height: 1.08; margin: 0; letter-spacing: -0.02em; text-wrap: balance; font-weight: 680; }
+  .lede { color: var(--muted); max-width: 62ch; margin: 16px 0 0; font-size: 1.02rem; }
+  .hero .wrap { padding-top: clamp(40px, 7vw, 72px); padding-bottom: clamp(30px, 5vw, 48px); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin-top: 30px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 15px 17px; }
+  .stat .n { font-family: var(--mono); font-size: 1.7rem; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+
+  .shell { display: grid; grid-template-columns: 220px minmax(0,1fr); gap: 44px; align-items: start; padding-top: 40px; padding-bottom: 80px; }
+  nav.toc { position: sticky; top: 22px; font-size: 13.5px; }
+  nav.toc .grp { text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; color: var(--muted); margin: 18px 0 7px; font-family: var(--mono); }
+  nav.toc a { display: block; padding: 4px 10px; color: var(--muted); border-left: 2px solid var(--border-soft); }
+  nav.toc a:hover { color: var(--ink); text-decoration: none; border-left-color: var(--accent); }
+  main { min-width: 0; }
+  section { margin-bottom: 46px; scroll-margin-top: 20px; }
+  h2 { font-size: 1.42rem; letter-spacing: -0.01em; margin: 0 0 6px; font-weight: 660; }
+  h2 .num { font-family: var(--mono); color: var(--accent); font-size: 0.8em; margin-right: 10px; font-weight: 600; }
+  h3 { font-size: 1.02rem; margin: 28px 0 10px; font-weight: 640; }
+  .sec-note { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+  p { max-width: 72ch; }
+
+  .tbl-scroll { overflow-x: auto; margin: 14px 0; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.8px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  thead th { background: var(--surface); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.p { font-family: var(--mono); font-size: 12.6px; white-space: nowrap; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  caption { caption-side: top; text-align: left; font-size: 12px; font-family: var(--mono); color: var(--muted); padding: 10px 14px 0; text-transform: uppercase; letter-spacing: 0.06em; }
+
+  .cmd { background: var(--code-bg); color: var(--code-fg); border-radius: 10px; font-family: var(--mono); font-size: 13px; line-height: 1.65; padding: 16px 18px; overflow-x: auto; margin: 14px 0; border: 1px solid #1c2530; }
+  .cmd .cm { color: var(--code-cm); } .cmd .kw { color: var(--code-kw); } .cmd .st { color: var(--code-str); }
+  .cmd .ln { display: block; white-space: pre; }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 14px; }
+  .kv { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .kv .k { font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .kv .v { font-family: var(--mono); font-size: 15px; color: var(--accent); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kv .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 14px; }
+  .callout b { color: var(--accent); }
+  .formula { font-family: var(--mono); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; font-size: 14px; overflow-x: auto; }
+  .chip { font-family: var(--mono); font-size: 11.5px; padding: 2px 9px; border-radius: 6px; font-weight: 600; display: inline-block; }
+  .chip.cpu { color: var(--cpu); background: color-mix(in srgb, var(--cpu) 14%, transparent); }
+  .chip.gpu { color: var(--gpu); background: color-mix(in srgb, var(--gpu) 15%, transparent); }
+  .chip.npu { color: var(--npu); background: color-mix(in srgb, var(--npu) 15%, transparent); }
+  .tag { font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); }
+  .tag.train { color: var(--accent); border-color: var(--accent); }
+  .tag.test { color: var(--y2); border-color: var(--y2); }
+
+  /* split diagram */
+  .split { display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0; }
+  .split .box { flex: 1 1 120px; border-radius: 10px; padding: 14px 16px; border: 1px solid var(--border); background: var(--surface); }
+  .split .box.tr { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+  .split .box.te { border-color: var(--y2); box-shadow: inset 3px 0 0 var(--y2); }
+  .split .box .r { font-family: var(--mono); font-weight: 600; font-size: 1.15rem; }
+  .split .box .s { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+  /* bars */
+  .bars { margin: 14px 0; }
+  .bars .row { display: grid; grid-template-columns: 46px 1fr 54px; align-items: center; gap: 12px; margin: 7px 0; }
+  .bars .rl { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .bars .track { height: 16px; background: var(--border-soft); border-radius: 8px; overflow: hidden; }
+  .bars .fill { height: 100%; border-radius: 8px; }
+  .bars .rv { font-family: var(--mono); font-size: 12.5px; text-align: right; font-variant-numeric: tabular-nums; }
+  .barwrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap: 26px; }
+  .barwrap h3 { margin-top: 0; }
+
+  hr.soft { border: none; border-top: 1px solid var(--border-soft); margin: 34px 0; }
+  footer { border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  footer .wrap { padding-top: 26px; padding-bottom: 40px; }
+  ul.tight { margin: 8px 0; padding-left: 20px; } ul.tight li { margin: 5px 0; max-width: 70ch; }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; gap: 8px; }
+    nav.toc { position: static; display: flex; flex-wrap: wrap; gap: 6px 4px; border-bottom: 1px solid var(--border); padding-bottom: 18px; margin-bottom: 10px; }
+    nav.toc .grp { display: none; }
+    nav.toc a { border-left: none; border: 1px solid var(--border-soft); border-radius: 6px; padding: 4px 9px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Multimodel Scheduling · Predictive Placement</p>
+    <h1>Training Data &amp; Parameters</h1>
+    <p class="lede">How the offline dataset is built, split, and featurized — and every parameter that shapes the three
+      XGBoost placement predictors. Figures are the actual per-platform datasets from the CPU+GPU and CPU+NPU studies.</p>
+    <div class="stats">
+      <div class="stat"><div class="n">160</div><div class="l">windows per platform</div></div>
+      <div class="stat"><div class="n">120 / 40</div><div class="l">train / hold-out split</div></div>
+      <div class="stat"><div class="n">37</div><div class="l">features (no leakage)</div></div>
+      <div class="stat"><div class="n">3</div><div class="l">independent targets</div></div>
+      <div class="stat"><div class="n">4×</div><div class="l">input-rate levels</div></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<div class="shell">
+  <nav class="toc" aria-label="contents">
+    <div class="grp">Dataset</div>
+    <a href="#unit">The data unit</a>
+    <a href="#compose">Composition</a>
+    <a href="#split">Train / test split</a>
+    <a href="#stats">Dataset statistics</a>
+    <div class="grp">Modeling</div>
+    <a href="#features">Features</a>
+    <a href="#targets">Targets &amp; normalization</a>
+    <a href="#static">Static profile</a>
+    <a href="#params">Training parameters</a>
+    <div class="grp">Reference</div>
+    <a href="#schema">Window schema</a>
+    <a href="#files">Where it lives</a>
+  </nav>
+
+  <main>
+    <section id="unit">
+      <h2><span class="num">§1</span>The data unit — a contention window</h2>
+      <p class="sec-note">One training row = one <b>(placement, input-rate)</b> combination run under co-execution for a
+        fixed interval Δ (default 8&nbsp;s, after a 5&nbsp;s warmup). During the window every active model is fed at its
+        planned rate; the executor records, per application and for the window as a whole: achieved throughput
+        (FPS / tokens-per-sec) and the deadline-miss rate. Each window is tagged with its <code>rate_factor</code> and
+        <code>workload</code> for splitting and normalization.</p>
+      <div class="callout">Measured performance is a <b>label, never a feature</b> — features are built only from the
+        static profile and the placement/rate plan, so predictions require no execution at inference time.</div>
+    </section>
+
+    <section id="compose">
+      <h2><span class="num">§2</span>Composition</h2>
+      <p class="sec-note">The candidate generator enumerates every feasible placement of a working set, then replicates
+        each across the four input-rate levels. A working set is one detection model plus resnet50 + llama1b + qwen2_vl.</p>
+      <div class="formula">5 workloads (yolo11 n·s·m·l·x) &nbsp;×&nbsp; 8 placements &nbsp;×&nbsp; 4 rates &nbsp;=&nbsp; <b>160 windows</b></div>
+      <ul class="tight">
+        <li><b>Placements per platform.</b> Both accelerators are shareable, so each of the 3 free models picks
+          <span class="chip cpu">cpu</span> or the accelerator (qwen2_vl is fixed to the accelerator): 2³ = <b>8</b> placements.</li>
+        <li><b>Input rate.</b> Per-view <code>infps = rate_factor × baseline_rate(model)</code>, where the baseline is the
+          model's throughput on its slowest allowed device.</li>
+        <li><b>Two platforms, two datasets.</b> CPU+GPU (<span class="chip cpu">cpu</span><span class="chip gpu">gpu</span>)
+          and CPU+NPU / MLA100 (<span class="chip cpu">cpu</span><span class="chip npu">npu</span>), each 160 windows,
+          each trains its own predictor.</li>
+      </ul>
+    </section>
+
+    <section id="split">
+      <h2><span class="num">§3</span>Train / test split — by input rate</h2>
+      <p class="sec-note">Following the paper, the split is on <b>input-rate level</b>, not random rows: train on 1× / 2× / 4×,
+        hold out 3× entirely. This tests generalization to an <i>unseen workload intensity</i>.</p>
+      <div class="split">
+        <div class="box tr"><div class="r">1× · 2× · 4×</div><div class="s"><span class="tag train">train</span> &nbsp;120 windows (40 each)</div></div>
+        <div class="box te"><div class="r">3×</div><div class="s"><span class="tag test">hold-out</span> &nbsp;40 windows</div></div>
+      </div>
+      <p>Hyperparameters are chosen inside the training set by <b>3-fold cross-validation</b>; the 3× hold-out is touched
+        only for final evaluation (<code>evaluate_model.py holdout</code> / <code>select</code>).</p>
+    </section>
+
+    <section id="stats">
+      <h2><span class="num">§4</span>Dataset statistics</h2>
+      <p class="sec-note">Measured window-level values by input rate. Deadline miss rises with rate and saturates near 1.0
+        under overload; throughput on GPU is ~3× the NPU platform. Ranges are [min–max] across the 40 placements at that rate.</p>
+      <div class="barwrap">
+        <div>
+          <h3><span class="chip gpu">CPU+GPU</span> deadline miss by rate</h3>
+          <div class="bars">
+            <div class="row"><span class="rl">1×</span><div class="track"><div class="fill" style="width:46%;background:var(--gpu)"></div></div><span class="rv">0.46</span></div>
+            <div class="row"><span class="rl">2×</span><div class="track"><div class="fill" style="width:67%;background:var(--gpu)"></div></div><span class="rv">0.67</span></div>
+            <div class="row"><span class="rl">3× <span class="tag test">test</span></span><div class="track"><div class="fill" style="width:87%;background:var(--y2)"></div></div><span class="rv">0.87</span></div>
+            <div class="row"><span class="rl">4×</span><div class="track"><div class="fill" style="width:89%;background:var(--gpu)"></div></div><span class="rv">0.89</span></div>
+          </div>
+        </div>
+        <div>
+          <h3><span class="chip npu">CPU+NPU</span> deadline miss by rate</h3>
+          <div class="bars">
+            <div class="row"><span class="rl">1×</span><div class="track"><div class="fill" style="width:69%;background:var(--npu)"></div></div><span class="rv">0.69</span></div>
+            <div class="row"><span class="rl">2×</span><div class="track"><div class="fill" style="width:90%;background:var(--npu)"></div></div><span class="rv">0.90</span></div>
+            <div class="row"><span class="rl">3× <span class="tag test">test</span></span><div class="track"><div class="fill" style="width:96%;background:var(--y2)"></div></div><span class="rv">0.96</span></div>
+            <div class="row"><span class="rl">4×</span><div class="track"><div class="fill" style="width:99%;background:var(--npu)"></div></div><span class="rv">0.99</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="tbl-scroll"><table>
+        <caption>Window-level means (range) by platform × rate · n = 40 per cell</caption>
+        <thead><tr><th>Platform</th><th>Rate</th><th class="num">deadline miss</th><th class="num">throughput FPS</th><th class="num">tokens/sec</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="4"><span class="chip gpu">CPU+GPU</span></td><td class="p">1×</td><td class="num">0.46 (0.14–0.88)</td><td class="num">308 (11–687)</td><td class="num">73.4</td></tr>
+          <tr><td class="p">2×</td><td class="num">0.67 (0.09–1.00)</td><td class="num">297 (14–613)</td><td class="num">66.4</td></tr>
+          <tr><td class="p">3× <span class="tag test">test</span></td><td class="num">0.87 (0.53–1.00)</td><td class="num">286 (10–566)</td><td class="num">67.1</td></tr>
+          <tr><td class="p">4×</td><td class="num">0.89 (0.64–1.00)</td><td class="num">283 (11–558)</td><td class="num">67.5</td></tr>
+          <tr><td rowspan="4"><span class="chip npu">CPU+NPU</span></td><td class="p">1×</td><td class="num">0.69 (0.41–0.88)</td><td class="num">90 (11–195)</td><td class="num">12.2</td></tr>
+          <tr><td class="p">2×</td><td class="num">0.90 (0.75–1.00)</td><td class="num">89 (11–197)</td><td class="num">12.0</td></tr>
+          <tr><td class="p">3× <span class="tag test">test</span></td><td class="num">0.96 (0.91–1.00)</td><td class="num">78 (10–174)</td><td class="num">12.1</td></tr>
+          <tr><td class="p">4×</td><td class="num">0.99 (0.94–1.00)</td><td class="num">75 (11–168)</td><td class="num">11.4</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <hr class="soft">
+
+    <section id="features">
+      <h2><span class="num">§5</span>Features — 37 total</h2>
+      <p class="sec-note">Twelve per-view features are computed for each application instance, then aggregated across the
+        instances of a window by <b>sum, mean, max</b> (12 × 3 = 36) plus the view count (37). The feature set and column
+        order are identical at train and inference time; missing entries are zero-filled.</p>
+      <div class="tbl-scroll"><table>
+        <caption>The 12 per-view base features (aggregated ×3 → 36, + views.count = 37)</caption>
+        <thead><tr><th>Feature</th><th>Source</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="p">view.infps</td><td>plan</td><td>Planned input arrival rate (demand) for this instance.</td></tr>
+          <tr><td class="p">view.exec_cpu / _gpu / _npu</td><td>plan</td><td>One-hot of the assigned device.</td></tr>
+          <tr><td class="p">view.is_vision / is_llm</td><td>registry</td><td>Model-kind flags (vision vs generative).</td></tr>
+          <tr><td class="p">view.static_infer_sel</td><td>profile</td><td>Selected device's inference / prefill time (ms).</td></tr>
+          <tr><td class="p">view.static_load_sel</td><td>profile</td><td>Selected device's model-load time (ms).</td></tr>
+          <tr><td class="p">view.static_tokens_sel</td><td>profile</td><td>Selected device's tokens/sec (0 for vision).</td></tr>
+          <tr><td class="p">view.capacity_fps</td><td>derived</td><td>Uncontended device ceiling, 1000 / static_infer.</td></tr>
+          <tr><td class="p">view.load_factor</td><td>derived</td><td>infps / capacity — how hard the rate pushes the device.</td></tr>
+          <tr><td class="p">x.infps__static_infer_sel</td><td>cross</td><td>Interaction of demand and device latency.</td></tr>
+        </tbody>
+      </table></div>
+      <p class="callout"><b>No target leakage.</b> Measured throughput, wait time, and inference counts from the run are
+        excluded from features — only static-profile and plan quantities are used, so the same vector is reproducible at
+        inference without executing the placement.</p>
+    </section>
+
+    <section id="targets">
+      <h2><span class="num">§6</span>Targets &amp; normalization</h2>
+      <p class="sec-note">Three targets are regressed independently so the runtime score's α/β can change without retraining.
+        Throughput targets are normalized to [0,1] per (workload, rate) group by the max observed there —
+        <code>T = F / Fmax</code> — matching the paper. The miss rate is already in [0,1].</p>
+      <div class="grid2">
+        <div class="kv"><div class="k" style="color:var(--y1)">y1 · norm throughput</div><div class="v">F / Fmax ∈ [0,1]</div><div class="sub">Σ vision FPS, normalized per (workload, rate)</div></div>
+        <div class="kv"><div class="k" style="color:var(--y2)">y2 · deadline miss</div><div class="v">[0,1]</div><div class="sub">mean of per-application miss rates</div></div>
+        <div class="kv"><div class="k" style="color:var(--y3)">y3 · norm tokens</div><div class="v">F / Fmax ∈ [0,1]</div><div class="sub">Σ LLM/VLM tokens/sec, normalized per group</div></div>
+      </div>
+      <div class="formula" style="margin-top:14px">runtime score &nbsp; S(x) = ŷ₁ + β·ŷ₃ − α·ŷ₂ &nbsp;&nbsp;·&nbsp;&nbsp; α = 0.3, β = 0.5 &nbsp;<span style="color:var(--muted)">(applied at predict time only — not trained)</span></div>
+    </section>
+
+    <section id="static">
+      <h2><span class="num">§7</span>Static profile — the feature source</h2>
+      <p class="sec-note">Produced once by <code>profile_models.py</code>. Per model: per-device inference/prefill time,
+        load time, tokens/sec, and the <code>baseline_rate</code> (1× input rate = slowest allowed device throughput).</p>
+      <div class="tbl-scroll"><table>
+        <caption>sample_profiling_data.json · inference time (ms) and baseline rate</caption>
+        <thead><tr><th>Model</th><th class="num">baseline rate</th><th class="num">cpu infer</th><th class="num">gpu infer</th><th class="num">npu infer</th></tr></thead>
+        <tbody>
+          <tr><td class="p">yolo11n</td><td class="num">47.0 fps</td><td class="num">21.28</td><td class="num">4.11</td><td class="num">2.88</td></tr>
+          <tr><td class="p">yolo11s</td><td class="num">47.0 fps</td><td class="num">21.27</td><td class="num">4.06</td><td class="num">3.98</td></tr>
+          <tr><td class="p">yolo11m</td><td class="num">43.9 fps</td><td class="num">22.76</td><td class="num">3.35</td><td class="num">5.75</td></tr>
+          <tr><td class="p">yolo11l</td><td class="num">36.4 fps</td><td class="num">27.49</td><td class="num">3.41</td><td class="num">7.60</td></tr>
+          <tr><td class="p">yolo11x</td><td class="num">49.4 fps</td><td class="num">20.24</td><td class="num">3.46</td><td class="num">14.15</td></tr>
+          <tr><td class="p">resnet50</td><td class="num">92.4 fps</td><td class="num">10.83</td><td class="num">2.02</td><td class="num">1.90</td></tr>
+          <tr><td class="p">llama1b</td><td class="num">0.14 gen/s</td><td class="num">154.7</td><td class="num">9.50</td><td class="num">81.19</td></tr>
+          <tr><td class="p">qwen2_vl</td><td class="num">0.22 gen/s</td><td class="num">12302</td><td class="num">99.81</td><td class="num">613.8</td></tr>
+        </tbody>
+      </table></div>
+      <p style="font-size:13.5px;color:var(--muted)">LLM/VLM "infer" is prefill (ms); their baseline rate is generations/sec.
+        qwen2_vl on CPU (12.3&nbsp;s prefill) is why it is constrained off CPU.</p>
+    </section>
+
+    <section id="params">
+      <h2><span class="num">§8</span>Training parameters</h2>
+      <p class="sec-note">Three XGBoost regressors, squared-error objective, predictions clipped to [0,1]. Each target's
+        <code>max_depth</code>/<code>eta</code> is selected by 3-fold CV over a small grid, minimizing MAE.</p>
+      <div class="grid2">
+        <div class="kv"><div class="k">objective</div><div class="v">reg:squarederror</div><div class="sub">all three targets · eval_metric rmse</div></div>
+        <div class="kv"><div class="k">num_boost_round</div><div class="v">300</div></div>
+        <div class="kv"><div class="k">CV</div><div class="v">3-fold · MAE</div><div class="sub">per-target selection</div></div>
+        <div class="kv"><div class="k">grid (max_depth · eta)</div><div class="v">3·0.1 · 4·0.1 · 5·0.05 · 6·0.1</div></div>
+        <div class="kv"><div class="k">subsample / colsample_bytree</div><div class="v">0.8 / 0.8</div></div>
+        <div class="kv"><div class="k">min_child_weight / seed</div><div class="v">3 / 42</div></div>
+      </div>
+      <p>Rows used for training = 120 (1× / 2× / 4×). Outputs: <code>&lt;prefix&gt;_y1.json</code>,
+        <code>_y2.json</code>, <code>_y3.json</code>, and <code>_features.json</code> (the frozen column order).</p>
+    </section>
+
+    <hr class="soft">
+
+    <section id="schema">
+      <h2><span class="num">§9</span>Window schema</h2>
+      <p class="sec-note">One entry in a <code>performance_*.json</code> <code>data</code> array. The trainer reads
+        <code>total</code> (targets), <code>models</code> (per-view execution for features), and the
+        <code>rate_factor</code>/<code>workload</code> tags.</p>
+      <div class="cmd"><span class="ln">{</span><span class="ln">  <span class="st">"combination"</span>: <span class="st">"combination_37"</span>, <span class="st">"window_sec"</span>: 8.0,</span><span class="ln">  <span class="st">"rate_factor"</span>: 1.0, <span class="st">"workload"</span>: <span class="st">"yolo11n"</span>, <span class="st">"schedule file"</span>: <span class="st">"model_schedules.yaml"</span>,</span><span class="ln">  <span class="st">"models"</span>: {</span><span class="ln">    <span class="st">"view1"</span>: { <span class="st">"model"</span>:<span class="st">"yolo11n"</span>, <span class="st">"execution"</span>:<span class="st">"CPU"</span>, <span class="cm">// -> features</span></span><span class="ln">              <span class="st">"throughput_fps"</span>:3.0, <span class="st">"tokens_per_s"</span>:0.0, <span class="cm">// -> labels</span></span><span class="ln">              <span class="st">"deadline_miss_rate"</span>:1.0, <span class="st">"frames_total"</span>:376, <span class="st">"on_time_count"</span>:0 },</span><span class="ln">    <span class="st">"view2..4"</span>: { ... resnet50 / llama1b / qwen2_vl ... }</span><span class="ln">  },</span><span class="ln">  <span class="st">"total"</span>: { <span class="cm">// window-level TARGETS</span></span><span class="ln">    <span class="st">"total_throughput_fps"</span>: 11.84,  <span class="cm">// -> y1 (raw, normalized later)</span></span><span class="ln">    <span class="st">"total_tokens_per_s"</span>: 8.58,     <span class="cm">// -> y3 (raw)</span></span><span class="ln">    <span class="st">"deadline_miss_rate"</span>: 0.875 }    <span class="cm">// -> y2</span></span><span class="ln">}</span></div>
+    </section>
+
+    <section id="files">
+      <h2><span class="num">§10</span>Where it lives</h2>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Path</th><th>Contents</th></tr></thead>
+        <tbody>
+          <tr><td class="p">…/sample_profiling_data/sample_profiling_data.json</td><td>Static profile (feature source, baseline rates).</td></tr>
+          <tr><td class="p">performance_data/train/performance_ratesweep.json</td><td>3-device dataset · 160 windows.</td></tr>
+          <tr><td class="p">performance_data/cpu_gpu/performance.json</td><td>CPU+GPU platform dataset · 160 windows.</td></tr>
+          <tr><td class="p">performance_data/cpu_npu/performance.json</td><td>CPU+NPU (MLA100) platform dataset · 160 windows.</td></tr>
+          <tr><td class="p">schedules_cpu_gpu.yaml · schedules_cpu_npu.yaml (+ .meta.json)</td><td>Placement × rate schedules + rate/workload tags.</td></tr>
+          <tr><td class="p">artifacts/deploy_cpu_gpu_y{1,2,3}.json · deploy_cpu_npu_y{1,2,3}.json</td><td>Trained per-platform predictors (+ _features.json).</td></tr>
+          <tr><td class="p">artifacts/train_dataset.csv</td><td>Engineered feature + target table (from <code>--dump_csv</code>).</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+  </main>
+</div>
+</div>
+
+<footer>
+  <div class="wrap">
+    Companion to the pipeline command reference. Split is by input-rate level (train 1×/2×/4×, hold out 3×);
+    targets are normalized per (workload, rate); features carry no measured performance to avoid target leakage.
+  </div>
+</footer>
