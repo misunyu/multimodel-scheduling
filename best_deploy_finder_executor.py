@@ -16,7 +16,7 @@ from pathlib import Path
 from PyQt5 import uic
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QDialog, QLabel, QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QDialog, QLabel, QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout, QMessageBox
 
 
 def discover_file_backed_models(models_root: str):
@@ -54,6 +54,35 @@ def discover_hf_backed_models(static_json_path):
                       if reg.kind_of(m) in ('llm', 'vlm') and m in profiled)
     except Exception:
         return []
+
+
+def _infer_model_prefix(p: Path) -> Path:
+    # Bare prefix (e.g. .../deploy_cpu_npu) whose _y1.json exists.
+    if not p.is_dir() and Path(str(p) + "_y1.json").exists():
+        return p
+    if p.is_dir():
+        y1_files = sorted(p.glob("*_y1.json"))
+        for y1 in y1_files:
+            prefix = y1.with_suffix("")  # remove .json
+            if prefix.name.endswith("_y1"):
+                prefix = prefix.with_name(prefix.name[:-3])
+            y2 = p / f"{prefix.name}_y2.json"
+            if y2.exists():
+                return p / prefix.name
+        raise FileNotFoundError(f"No valid model prefix with _y1.json and _y2.json found in: {p}")
+    else:
+        name = p.name
+        if name.endswith("_y1.json"):
+            prefix = name[:-len("_y1.json")]
+        elif name.endswith("_y2.json"):
+            prefix = name[:-len("_y2.json")]
+        else:
+            raise ValueError(f"Model file must end with _y1.json or _y2.json: {p}")
+        y1 = p.parent / f"{prefix}_y1.json"
+        y2 = p.parent / f"{prefix}_y2.json"
+        if not y1.exists() or not y2.exists():
+            raise FileNotFoundError(f"Missing counterpart JSON next to {p}. Expected both {y1.name} and {y2.name}.")
+        return p.parent / prefix
 
 
 class ModelChecklistModel(QStandardItemModel):
@@ -287,6 +316,51 @@ class BestDeployFinderApp(QMainWindow):
             raise FileNotFoundError(f"Static profiling JSON not found in: {[str(c) for c in candidates]}")
         return p
 
+    def check_selection_coverage(self, model_names, pred_model):
+        """Compare the checked models against the predictor's training coverage.
+
+        `<prefix>_coverage.json` records the model sets, view counts and devices
+        seen during training. A selection outside that distribution still yields
+        a prediction, but the ranking is extrapolated and should not be trusted.
+        Returns a list of human-readable warnings (empty when in-distribution).
+        """
+        import json
+        prefix = _infer_model_prefix(Path(pred_model))
+        cov_path = Path(str(prefix) + "_coverage.json")
+        if not cov_path.exists():
+            return [f"No training-coverage record next to the predictor "
+                    f"({cov_path.name}); cannot verify the selection is in-distribution."]
+        try:
+            cov = json.loads(cov_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            return [f"Could not read {cov_path.name}: {e}"]
+
+        selected = sorted(model_names)
+        warnings = []
+
+        if ",".join(selected) in set(cov.get("model_sets", [])):
+            return []  # exact training working set
+
+        unseen = [m for m in selected if m not in set(cov.get("models", []))]
+        if unseen:
+            warnings.append(f"Never trained on: {', '.join(unseen)}. "
+                            f"Trained models: {', '.join(cov.get('models', []))}.")
+
+        view_counts = cov.get("view_counts") or []
+        if view_counts and len(selected) not in view_counts:
+            warnings.append(f"{len(selected)} models selected, but training only covered "
+                            f"working sets of {', '.join(str(n) for n in view_counts)} models.")
+
+        # Models present in every training working set but missing from the selection.
+        sets = [set(s.split(",")) for s in cov.get("model_sets", []) if s]
+        if sets:
+            always = set.intersection(*sets)
+            missing = sorted(always - set(selected))
+            if missing:
+                warnings.append(f"Every training working set included {', '.join(missing)}, "
+                                f"which the selection omits; contention behaviour will differ.")
+        return warnings
+
     def build_schedule_from_selection(self, model_names, out_path: str) -> str:
         """Generate CPU + Mobilint-NPU placement candidates for the selected models.
 
@@ -386,37 +460,10 @@ class BestDeployFinderApp(QMainWindow):
             _iter_combos_from_schedule,
         )
 
-        def _infer_model_prefix(p: Path) -> Path:
-            # Bare prefix (e.g. .../deploy_cpu_npu) whose _y1.json exists.
-            if not p.is_dir() and Path(str(p) + "_y1.json").exists():
-                return p
-            if p.is_dir():
-                y1_files = sorted(p.glob("*_y1.json"))
-                for y1 in y1_files:
-                    prefix = y1.with_suffix("")  # remove .json
-                    if prefix.name.endswith("_y1"):
-                        prefix = prefix.with_name(prefix.name[:-3])
-                    y2 = p / f"{prefix.name}_y2.json"
-                    if y2.exists():
-                        return p / prefix.name
-                raise FileNotFoundError(f"No valid model prefix with _y1.json and _y2.json found in: {p}")
-            else:
-                name = p.name
-                if name.endswith("_y1.json"):
-                    prefix = name[:-len("_y1.json")]
-                elif name.endswith("_y2.json"):
-                    prefix = name[:-len("_y2.json")]
-                else:
-                    raise ValueError(f"Model file must end with _y1.json or _y2.json: {p}")
-                y1 = p.parent / f"{prefix}_y1.json"
-                y2 = p.parent / f"{prefix}_y2.json"
-                if not y1.exists() or not y2.exists():
-                    raise FileNotFoundError(f"Missing counterpart JSON next to {p}. Expected both {y1.name} and {y2.name}.")
-                return p.parent / prefix
-
         sched_path = Path(schedule_yaml_path)
         if not sched_path.exists():
             raise FileNotFoundError(f"Schedule YAML not found: {schedule_yaml_path}")
+
         model_prefix = _infer_model_prefix(Path(model_input_path))
 
         static_json_path = self._resolve_static_json()
@@ -591,6 +638,28 @@ class BestDeployFinderApp(QMainWindow):
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
             return
+
+        # Step 0: Warn when the selection lies outside the predictor's training
+        # distribution -- the ranking is then an extrapolation, not a fit.
+        try:
+            ood = self.check_selection_coverage(selected, pred_model)
+        except Exception as e:
+            ood = [f"Coverage check failed: {e}"]
+        if ood:
+            for w in ood:
+                self.log(f"[Warning][OOD] {w}")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Selection outside training distribution")
+            box.setText("The selected models do not match any working set the "
+                        "predictor was trained on. Predictions will be extrapolated "
+                        "and the ranking may be unreliable.")
+            box.setInformativeText("\n\n".join(f"• {w}" for w in ood))
+            box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+            box.setDefaultButton(QMessageBox.Cancel)
+            if box.exec_() != QMessageBox.Ok:
+                self.log("[Predict] Cancelled by user (out-of-distribution selection).")
+                return
 
         # Step 1: Generate schedule YAML (using generate_all_combinations)
         try:

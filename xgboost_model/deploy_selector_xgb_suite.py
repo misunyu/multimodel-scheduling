@@ -300,6 +300,8 @@ def featurize_window(window: Dict[str, Any],
                      ) -> Tuple[Dict[str, float], Tuple[float, float, float], Dict[str, Any]]:
     models = window.get("models", {})
     per_view_rows: List[Dict[str, float]] = []
+    model_names: List[str] = []
+    devices: List[str] = []
     y1_vision_fps = 0.0
     y3_tokens = 0.0
     for _, view in models.items():
@@ -312,6 +314,8 @@ def featurize_window(window: Dict[str, Any],
         if infps_map is not None:
             infps = float(infps_map.get((model_name, dev), 0.0))
         per_view_rows.append(_view_features(model_name, dev, infps, S))
+        model_names.append(str(model_name))
+        devices.append(dev)
         if _is_vision(model_name):
             y1_vision_fps += float(view.get("throughput_fps", 0.0) or 0.0)
         else:
@@ -338,6 +342,9 @@ def featurize_window(window: Dict[str, Any],
         "schedule_file": window.get("schedule file") or window.get("schedule_file") or window.get("schedule"),
         "workload": window.get("workload"),
         "rate_factor": window.get("rate_factor"),
+        # Model set / devices of this window, used to record training coverage.
+        "models": ",".join(sorted(model_names)),
+        "devices": ",".join(sorted(set(devices))),
     }
     # y1_vision_fps and y3_tokens are RAW here; normalized per-workload in build_dataset.
     return X, (y1_vision_fps, y2, y3_tokens), meta
@@ -509,6 +516,30 @@ def _cv_select_params(xgb, Xv, yv, feat_names, folds=3, rounds=300):
     return best or dict(_PARAMS), best_mae
 
 
+def write_coverage(M: pd.DataFrame, model_out_prefix: Path) -> Dict[str, Any]:
+    """Record which model sets / devices / rates the predictor actually saw.
+
+    Consumers (e.g. the deploy-finder GUI) compare a user's selection against
+    this to warn when a request falls outside the training distribution.
+    """
+    def _sets(col):
+        if col not in M.columns:
+            return []
+        return sorted({s for s in M[col].dropna().astype(str) if s})
+
+    model_sets = _sets("models")
+    coverage = {
+        "model_sets": model_sets,
+        "models": sorted({m for s in model_sets for m in s.split(",") if m}),
+        "view_counts": sorted({len([m for m in s.split(",") if m]) for s in model_sets}),
+        "devices": sorted({d for s in _sets("devices") for d in s.split(",") if d}),
+        "rate_factors": sorted({float(r) for r in M.get("rate_factor", pd.Series(dtype=float)).dropna()}),
+        "rows": int(len(M)),
+    }
+    Path(str(model_out_prefix) + "_coverage.json").write_text(json.dumps(coverage, indent=2), encoding="utf-8")
+    return coverage
+
+
 def train_targets(X: pd.DataFrame, Y: pd.DataFrame, model_out_prefix: Path) -> None:
     xgb = _lazy_import_xgb()
     feat_names = list(X.columns)
@@ -594,7 +625,10 @@ def main():
             dump.to_csv(args.dump_csv, index=False)
             print(f"[INFO] wrote dataset -> {args.dump_csv} rows={len(dump)}")
         train_targets(X, Y, prefix)
+        cov = write_coverage(M, prefix)
         print(f"[OK] saved -> {prefix}_y1.json, {prefix}_y2.json, {prefix}_y3.json (rows={len(X)})")
+        print(f"[OK] coverage -> {prefix}_coverage.json "
+              f"(models={cov['models']}, views={cov['view_counts']}, rates={cov['rate_factors']})")
 
     elif args.cmd == "predict":
         S = load_static_profiles(Path(args.static_json))
