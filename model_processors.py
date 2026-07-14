@@ -231,7 +231,8 @@ def run_detection_process(input_queue, output_queue, shutdown_event,
                           preprocess_time_ms=(t_inf - t_pre) * 1000.0,
                           inference_time_ms=infer_ms,
                           postprocess_time_ms=(t_end - t_post) * 1000.0,
-                          wait_to_preprocess_ms=wait_ms)
+                          wait_to_preprocess_ms=wait_ms,
+                          n_boxes=len(dets))
             try:
                 output_queue.put_nowait((out_frame, infer_ms, wait_ms, latency_ms))
             except queue.Full:
@@ -425,7 +426,8 @@ def _run_generative(input_queue, output_queue, shutdown_event, device, view_name
                       device=("NPU" if device == "npu" else device.upper()),
                       view=view_name, model=model_name,
                       preprocess_time_ms=0.0, inference_time_ms=gen_ms,
-                      postprocess_time_ms=0.0, wait_to_preprocess_ms=wait_ms)
+                      postprocess_time_ms=0.0, wait_to_preprocess_ms=wait_ms,
+                      tokens_per_s=tok_s, n_out=r.get("n_out"))
         _emit(("done", gen_ms, tok_s, latency_ms))
     engine.dispose()
 

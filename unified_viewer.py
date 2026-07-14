@@ -404,6 +404,16 @@ class UnifiedViewer(QMainWindow):
         """
         self.display_slot_of = {}
         skipped = []
+
+        # Data collection runs with rendering off: drawing costs CPU in the same
+        # process that feeds the workers, and the whitelist means only some models in
+        # a set pay it -- so leaving it on puts a per-model rendering cost into the
+        # training labels that has nothing to do with placement. The demo keeps it on.
+        if os.environ.get("DISABLE_VISUALIZATION", "0") == "1":
+            print("[UnifiedViewer] DISABLE_VISUALIZATION=1 -- rendering off; "
+                  "all views run headless (execution and measurement unchanged).")
+            return
+
         for view in self.view_names:
             model = (self.model_settings.get(view, {}) or {}).get("model", "")
             if model in VISUALIZABLE_MODELS:

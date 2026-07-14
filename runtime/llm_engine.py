@@ -38,6 +38,12 @@ def _pil_from_bgr(frame):
     return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
 
+# NPU core allocation for the text LLM, stated rather than inherited from the zoo's
+# fallback. qwen2_vl pins the same thing in its own config (text: single/0:0, vision:
+# multi/cluster1 = 4 cores), so both generative models sit on one text core.
+NPU_LLM_CORES = {"core_mode": "single", "target_cores": ["0:0"]}
+
+
 class LLMEngine:
     def __init__(self, model_name: str, device: str, max_new_tokens: int = 64):
         self.model_name = model_name
@@ -67,6 +73,18 @@ class LLMEngine:
         kw = dict(trust_remote_code=True)
         if revision:
             kw["revision"] = revision
+
+        # Pin the NPU core allocation explicitly instead of inheriting it.
+        # llama1b's config.json carries no `core_mode`, so the zoo falls back to its
+        # default ("single", 1 core). That default is invisible from here and could
+        # change with an SDK bump, which would silently re-scale every llama1b number
+        # we measure. State it. One core is also what the existing static profile and
+        # all previously collected data were measured with, and what qwen2_vl's text
+        # model already pins in its own config -- so this keeps the two consistent
+        # rather than having llama1b quietly take eight cores away from the vision
+        # models it is being scheduled against.
+        if self.device == "npu" and self.kind == "llm":
+            kw.update(NPU_LLM_CORES)
         t0 = time.time()
         if self.kind == "vlm":
             from transformers import AutoModelForImageTextToText

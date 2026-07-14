@@ -8,7 +8,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QPixmap
 
 # Import local modules
-from utils import create_x_image, convert_cv_to_qt, async_log
+from utils import create_x_image, convert_cv_to_qt, async_log, log_visualize
 import demo_render as dr
 
 class ModelSignals(QObject):
@@ -118,15 +118,24 @@ class ViewHandler:
 
     # ---- demo rendering helpers -------------------------------------------------
     def emit_image(self, bgr):
-        """Push a BGR frame to this view's QLabel. Safe to call when headless."""
+        """Push a BGR frame to this view's QLabel. Safe to call when headless.
+
+        Timed as the pipeline's 4th stage: this runs on the CPU in the GUI process no
+        matter where the model was placed, so it is a cost the placement cannot remove.
+        """
         if self.update_signal is None or bgr is None:
             return
+        t0 = time.time()
         try:
             pixmap = convert_cv_to_qt(bgr)
             if not pixmap.isNull():
                 self.update_signal.emit(pixmap)
         except Exception as e:
             print(f"[{self.view_name} render ERROR] {e}")
+            return
+        log_visualize(view=self.view_name, model=self.model_type,
+                      device=str(self.execution_mode).upper(),
+                      visualize_time_ms=(time.time() - t0) * 1000.0)
 
     def metric_text(self):
         """What the header shows on the right: FPS for vision views."""

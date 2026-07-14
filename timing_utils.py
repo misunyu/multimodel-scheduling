@@ -8,7 +8,9 @@ from datetime import datetime
 import time
 from contextlib import ContextDecorator
 
-RESULT_TIME_FILE = "result_pre_post_time.json"  # JSON Lines
+# JSON Lines. Overridable per run so a sweep can keep each run's trace separate
+# instead of appending every run into one file.
+RESULT_TIME_FILE = os.environ.get("RESULT_TIME_FILE", "result_pre_post_time.json")
 
 
 def should_record_time() -> bool:
@@ -33,6 +35,9 @@ def append_timing_record(record: dict):
     try:
         rec = dict(record)
         rec.setdefault("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        # Sub-second wall clock: the string timestamp has 1s resolution, too coarse to
+        # bin a convergence trace or to place an event inside the warmup window.
+        rec.setdefault("t_wall", time.time())
         rid = get_run_id()
         if rid:
             rec.setdefault("run_id", rid)
@@ -86,11 +91,17 @@ def log_model_load(pipeline: str, device: str, view: str, model: str,
 
 def log_inference(pipeline: str, device: str, view: str, model: str,
                   preprocess_time_ms: float, inference_time_ms: float,
-                  postprocess_time_ms: float, wait_to_preprocess_ms: float = 0.0):
-    """Convenience logger for per-frame inference timing, respects RECORD_TIME."""
+                  postprocess_time_ms: float, wait_to_preprocess_ms: float = 0.0,
+                  tokens_per_s: float = None, n_out: int = None, n_boxes: int = None):
+    """Convenience logger for per-frame inference timing, respects RECORD_TIME.
+
+    `tokens_per_s`/`n_out` are the LLM-VLM equivalent of a completed request; without
+    them a trace cannot show y3 (token throughput) converging. `n_boxes` lets a
+    detection trace explain its own postprocess cost (NMS scales with box count).
+    """
     if not should_record_time():
         return
-    append_timing_record({
+    rec = {
         "kind": "inference",
         "pipeline": pipeline,
         "device": device,
@@ -100,4 +111,29 @@ def log_inference(pipeline: str, device: str, view: str, model: str,
         "inference_time_ms": inference_time_ms,
         "postprocess_time_ms": postprocess_time_ms,
         "wait_to_preprocess_ms": wait_to_preprocess_ms,
+    }
+    if tokens_per_s is not None:
+        rec["tokens_per_s"] = tokens_per_s
+    if n_out is not None:
+        rec["n_out"] = n_out
+    if n_boxes is not None:
+        rec["n_boxes"] = n_boxes
+    append_timing_record(rec)
+
+
+def log_visualize(view: str, model: str, device: str, visualize_time_ms: float):
+    """Time spent turning a result into pixels (the pipeline's 4th stage).
+
+    It runs on the CPU in the GUI process no matter which device the model was placed
+    on, so it is a cost the placement decision cannot remove; it has to be measured
+    separately to be reasoned about.
+    """
+    if not should_record_time():
+        return
+    append_timing_record({
+        "kind": "visualize",
+        "view": view,
+        "model": model,
+        "device": device,
+        "visualize_time_ms": visualize_time_ms,
     })
