@@ -143,6 +143,92 @@ def _yolo_letterbox(frame_bgr, size):
     return np.ascontiguousarray(arr[None, ...]), (r, top, left)
 
 
+def _letterbox_meta(frame_bgr, size):
+    """The (scale, top, left) `_yolo_decode` needs to undo the letterbox.
+
+    The NPU's own preprocessor letterboxes with the same convention (centre-pad to a
+    square `size`), so the un-letterbox is identical; we just have to state it, since
+    we no longer get the mapping back from the zoo's result object.
+    """
+    h0, w0 = frame_bgr.shape[:2]
+    r = min(size / h0, size / w0)
+    nh, nw = int(round(h0 * r)), int(round(w0 * r))
+    return (r, (size - nh) // 2, (size - nw) // 2)
+
+
+def _limit_cpu_threads():
+    """One torch thread per VISION worker. Never call this from a generative worker.
+
+    Each view runs in its own process and torch defaults to one thread per core in
+    every one of them: 8 workers x 24 cores = 192 threads fighting over 24. In a vision
+    worker torch only runs NMS over a few hundred surviving boxes, so that parallelism
+    is pure dispatch overhead -- 35.9ms per frame with 24 threads against 1.9ms with 1.
+    Concurrency here comes from running the views in parallel, not from threading inside
+    one of them.
+
+    The generative workers are the opposite case: torch IS their engine (the whole model
+    on CPU, and the sampling/KV-cache work even on GPU). Pinning them to one thread
+    measured 38-40% slower generation (llama1b 1030 -> 1427ms on GPU), so they keep the
+    default.
+    """
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except Exception as e:
+        print(f"[worker] could not pin torch threads: {e}")
+
+
+def _npu_yolo_raw_to_pred(raw, reg_max=16, nc=80):
+    """Mobilint YOLO head outputs -> the same (1, 4+nc, N) tensor the ONNX export gives.
+
+    The NPU returns the raw decoupled head: per scale, a (H, W, 64) DFL box tensor and a
+    (H, W, 80) class-logit tensor. The ONNX export has the decode baked in and hands back
+    (1, 84, 8400) with xywh boxes and sigmoid scores. Converting here lets BOTH devices
+    run the identical `_yolo_decode`, so postprocessing is no longer a property of where
+    the model was placed -- which is the whole point: placement must change the inference
+    stage and nothing else, or the comparison is measuring our own code, not the hardware.
+
+    Mirrors the zoo's decode exactly: DFL = softmax over reg_max then expectation, boxes
+    as distance-to-box against cell-centre anchors scaled by stride, scores sigmoid'd.
+    """
+    dets = [np.asarray(t) for t in raw if np.asarray(t).shape[-1] == reg_max * 4]
+    clss = [np.asarray(t) for t in raw if np.asarray(t).shape[-1] == nc]
+    # Largest grid first (80, 40, 20) -- the zoo sorts by numel descending.
+    dets.sort(key=lambda a: a.size, reverse=True)
+    clss.sort(key=lambda a: a.size, reverse=True)
+    if len(dets) != len(clss):
+        raise ValueError(f"NPU head mismatch: {len(dets)} box vs {len(clss)} cls tensors")
+
+    bins = np.arange(reg_max, dtype=np.float32)
+    boxes, scores = [], []
+    for d, c in zip(dets, clss):
+        h, w = d.shape[0], d.shape[1]
+        stride = 640.0 / h            # 8, 16, 32 for 80/40/20 grids
+        # DFL: (H*W, 4, reg_max) -> expectation over the softmaxed bins -> ltrb in cells
+        b = d.reshape(-1, 4, reg_max).astype(np.float32)
+        b -= b.max(axis=2, keepdims=True)          # stable softmax
+        np.exp(b, out=b)
+        b /= b.sum(axis=2, keepdims=True)
+        ltrb = b @ bins                            # (H*W, 4)
+
+        ys, xs = np.mgrid[0:h, 0:w]
+        ax = (xs.reshape(-1) + 0.5).astype(np.float32)
+        ay = (ys.reshape(-1) + 0.5).astype(np.float32)
+        x1 = (ax - ltrb[:, 0]) * stride
+        y1 = (ay - ltrb[:, 1]) * stride
+        x2 = (ax + ltrb[:, 2]) * stride
+        y2 = (ay + ltrb[:, 3]) * stride
+        # ONNX hands back xywh, so match it.
+        boxes.append(np.stack([(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1], axis=1))
+
+        s = c.reshape(-1, nc).astype(np.float32)
+        scores.append(1.0 / (1.0 + np.exp(-s)))    # sigmoid
+
+    pred = np.concatenate([np.concatenate(boxes, axis=0),
+                           np.concatenate(scores, axis=0)], axis=1)   # (N, 84)
+    return pred.T[None, ...]                                          # (1, 84, N)
+
+
 def _yolo_decode(raw_out, meta, conf_thres, iou_thres):
     """Decode YOLOv8/v11 ONNX output (1, 4+nc, N) -> [(x1,y1,x2,y2,score,cls)] in original coords."""
     out = raw_out[0]
@@ -183,6 +269,7 @@ def _draw_dets(frame, dets):
 def run_detection_process(input_queue, output_queue, shutdown_event,
                           device="cpu", view_name=None, model_name="yolo11s",
                           conf_thres=0.25, iou_thres=0.45):
+    _limit_cpu_threads()
     device = reg.norm_device(device)
     spec = reg.get(model_name)
     size = int(spec.get("input_size", 640))
@@ -212,8 +299,12 @@ def run_detection_process(input_queue, output_queue, shutdown_event,
                 t_inf = time.time()
                 raw = model(x)
                 t_post = time.time()
-                res = model.postprocess(raw, conf_thres=conf_thres, iou_thres=iou_thres)
-                dets = npu_detections(res, frame)
+                # Same decoder as CPU/GPU. The zoo's postprocess is not used here: it
+                # decodes with torch on the full 8400-anchor grid, and under N worker
+                # processes each defaulting to one thread per core that collapsed into
+                # 243ms/frame -- a software cost that was being attributed to the NPU.
+                dets = _yolo_decode([_npu_yolo_raw_to_pred(raw)],
+                                    _letterbox_meta(frame, size), conf_thres, iou_thres)
             else:
                 x, meta = _yolo_letterbox(frame, size)
                 t_inf = time.time()
@@ -275,6 +366,7 @@ def _label(class_id):
 
 def run_classification_process(input_queue, output_queue, shutdown_event,
                                device="cpu", view_name=None, model_name="resnet50"):
+    _limit_cpu_threads()
     device = reg.norm_device(device)
     try:
         if device == "npu":
