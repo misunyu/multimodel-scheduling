@@ -54,6 +54,15 @@ from model_processors import (
 )
 import model_registry as reg
 
+# Repo root, resolved from this file rather than the cwd. The .ui files and the
+# sample video live here; resolving them relatively meant that launching the app
+# from any other directory killed it on startup with a bare FileNotFoundError.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _asset(name: str) -> str:
+    return os.path.join(_HERE, name)
+
 # The .ui provides four QLabel slots and four display signals. A schedule may
 # activate more concurrent models than that; the extra views run headless —
 # they execute and contribute to the statistics, they just aren't rendered.
@@ -69,7 +78,7 @@ class InfoWindow(QWidget):
         """Initialize the InfoWindow."""
         super().__init__()
         # Load UI from file instead of creating components programmatically
-        uic.loadUi("info_window.ui", self)
+        uic.loadUi(_asset("info_window.ui"), self)
         # Set window flags to make it behave like a main window and always stay on top of other app windows
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         
@@ -261,7 +270,7 @@ class UnifiedViewer(QMainWindow):
             combination_name (str|None): Specific combination key to use from the YAML. If None, default logic applies.
         """
         super().__init__()
-        uic.loadUi("schedule_executor_display.ui", self)
+        uic.loadUi(_asset("schedule_executor_display.ui"), self)
         
         # Set up signal handler for SIGINT (Ctrl+C)
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -430,7 +439,7 @@ class UnifiedViewer(QMainWindow):
         # Start video reader process
         self.video_reader_proc = Process(
             target=video_reader_process,
-            args=("stockholm_1280x720.mp4", self.video_frame_queue, self.video_shutdown_event),
+            args=(_asset("stockholm_1280x720.mp4"), self.video_frame_queue, self.video_shutdown_event),
             daemon=True
         )
         self.video_reader_proc.start()

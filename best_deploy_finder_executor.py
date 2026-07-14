@@ -14,7 +14,7 @@ import sys
 import argparse
 from pathlib import Path
 from PyQt5 import uic
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QProcess
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QBrush
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QFileDialog, QDialog, QLabel,
                              QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout, QMessageBox,
@@ -31,6 +31,11 @@ DEVICE_PROFILES = {
                 "devices": ["cpu", "gpu"]},
 }
 DEFAULT_DEVICE_PROFILE = "CPU-NPU"
+
+# Executors still running when the GUI closes are moved here so Python does not
+# garbage-collect the QProcess (which would take the running child down with it).
+# The old Popen-based launch let the executor outlive the GUI; keep that.
+_DETACHED_EXECUTORS = []
 
 
 def discover_file_backed_models(models_root: str):
@@ -761,11 +766,32 @@ class BestDeployFinderApp(QMainWindow):
     def _launch_executor_subprocess(self, schedule_path: str, combo_name: str = None, duration: int = None):
         """Launch schedule_executor_main.py in a separate process to avoid nested QApps.
         If combo_name is provided, run executor-only mode for that single combination.
+
+        Run under QProcess, not a bare Popen, for two reasons the old code got wrong:
+        its output was never read, so a child that died on startup did so invisibly --
+        no window, no error, nothing; and it inherited this GUI's cwd, while the
+        executor resolves its assets (the .ui files, the video, models/) relative to
+        the repo root, so launching the GUI from anywhere else killed the child
+        instantly. Pin the working directory and stream the child's output into the log.
         """
-        import subprocess
-        py = sys.executable or 'python'
-        exec_path = os.path.join(os.path.dirname(__file__), 'schedule_executor_main.py')
-        args = [py, exec_path, '--schedule', schedule_path]
+        from collections import deque
+        from PyQt5.QtCore import QProcessEnvironment
+        root = os.path.dirname(os.path.abspath(__file__))
+
+        # Launch via schedule_executor_main.sh, NOT sys.executable. sys.executable is
+        # whatever interpreter started this GUI -- from an IDE that is typically some
+        # unrelated venv with no Mobilint SDK and no transformers, and the child
+        # inherited it, so every view worker died on import ("No module named
+        # 'mblt_model_zoo'") and the views rendered nothing. The shell script sources
+        # runtime_env.sh, which is the one place that knows the right interpreter.
+        launcher = os.path.join(root, 'schedule_executor_main.sh')
+        program, args = launcher, ['--schedule', schedule_path]
+        if not os.path.exists(launcher):
+            program = sys.executable or 'python'
+            args = ['-u', os.path.join(root, 'schedule_executor_main.py'),
+                    '--schedule', schedule_path]
+            self.log(f"[Warning] {os.path.basename(launcher)} not found; falling back to "
+                     f"{program}, which may lack the Mobilint SDK.")
         if duration is not None:
             try:
                 d = int(duration)
@@ -773,12 +799,78 @@ class BestDeployFinderApp(QMainWindow):
             except Exception:
                 pass
         if combo_name:
-            args += ['--schedule-name', combo_name]
-        self.log(f"[Exec] Launching executor: {' '.join(args)}")
-        try:
-            subprocess.Popen(args)
-        except Exception as e:
-            self.log(f"[Error] Failed to launch executor: {e}")
+            args += ['--schedule_name', combo_name]
+
+        proc = QProcess(self)
+        proc.setWorkingDirectory(root)
+        proc.setProgram(program)
+        proc.setArguments(args)
+        # Unbuffered, so the child's output reaches the log as it happens instead of
+        # sitting in a pipe buffer that is lost if it dies.
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONUNBUFFERED", "1")
+        proc.setProcessEnvironment(env)
+        stderr_tail = deque(maxlen=20)
+
+        def _drain_stdout():
+            text = bytes(proc.readAllStandardOutput()).decode('utf-8', 'replace')
+            for line in text.splitlines():
+                if line.strip():
+                    self.log(f"[Exec] {line}")
+
+        def _drain_stderr():
+            text = bytes(proc.readAllStandardError()).decode('utf-8', 'replace')
+            for line in text.splitlines():
+                if line.strip():
+                    stderr_tail.append(line)
+                    self.log(f"[Exec][stderr] {line}")
+
+        def _finished(code, status):
+            _drain_stdout()
+            _drain_stderr()
+            if code != 0:
+                self.log(f"[Error] executor exited with code {code}")
+                for line in stderr_tail:
+                    self.log(f"[Error]   {line}")
+            else:
+                self.log("[Exec] executor exited normally (code 0).")
+            self._executor_procs.discard(proc)
+
+        def _error(err):
+            self.log(f"[Error] Failed to launch executor: {proc.errorString()} ({err})")
+            self._executor_procs.discard(proc)
+
+        proc.readyReadStandardOutput.connect(_drain_stdout)
+        proc.readyReadStandardError.connect(_drain_stderr)
+        proc.finished.connect(_finished)
+        proc.errorOccurred.connect(_error)
+
+        # Hold a reference: a QProcess that gets garbage-collected is killed.
+        if not hasattr(self, '_executor_procs'):
+            self._executor_procs = set()
+        self._executor_procs.add(proc)
+
+        self.log(f"[Exec] Launching executor (cwd={root}): {program} {' '.join(args)}")
+        proc.start()
+
+    def closeEvent(self, event):
+        """Let a running executor outlive this window, instead of dying with it.
+
+        The output callbacks are bound to widgets that are about to be destroyed, so
+        disconnect them first: otherwise they fire on a deleted QProcess and the GUI
+        goes down with a RuntimeError on the way out.
+        """
+        for proc in list(getattr(self, '_executor_procs', ())):
+            for signal in (proc.readyReadStandardOutput, proc.readyReadStandardError,
+                           proc.finished, proc.errorOccurred):
+                try:
+                    signal.disconnect()
+                except TypeError:
+                    pass  # nothing was connected to this one
+            if proc.state() != QProcess.NotRunning:
+                proc.setParent(None)
+                _DETACHED_EXECUTORS.append(proc)
+        super().closeEvent(event)
 
     def on_load_execute_best_clicked(self):
         """Load best predicted deployment and start execution.
