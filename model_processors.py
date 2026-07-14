@@ -39,6 +39,18 @@ except Exception:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _report_view_error(output_queue, message):
+    """Push a failure to the view so it renders a labelled placeholder.
+
+    A worker that dies silently leaves a black tile, which in a demo is
+    indistinguishable from the whole app being broken.
+    """
+    try:
+        output_queue.put_nowait(("error", str(message)))
+    except Exception:
+        pass
+
+
 def _drain_item(input_queue, timeout=1.0):
     """Pop one item, normalizing (frame, ts) vs frame."""
     try:
@@ -216,6 +228,7 @@ def run_detection_process(input_queue, output_queue, shutdown_event,
                 pass
     except Exception as e:
         print(f"[Detection {device} view={view_name}] FATAL: {type(e).__name__}: {e}")
+        _report_view_error(output_queue, f"{type(e).__name__}: {e}")
         if device == "gpu":
             shutdown_event.set()
     finally:
@@ -287,11 +300,21 @@ def run_classification_process(input_queue, output_queue, shutdown_event,
                 t_post = time.time()
                 class_id = int(np.argmax(np.squeeze(logits)))
             class_name = _label(class_id)
-            out = frame.copy()
+            # top-5 for the demo's bar chart; top-1 stays authoritative for the stats.
             try:
-                cv2.putText(out, class_name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-            except Exception:
-                pass
+                if device == "npu":
+                    from runtime.mobilint_vision import npu_topk
+                    top5 = [(_label(cid), p) for cid, p in npu_topk(res, 5)]
+                else:
+                    s = np.squeeze(logits).astype(np.float64)
+                    e = np.exp(s - s.max())
+                    probs = e / max(e.sum(), 1e-9)
+                    top5 = [(_label(int(i)), float(probs[i]))
+                            for i in np.argsort(probs)[::-1][:5]]
+            except Exception as e:
+                print(f"[Classification view={view_name}] top-5 unavailable: {e}")
+                top5 = [(class_name, 1.0)]
+            out = frame.copy()
             t_end = time.time()
 
             infer_ms = (t_post - t_inf) * 1000.0
@@ -304,11 +327,13 @@ def run_classification_process(input_queue, output_queue, shutdown_event,
                           postprocess_time_ms=(t_end - t_post) * 1000.0,
                           wait_to_preprocess_ms=wait_ms)
             try:
-                output_queue.put_nowait((out, class_name, infer_ms, latency_ms))
+                output_queue.put_nowait((out, top5, infer_ms, latency_ms))
             except queue.Full:
                 pass
     except Exception as e:
         print(f"[Classification {device} view={view_name}] FATAL: {type(e).__name__}: {e}")
+        # Tell the view so it can show "Load failed" instead of staying black.
+        _report_view_error(output_queue, f"{type(e).__name__}: {e}")
         if device == "gpu":
             shutdown_event.set()
     finally:
@@ -320,11 +345,21 @@ def run_classification_process(input_queue, output_queue, shutdown_event,
 
 
 # ---------------------------------------------------------------------------
-# LLM / VLM — headless workers (profiling + placement only, not displayed)
+# LLM / VLM — token-streaming workers
 # ---------------------------------------------------------------------------
 
 def _run_generative(input_queue, output_queue, shutdown_event, device, view_name,
-                    model_name, infps, max_new_tokens, is_vlm):
+                    model_name, infps, max_new_tokens, is_vlm, prompt_override=None):
+    """Generate, streaming each decoded piece to the view as it arrives.
+
+    Emits tagged messages so the view can type the answer out rather than receive it
+    all at once (a completed paragraph appearing in one frame reads as a frozen view):
+        ("start", frame_or_None, prompt)  -- new generation begins
+        ("token", piece)                  -- one decoded piece
+        ("done", gen_ms, tokens_per_s, latency_ms)
+    Stats are unchanged: ("done",) carries what the old (None, gen_ms, tok_s, lat)
+    tuple carried.
+    """
     device = reg.norm_device(device)
     from runtime.llm_engine import LLMEngine
     t0 = time.time()
@@ -333,9 +368,17 @@ def _run_generative(input_queue, output_queue, shutdown_event, device, view_name
                    view=view_name, model=model_name, model_load_time_ms=(time.time() - t0) * 1000.0)
 
     interval = (1.0 / infps) if (infps and infps > 0) else 0.0
-    from runtime.llm_engine import LLM_PROMPTS
+    from runtime.llm_engine import LLM_PROMPTS, DEFAULT_PROMPT
+    prompts = [prompt_override] if prompt_override else LLM_PROMPTS
     idx = 0
     last = 0.0
+
+    def _emit(msg):
+        try:
+            output_queue.put_nowait(msg)
+        except queue.Full:
+            pass  # a view that fell behind gets the next token, not a stall
+
     while not shutdown_event.is_set():
         now = time.time()
         if interval and (now - last) < interval:
@@ -347,14 +390,22 @@ def _run_generative(input_queue, output_queue, shutdown_event, device, view_name
             frame, enq_ts = _drain_item(input_queue, timeout=0.5)
             if frame is None:
                 continue
-        prompt = None if is_vlm else LLM_PROMPTS[idx % len(LLM_PROMPTS)]
+        if is_vlm:
+            prompt = prompt_override or DEFAULT_PROMPT
+        else:
+            prompt = prompts[idx % len(prompts)]
         idx += 1
         t_start = time.time()
         wait_ms = ((t_start - enq_ts) * 1000.0) if enq_ts else 0.0
+
+        _emit(("start", frame, prompt))
         try:
-            r = engine.infer(prompt=prompt, frame=frame, max_new_tokens=max_new_tokens)
+            r = engine.infer_stream(lambda piece: _emit(("token", piece)),
+                                    prompt=(None if is_vlm and not prompt_override else prompt),
+                                    frame=frame, max_new_tokens=max_new_tokens)
         except Exception as e:
             print(f"[{'VLM' if is_vlm else 'LLM'} {device} view={view_name}] infer error: {e}")
+            _emit(("error", f"generation failed: {e}"))
             continue
         last = time.time()
         gen_ms = r["total_ms"]
@@ -365,32 +416,33 @@ def _run_generative(input_queue, output_queue, shutdown_event, device, view_name
                       view=view_name, model=model_name,
                       preprocess_time_ms=0.0, inference_time_ms=gen_ms,
                       postprocess_time_ms=0.0, wait_to_preprocess_ms=wait_ms)
-        try:
-            output_queue.put_nowait((None, gen_ms, tok_s, latency_ms))
-        except queue.Full:
-            pass
+        _emit(("done", gen_ms, tok_s, latency_ms))
     engine.dispose()
 
 
 def run_llm_process(input_queue, output_queue, shutdown_event,
                     device="gpu", view_name=None, model_name="llama1b",
-                    infps=1.0, max_new_tokens=64):
+                    infps=1.0, max_new_tokens=64, prompt=None):
     try:
         _run_generative(input_queue, output_queue, shutdown_event, device, view_name,
-                        model_name, infps, max_new_tokens, is_vlm=False)
+                        model_name, infps, max_new_tokens, is_vlm=False,
+                        prompt_override=prompt)
     except Exception as e:
         print(f"[LLM {device} view={view_name}] FATAL: {type(e).__name__}: {e}")
+        _report_view_error(output_queue, f"{type(e).__name__}: {e}")
         if reg.norm_device(device) == "gpu":
             shutdown_event.set()
 
 
 def run_vlm_process(input_queue, output_queue, shutdown_event,
                     device="gpu", view_name=None, model_name="qwen2_vl",
-                    infps=1.0, max_new_tokens=32):
+                    infps=1.0, max_new_tokens=32, prompt=None):
     try:
         _run_generative(input_queue, output_queue, shutdown_event, device, view_name,
-                        model_name, infps, max_new_tokens, is_vlm=True)
+                        model_name, infps, max_new_tokens, is_vlm=True,
+                        prompt_override=prompt)
     except Exception as e:
         print(f"[VLM {device} view={view_name}] FATAL: {type(e).__name__}: {e}")
+        _report_view_error(output_queue, f"{type(e).__name__}: {e}")
         if reg.norm_device(device) == "gpu":
             shutdown_event.set()

@@ -59,9 +59,14 @@ import model_registry as reg
 # from any other directory killed it on startup with a bare FileNotFoundError.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+# Demo input defaults. Everything has one, so the demo runs with nothing configured.
+IMAGENET_DIR = os.environ.get("DEMO_IMAGE_DIR", "imagenet-sample-images")
+DEMO_LLM_PROMPT = os.environ.get("DEMO_LLM_PROMPT") or None   # None -> engine defaults
+DEMO_VLM_PROMPT = os.environ.get("DEMO_VLM_PROMPT") or None
+
 
 def _asset(name: str) -> str:
-    return os.path.join(_HERE, name)
+    return name if os.path.isabs(name) else os.path.join(_HERE, name)
 
 # The .ui provides four QLabel slots and four display signals. A schedule may
 # activate more concurrent models than that; the extra views run headless —
@@ -431,8 +436,8 @@ class UnifiedViewer(QMainWindow):
         # Track which views need which feeder / handler.
         self.yolo_views = set()    # detection: video frames
         self.resnet_views = set()  # classification: image feeder
-        self.vlm_views = set()     # VLM: video frames (headless generation)
-        self.llm_views = set()     # LLM: no feeder (self-generated prompts)
+        self.vlm_views = set()     # VLM: video frames + streamed text
+        self.llm_views = set()     # LLM: no feeder (prompt-driven), streamed text
     
     def initialize_processes(self):
         """Initialize and start model processes."""
@@ -486,19 +491,19 @@ class UnifiedViewer(QMainWindow):
             process = Process(target=run_classification_process,
                               args=(frame_queue, output_queue, shutdown_event, device, view_name, model))
         elif kind == "vlm":
-            # VLM consumes video frames but is not rendered (headless generation).
+            # VLM consumes video frames and streams its generated text into the view.
             self.vlm_views.add(view_name)
-            print(f"[UnifiedViewer] Starting {view_name} with {model} on {device.upper()} (VLM, headless)")
+            print(f"[UnifiedViewer] Starting {view_name} with {model} on {device.upper()} (VLM, streaming)")
             process = Process(target=run_vlm_process,
                               args=(frame_queue, output_queue, shutdown_event, device, view_name, model,
-                                    float(infps) if infps else 1.0))
+                                    float(infps) if infps else 1.0, 32, DEMO_VLM_PROMPT))
         else:
-            # LLM: no input feeder (self-generated prompts), headless.
+            # LLM: no input feeder (prompt-driven); streams its generated text.
             self.llm_views.add(view_name)
-            print(f"[UnifiedViewer] Starting {view_name} with {model} on {device.upper()} (LLM, headless)")
+            print(f"[UnifiedViewer] Starting {view_name} with {model} on {device.upper()} (LLM, streaming)")
             process = Process(target=run_llm_process,
                               args=(frame_queue, output_queue, shutdown_event, device, view_name, model,
-                                    float(infps) if infps else 1.0))
+                                    float(infps) if infps else 1.0, 64, DEMO_LLM_PROMPT))
 
         setattr(self, f"{view_name}_process", process)
         process.start()
@@ -508,16 +513,33 @@ class UnifiedViewer(QMainWindow):
         # Create view frame queues dictionary
         view_frame_queues = {v: getattr(self, f"{v}_frame_queue") for v in self.view_names}
         
-        # All frame-consuming views (detection, classification, VLM) are fed from
-        # the video stream, honoring each view's infps. LLM views need no feeder.
+        # Detection and VLM views are fed from the video stream, honoring each view's
+        # infps. LLM views need no feeder (they generate from prompts).
         self.video_feeder = VideoFeeder(
             self.video_frame_queue,
             view_frame_queues,
-            self.yolo_views | self.vlm_views | self.resnet_views,
+            self.yolo_views | self.vlm_views,
             self.shutdown_flag,
             model_settings=self.model_settings
         )
         self.video_feeder.start_feed_thread()
+
+        # Classification is fed from the ImageNet samples, not the video: classifying
+        # frames of one street scene shows the same label over and over, which reads
+        # as a frozen view. Cycling the sample images makes the top-5 chart move.
+        if self.resnet_views:
+            image_dir = _asset(IMAGENET_DIR)
+            if not os.path.isdir(image_dir):
+                print(f"[UnifiedViewer] ImageNet samples not found at {image_dir}; "
+                      f"classification views will show 'No input'.")
+            self.resnet_feeder = ResnetImageFeeder(
+                image_dir,
+                view_frame_queues,
+                self.resnet_views,
+                self.shutdown_flag,
+                model_settings=self.model_settings
+            )
+            self.resnet_feeder.start_feed_thread()
 
         # Start view handler threads
         self.initialize_view_handlers()

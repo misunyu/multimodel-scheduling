@@ -155,6 +155,67 @@ class LLMEngine:
             "tokens_per_s": tok_per_s,
         }
 
+    def infer_stream(self, on_token, prompt: Optional[str] = None, frame=None,
+                     max_new_tokens: Optional[int] = None) -> dict:
+        """Same as infer(), but hands each decoded piece to `on_token` as it lands.
+
+        For the demo the text has to appear as it is generated -- a finished answer
+        dumped in one go looks like a still image. Metrics are computed exactly as in
+        infer(), so a streamed view still reports the same tokens/s.
+
+        Falls back to a single on_token(full_text) if the installed transformers has
+        no TextIteratorStreamer; the view then still shows text, just not typed out.
+        """
+        import threading
+        prompt = prompt if prompt is not None else (
+            DEFAULT_PROMPT if self.kind == "vlm" else LLM_PROMPTS[0])
+        n = int(max_new_tokens or self.max_new_tokens)
+        inputs = self._build_inputs(prompt, frame=frame)
+        n_in = int(inputs["input_ids"].shape[1])
+
+        try:
+            from transformers import TextIteratorStreamer
+        except Exception:
+            r = self.infer(prompt=prompt, frame=frame, max_new_tokens=n)
+            on_token("")
+            return r
+
+        tok = getattr(self, "tokenizer", None) or getattr(self, "processor", None)
+        streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
+
+        import torch
+        err = {}
+
+        def _gen():
+            try:
+                with torch.no_grad():
+                    self.model.generate(**inputs, max_new_tokens=n, do_sample=False,
+                                        streamer=streamer)
+            except Exception as e:  # surfaced below; must not kill the reader thread
+                err["e"] = e
+
+        t = time.time()
+        th = threading.Thread(target=_gen, daemon=True)
+        th.start()
+        n_out = 0
+        for piece in streamer:
+            if piece:
+                n_out += 1
+                on_token(piece)
+        th.join()
+        if self.host == "cuda":
+            torch.cuda.synchronize()
+        total_ms = (time.time() - t) * 1000.0
+        if "e" in err:
+            raise err["e"]
+
+        return {
+            "n_in": n_in, "n_out": n_out,
+            "prefill_ms": 0.0,
+            "total_ms": total_ms,
+            "tokens_per_s": n_out / max(total_ms / 1000.0, 1e-6),
+        }
+
     def profile(self, frame=None, max_new_tokens: Optional[int] = None, warmup: int = 1, iters: int = 3) -> dict:
         """Return averaged load/prefill/decode metrics for the static profile."""
         for _ in range(max(0, warmup)):

@@ -73,27 +73,52 @@ def npu_detections(result, frame) -> List[Tuple[float, float, float, float, floa
              float(scores[i]), int(classes[i])) for i in range(arr.shape[0])]
 
 
-def npu_top1(result) -> Tuple[int, float]:
-    """Extract (class_id, prob) from a Mobilint classification Results object."""
-    # The zoo classification result exposes logits/probabilities in a few shapes;
-    # be defensive about the attribute name.
-    for attr in ("top1", "class_id", "pred"):
-        v = getattr(result, attr, None)
-        if isinstance(v, (int, np.integer)):
-            return int(v), 1.0
+def npu_scores(result):
+    """The raw per-class score vector from a Mobilint classification Results object.
+
+    The zoo exposes it under one of several attribute names depending on the model,
+    so probe them; returns None when only a bare top-1 index is available.
+    """
     for attr in ("probs", "logits", "scores", "output", "cls"):
         v = getattr(result, attr, None)
         if v is not None:
             a = v.detach().cpu().numpy() if hasattr(v, "detach") else np.asarray(v)
             a = np.squeeze(a)
             if a.ndim >= 1 and a.size > 0:
-                cid = int(np.argmax(a))
-                p = float(a.reshape(-1)[cid])
-                return cid, p
-    # last resort: result itself may be array-like
+                return a.reshape(-1)
     try:
         a = np.squeeze(np.asarray(result))
-        cid = int(np.argmax(a))
-        return cid, float(a.reshape(-1)[cid])
+        if a.ndim >= 1 and a.size > 0:
+            return a.reshape(-1)
     except Exception:
-        return -1, 0.0
+        pass
+    return None
+
+
+def npu_top1(result) -> Tuple[int, float]:
+    """Extract (class_id, prob) from a Mobilint classification Results object."""
+    for attr in ("top1", "class_id", "pred"):
+        v = getattr(result, attr, None)
+        if isinstance(v, (int, np.integer)):
+            return int(v), 1.0
+    a = npu_scores(result)
+    if a is not None:
+        cid = int(np.argmax(a))
+        return cid, float(a[cid])
+    return -1, 0.0
+
+
+def npu_topk(result, k: int = 5):
+    """[(class_id, prob), ...] best-first. Falls back to the top-1 when the runtime
+    only exposes an index (the demo then shows a single full bar, not an empty one)."""
+    a = npu_scores(result)
+    if a is None:
+        cid, p = npu_top1(result)
+        return [(cid, p)] if cid >= 0 else []
+    a = a.astype(np.float64)
+    # Scores may be raw logits; softmax so the bars are comparable probabilities.
+    if a.min() < 0.0 or a.sum() > 1.5:
+        e = np.exp(a - a.max())
+        a = e / max(e.sum(), 1e-9)
+    idx = np.argsort(a)[::-1][:max(1, int(k))]
+    return [(int(i), float(a[i])) for i in idx]
