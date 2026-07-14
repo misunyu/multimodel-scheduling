@@ -59,8 +59,11 @@ import model_registry as reg
 # from any other directory killed it on startup with a bare FileNotFoundError.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Demo input defaults. Everything has one, so the demo runs with nothing configured.
+# Demo input defaults. Every one of these has a value, so pressing the button with
+# nothing configured still runs a full demo. The GUI's "Configure Inputs.." dialog
+# overrides them through the environment.
 IMAGENET_DIR = os.environ.get("DEMO_IMAGE_DIR", "imagenet-sample-images")
+DEMO_VIDEO = os.environ.get("DEMO_VIDEO", "stockholm_1280x720.mp4")
 DEMO_LLM_PROMPT = os.environ.get("DEMO_LLM_PROMPT") or None   # None -> engine defaults
 DEMO_VLM_PROMPT = os.environ.get("DEMO_VLM_PROMPT") or None
 
@@ -444,7 +447,7 @@ class UnifiedViewer(QMainWindow):
         # Start video reader process
         self.video_reader_proc = Process(
             target=video_reader_process,
-            args=(_asset("stockholm_1280x720.mp4"), self.video_frame_queue, self.video_shutdown_event),
+            args=(_asset(DEMO_VIDEO), self.video_frame_queue, self.video_shutdown_event),
             daemon=True
         )
         self.video_reader_proc.start()

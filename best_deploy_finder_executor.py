@@ -32,6 +32,15 @@ DEVICE_PROFILES = {
 }
 DEFAULT_DEVICE_PROFILE = "CPU-NPU"
 
+# Demo input sources, passed to the executor through the environment. Each has a
+# default that works out of the box: the demo must run on a bare button press.
+DEMO_INPUT_DEFAULTS = {
+    "DEMO_VIDEO": "stockholm_1280x720.mp4",        # detection + VLM frames
+    "DEMO_IMAGE_DIR": "imagenet-sample-images",     # classification, cycled
+    "DEMO_LLM_PROMPT": "",                          # "" -> the engine's own prompt list
+    "DEMO_VLM_PROMPT": "",                          # "" -> the engine's default prompt
+}
+
 # Executors still running when the GUI closes are moved here so Python does not
 # garbage-collect the QProcess (which would take the running child down with it).
 # The old Popen-based launch let the executor outlive the GUI; keep that.
@@ -175,6 +184,8 @@ class BestDeployFinderApp(QMainWindow):
         # Wire up custom buttons
         if hasattr(self, 'input_rate_button'):
             self.input_rate_button.clicked.connect(self.on_input_rate_clicked)
+        if hasattr(self, 'configure_inputs_button'):
+            self.configure_inputs_button.clicked.connect(self.on_configure_inputs_clicked)
         if hasattr(self, 'predict_best_button'):
             self.predict_best_button.clicked.connect(self.on_predict_best_clicked)
         if hasattr(self, 'load_execute_best_button'):
@@ -191,6 +202,10 @@ class BestDeployFinderApp(QMainWindow):
         # State: input FPS mapping per model. Set before the combo is wired, because
         # applying the default selection reads it.
         self.input_fps_by_model = {}
+
+        # Demo inputs. Every field has a working default, so the demo runs end to end
+        # even if the user never opens the Configure Inputs dialog.
+        self.demo_inputs = dict(DEMO_INPUT_DEFAULTS)
 
         # Default outputs
         self.generated_schedule_path = os.path.join(os.path.dirname(__file__), 'model_schedules.yaml')
@@ -381,6 +396,79 @@ class BestDeployFinderApp(QMainWindow):
             # Log results
             pairs = ", ".join([f"{m}: {v:.1f}" for m, v in sorted(self.input_fps_by_model.items())])
             self._log(f"[Info] Updated input rates: {pairs}")
+
+    def on_configure_inputs_clicked(self):
+        """Pick what each model kind consumes in the demo.
+
+        Vision gets a video file, classification an image folder, and the generative
+        models a prompt each. Fields are pre-filled with the working defaults, so
+        Cancel (or never opening this at all) still leaves a runnable demo.
+        """
+        from PyQt5.QtWidgets import QLineEdit, QPushButton, QDialogButtonBox, QVBoxLayout
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Configure Demo Inputs")
+        grid = QGridLayout()
+        fields = {}
+
+        def _row(row, label, key, browse=None, tip=""):
+            grid.addWidget(QLabel(label), row, 0)
+            edit = QLineEdit(self.demo_inputs.get(key, ""))
+            edit.setMinimumWidth(320)
+            if tip:
+                edit.setPlaceholderText(tip)
+            grid.addWidget(edit, row, 1)
+            fields[key] = edit
+            if browse == "file":
+                b = QPushButton("Browse..")
+                b.clicked.connect(lambda: self._pick_into(edit, folder=False))
+                grid.addWidget(b, row, 2)
+            elif browse == "dir":
+                b = QPushButton("Browse..")
+                b.clicked.connect(lambda: self._pick_into(edit, folder=True))
+                grid.addWidget(b, row, 2)
+
+        _row(0, "Video (detection, VLM):", "DEMO_VIDEO", browse="file")
+        _row(1, "Image folder (resnet50):", "DEMO_IMAGE_DIR", browse="dir")
+        _row(2, "LLM prompt (llama1b):", "DEMO_LLM_PROMPT",
+             tip="empty = built-in prompt rotation")
+        _row(3, "VLM prompt (qwen2_vl):", "DEMO_VLM_PROMPT",
+             tip="empty = 'Describe what is happening in one short sentence.'")
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        layout = QVBoxLayout(dlg)
+        layout.addLayout(grid)
+        layout.addWidget(buttons)
+
+        if dlg.exec_() == QDialog.Accepted:
+            for key, edit in fields.items():
+                self.demo_inputs[key] = edit.text().strip()
+            for key, val in self.demo_inputs.items():
+                self.log(f"[Inputs] {key} = {val or '(default)'}")
+            self._warn_missing_inputs()
+
+    def _pick_into(self, edit, folder: bool):
+        path = (QFileDialog.getExistingDirectory(self, 'Select Folder', os.path.dirname(__file__))
+                if folder else
+                QFileDialog.getOpenFileName(self, 'Select File', os.path.dirname(__file__),
+                                            'Video (*.mp4 *.avi *.mov);;All Files (*)')[0])
+        if path:
+            edit.setText(path)
+
+    def _warn_missing_inputs(self):
+        """Log (do not block) inputs that point nowhere -- the view will say so too."""
+        root = os.path.dirname(os.path.abspath(__file__))
+        v = self.demo_inputs.get("DEMO_VIDEO") or ""
+        d = self.demo_inputs.get("DEMO_IMAGE_DIR") or ""
+        vp = v if os.path.isabs(v) else os.path.join(root, v)
+        dp = d if os.path.isabs(d) else os.path.join(root, d)
+        if v and not os.path.isfile(vp):
+            self.log(f"[Warning] Video not found: {vp} — detection/VLM views will show 'No input'.")
+        if d and not os.path.isdir(dp):
+            self.log(f"[Warning] Image folder not found: {dp} — resnet50 view will show 'No input'.")
 
     def select_models_folder(self):
         folder = QFileDialog.getExistingDirectory(self, 'Select Models Folder', self.models_root)
@@ -809,6 +897,11 @@ class BestDeployFinderApp(QMainWindow):
         # sitting in a pipe buffer that is lost if it dies.
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONUNBUFFERED", "1")
+        # Demo input sources chosen in "Configure Inputs..". Empty means "use the
+        # built-in default", so only set the ones the user actually filled in.
+        for key, val in (getattr(self, 'demo_inputs', None) or {}).items():
+            if val:
+                env.insert(key, str(val))
         proc.setProcessEnvironment(env)
         stderr_tail = deque(maxlen=20)
 
