@@ -174,9 +174,20 @@ def log_inference(pipeline: str, device: str, view: str, model: str,
 
 
 def _canonical_name(logical_name: str) -> str:
-    """Map a logical/legacy name to a canonical registry name."""
+    """Map a logical/legacy name to a canonical registry name.
+
+    A name the registry already knows is returned untouched. It used to go through
+    `_normalize` unconditionally, and `_normalize` maps ANY name containing "yolo"
+    to "yolo11s" -- so yolo11n/m/l/x all resolved to yolo11s.onnx and yolo11s.mxq.
+    Every CPU/GPU run of a yolo variant was silently running yolo11s instead, which
+    is why their profiled CPU/GPU latencies were identical regardless of model size.
+    `_normalize` is for legacy aliases ("yolov3", "tiny") only; it must never be
+    allowed to rewrite a real model name.
+    """
     try:
         import model_registry as reg
+        if logical_name in reg.MODELS:
+            return logical_name
         return reg._normalize(logical_name)
     except Exception:
         return logical_name

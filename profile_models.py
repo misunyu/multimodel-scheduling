@@ -33,7 +33,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -42,6 +45,33 @@ import numpy as np
 import model_registry as reg
 
 DEVICES = ["cpu", "gpu", "npu"]
+
+# Measurement conditions, named so they can be recorded rather than buried in
+# default arguments -- a latency is meaningless without them.
+VISION_WARMUP = 3
+VISION_ITERS = 15
+
+
+def _git_commit():
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, timeout=5).stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _run_id():
+    return datetime.now().strftime("run_%Y%m%d_%H%M%S")
+
+
+def _versions():
+    v = {}
+    for mod in ("torch", "onnxruntime", "numpy", "cv2"):
+        try:
+            v[mod] = __import__(mod).__version__
+        except Exception:
+            v[mod] = None
+    return v
 
 
 def _sample_frame():
@@ -53,14 +83,18 @@ def _sample_frame():
     return frame
 
 
-def profile_vision(model_name, device, frame, warmup=3, iters=15):
+def profile_vision(model_name, device, frame, warmup=VISION_WARMUP, iters=VISION_ITERS):
     """Return (load_ms, avg_infer_ms) for a vision model on a device."""
     if device == "npu":
         from runtime.mobilint_vision import build_vision_npu
         t0 = time.time()
         model = build_vision_npu(model_name, infer_mode="global8")
         load_ms = (time.time() - t0) * 1000.0
-        pre = model.preprocess(frame)
+        # Feed RGB, matching the executor. Preprocessing sits outside the timing loop
+        # and the forward pass is content-independent, so this cannot move the numbers
+        # -- it just stops the profiler measuring a different picture than we deploy.
+        from model_processors import _to_rgb
+        pre = model.preprocess(_to_rgb(frame))
         for _ in range(warmup):
             model(pre)
         ts = []
@@ -139,17 +173,49 @@ def main():
 
     # Merge with any existing profile so per-model runs accumulate.
     existing_rows = {}
+    prev_runs = []
     if outp.exists():
         try:
             prev = json.loads(outp.read_text())
             for r in prev.get("total_data", []):
                 existing_rows[r.get("model")] = r
+            prev_runs = prev.get("profiling_runs", [])
         except Exception:
             pass
 
+    # Under what conditions was each number measured? Rows profiled months apart, on
+    # different code, are not comparable, and without this there is no way to even
+    # ask the question -- a row carries a latency and nothing else.
+    run = {
+        "run_id": _run_id(),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "models": list(args.models),
+        "devices": list(args.devices),
+        "vision_warmup": VISION_WARMUP,
+        "vision_iters": VISION_ITERS,
+        "generative_warmup": 1,
+        "generative_iters": 3,
+        "max_new_tokens": args.max_new_tokens,
+        "npu_infer_mode": "global8",
+        "frame_source": "stockholm_1280x720.mp4 (first frame)",
+        "git_commit": _git_commit(),
+        "host": platform.node(),
+        "python": platform.python_version(),
+        "versions": _versions(),
+        "note": ("Timing excludes preprocessing: profile_vision preprocesses once "
+                 "outside the loop and times only the forward pass."),
+    }
+
     def _flush():
         merged = [existing_rows[m] for m in existing_rows]
-        out = {"devices": DEVICES, "total_data": merged}
+        out = {
+            "devices": DEVICES,
+            # Newest run last. Each row points at the run that produced it via
+            # `profile_run_id`; rows without one predate this record-keeping and
+            # their conditions are unknown.
+            "profiling_runs": prev_runs + [run],
+            "total_data": merged,
+        }
         outp.write_text(json.dumps(out, indent=2), encoding="utf-8")
 
     for name in args.models:
@@ -182,6 +248,9 @@ def main():
         # Baseline input rate (requests/sec) = throughput on the SLOWEST allowed
         # device. 1x in the rate sweep; higher factors induce overload.
         row["baseline_rate"] = _baseline_rate(name, kind, row, args.max_new_tokens)
+        # Stamp the row with the conditions it was measured under.
+        row["profile_run_id"] = run["run_id"]
+        row["profiled_at"] = run["timestamp"]
         existing_rows[name] = row
         _flush()  # incremental: persist after each model
         print(f"[saved] {name}  baseline_rate={row['baseline_rate']}")
