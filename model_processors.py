@@ -39,6 +39,16 @@ except Exception:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _to_rgb(frame_bgr):
+    """OpenCV hands us BGR; the Mobilint zoo's preprocessor expects RGB (its Reader
+    style is "pil"). The CPU/GPU paths already flip the channels before inference
+    (`[..., ::-1]`), but the NPU path used to pass the raw BGR frame straight in, so
+    the NPU was classifying colour-swapped images -- same tensor shape, wrong picture,
+    no error, just quietly worse predictions.
+    """
+    return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+
 def _report_view_error(output_queue, message):
     """Push a failure to the view so it renders a labelled placeholder.
 
@@ -198,7 +208,7 @@ def run_detection_process(input_queue, output_queue, shutdown_event,
             wait_ms = ((time.time() - enq_ts) * 1000.0) if enq_ts else 0.0
             t_pre = time.time()
             if device == "npu":
-                x = model.preprocess(frame)
+                x = model.preprocess(_to_rgb(frame))
                 t_inf = time.time()
                 raw = model(x)
                 t_post = time.time()
@@ -287,7 +297,7 @@ def run_classification_process(input_queue, output_queue, shutdown_event,
             wait_ms = ((time.time() - enq_ts) * 1000.0) if enq_ts else 0.0
             t_pre = time.time()
             if device == "npu":
-                x = model.preprocess(frame)
+                x = model.preprocess(_to_rgb(frame))
                 t_inf = time.time()
                 raw = model(x)
                 t_post = time.time()

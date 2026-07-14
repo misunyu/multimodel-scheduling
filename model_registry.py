@@ -84,14 +84,14 @@ MODELS: Dict[str, dict] = {
         "onnx": "models/onnx/resnet50.onnx",
         "input_size": 224,
     },
-    "googlenet": {
+    "mobilenet_v2": {
         "kind": "vision",
         "task": "classification",
         # Same runtime path as resnet50: 224x224 ImageNet preprocessing, top-k output.
         "pipeline": "resnet",
-        "npu_class": "GoogLeNet",
-        "mxq": "models/mobilint/googlenet.mxq",
-        "onnx": "models/onnx/googlenet.onnx",
+        "npu_class": "MobileNet_V2",
+        "mxq": "models/mobilint/mobilenet_v2.mxq",
+        "onnx": "models/onnx/mobilenet_v2.onnx",
         "input_size": 224,
     },
     "llama1b": {
