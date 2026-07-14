@@ -19,6 +19,18 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QDialog, QLabel, QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout, QMessageBox
 
 
+# The platform the user picks in the Device Configuration combo. Each choice ties
+# together the XGBoost predictor trained on that platform and the device pair the
+# placement enumeration draws from, so the two can never drift apart.
+DEVICE_PROFILES = {
+    "CPU-NPU": {"prefix": "xgboost_model/artifacts/deploy_cpu_npu",
+                "devices": ["cpu", "npu"]},
+    "CPU-GPU": {"prefix": "xgboost_model/artifacts/deploy_cpu_gpu",
+                "devices": ["cpu", "gpu"]},
+}
+DEFAULT_DEVICE_PROFILE = "CPU-NPU"
+
+
 def discover_file_backed_models(models_root: str):
     """Vision models deployable from the models/ folder.
 
@@ -126,8 +138,6 @@ class BestDeployFinderApp(QMainWindow):
             self.deploy_model_browse_button.clicked.connect(self.select_models_folder)
         if hasattr(self, 'prediction_model_browse_button'):
             self.prediction_model_browse_button.clicked.connect(self.select_prediction_model)
-        if hasattr(self, 'device_conf_browse_button'):
-            self.device_conf_browse_button.clicked.connect(self.select_device_config)
         # Wire up custom buttons
         if hasattr(self, 'input_rate_button'):
             self.input_rate_button.clicked.connect(self.on_input_rate_clicked)
@@ -139,19 +149,21 @@ class BestDeployFinderApp(QMainWindow):
         # Initialize line edits if present
         if hasattr(self, 'deployment_model_input'):
             self.deployment_model_input.setText(self.models_root)
-        # Default the placement predictor to the CPU + Mobilint-NPU model. Set it
-        # explicitly (not just when empty) so the .ui's directory default does not
-        # cause an ambiguous prefix among the several trained models.
-        _cpu_npu_prefix = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'deploy_cpu_npu')
-        if hasattr(self, 'prediction_model_input') and os.path.exists(_cpu_npu_prefix + '_y1.json'):
-            self.prediction_model_input.setText(_cpu_npu_prefix)
-        if hasattr(self, 'device_config_input') and not self.device_config_input.text():
-            self.device_config_input.setText(
-                os.path.join(os.path.dirname(__file__), 'target_device_cpu_npu.yaml'))
 
         # Initialize log window if present
         if hasattr(self, 'log_text_edit'):
             self.log_text_edit.setReadOnly(True)
+
+        # Device Configuration combo: picking a platform selects both the predictor
+        # and the device pair placements are enumerated over. Default to CPU-NPU so
+        # a fresh launch behaves exactly as before this became selectable.
+        self.platform_devices = list(DEVICE_PROFILES[DEFAULT_DEVICE_PROFILE]["devices"])
+        if hasattr(self, 'device_config_combo'):
+            self.device_config_combo.clear()
+            self.device_config_combo.addItems(list(DEVICE_PROFILES))
+            self.device_config_combo.setCurrentText(DEFAULT_DEVICE_PROFILE)
+            self.device_config_combo.currentTextChanged.connect(self.on_device_config_changed)
+            self.on_device_config_changed(self.device_config_combo.currentText())
 
         # State: input FPS mapping per model
         self.input_fps_by_model = {}
@@ -287,10 +299,22 @@ class BestDeployFinderApp(QMainWindow):
         if path and hasattr(self, 'prediction_model_input'):
             self.prediction_model_input.setText(path)
 
-    def select_device_config(self):
-        path, _ = QFileDialog.getOpenFileName(self, 'Select Device Configuration', os.getcwd(), 'YAML Files (*.yaml *.yml);;All Files (*)')
-        if path and hasattr(self, 'device_config_input'):
-            self.device_config_input.setText(path)
+    def on_device_config_changed(self, label: str):
+        """Apply the platform picked in the Device Configuration combo.
+
+        Points the prediction-model field at the predictor trained on that platform
+        and records the device pair `build_schedule_from_selection` enumerates over.
+        The field stays editable so a power user can still point at another predictor.
+        """
+        profile = DEVICE_PROFILES.get(label)
+        if profile is None:
+            self._log(f"[Warning] Unknown device configuration '{label}'; keeping the previous one.")
+            return
+        self.platform_devices = list(profile["devices"])
+        prefix = os.path.join(os.path.dirname(__file__), *profile["prefix"].split("/"))
+        if hasattr(self, 'prediction_model_input'):
+            self.prediction_model_input.setText(prefix)
+        self._log(f"[Device] {label}: devices={'/'.join(self.platform_devices)}, predictor={prefix}")
 
     def get_checked_top_level_dirs(self):
         """Backwards-compatible alias: the tree now holds model names, not folders."""
@@ -362,11 +386,11 @@ class BestDeployFinderApp(QMainWindow):
         return warnings
 
     def build_schedule_from_selection(self, model_names, out_path: str) -> str:
-        """Generate CPU + Mobilint-NPU placement candidates for the selected models.
+        """Generate placement candidates for the selected models on the chosen platform.
 
-        Replaces the legacy CPU + Neubla-NPU flow: the platform is fixed to
-        CPU + NPU (both devices shareable, matching the trained `deploy_cpu_npu`
-        predictor). Every checked model is placed on cpu or npu; per-view infps
+        The platform comes from the Device Configuration combo (CPU-NPU or CPU-GPU);
+        both its devices are shareable, matching the correspondingly trained predictor.
+        Every checked model is placed on one of the two devices; per-view infps
         defaults to the model's baseline rate (overridable via the input-rate
         dialog). Writes the schedule YAML plus a `<out>.meta.json` sidecar.
         """
@@ -384,7 +408,10 @@ class BestDeployFinderApp(QMainWindow):
         if len(models) > 4:
             self.log(f"[Warn] {len(models)} models selected; the executor renders at most 4 views.")
 
-        self.log(f"[Info] Platform: CPU + Mobilint NPU (both shareable). Models: {', '.join(models)}")
+        platform_devices = list(getattr(self, 'platform_devices', None)
+                                or DEVICE_PROFILES[DEFAULT_DEVICE_PROFILE]["devices"])
+        self.log(f"[Info] Platform: {' + '.join(d.upper() for d in platform_devices)} "
+                 f"(both shareable). Models: {', '.join(models)}")
 
         # Baseline rates for default infps (1x). Overridable per model via the dialog.
         static_json = self._resolve_static_json()
@@ -395,7 +422,6 @@ class BestDeployFinderApp(QMainWindow):
         except Exception as e:
             self.log(f"[Warn] Could not load baseline rates: {e}")
 
-        platform_devices = ["cpu", "npu"]
         workload_id = next((m for m in models if reg.get(m).get("task") == "detection"), models[0])
         schedules, meta = {}, {}
         for idx, placement in enumerate(gs.enumerate_placements(models, platform_devices), start=1):
@@ -425,14 +451,15 @@ class BestDeployFinderApp(QMainWindow):
             Path(str(out_path) + ".meta.json").write_text(json.dumps(meta, indent=2))
         except Exception as e:
             raise RuntimeError(f"Failed to write schedule YAML '{out_path}': {e}")
-        self.log(f"[Info] Wrote {len(schedules)} CPU/NPU combinations to {out_path}")
+        self.log(f"[Info] Wrote {len(schedules)} "
+                 f"{'/'.join(d.upper() for d in platform_devices)} combinations to {out_path}")
         return out_path
 
     def generate_all_combinations(self) -> str:
-        """Enumerate CPU/NPU placements of the models checked in the tree view.
+        """Enumerate placements of the models checked in the tree view.
 
-        The platform is fixed to CPU + Mobilint NPU, so no device config is needed.
-        Per-model input rates come from the input-rate dialog, else the baseline rate.
+        The device pair comes from the Device Configuration combo. Per-model input
+        rates come from the input-rate dialog, else the baseline rate.
         Returns the generated schedule YAML path.
         """
         models = self._get_selected_model_names()
@@ -616,7 +643,6 @@ class BestDeployFinderApp(QMainWindow):
         """Handler invoked when predict_best_button is clicked."""
         models_root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
         pred_model = self.prediction_model_input.text() if hasattr(self, 'prediction_model_input') else ''
-        device_conf = self.device_config_input.text() if hasattr(self, 'device_config_input') else ''
 
         # Models checked in the tree view (names, no extension)
         selected = self._get_selected_model_names()
@@ -624,10 +650,12 @@ class BestDeployFinderApp(QMainWindow):
         # Log inputs
         self.log(f"[Predict] models_root={models_root}")
         self.log(f"[Predict] prediction_model={pred_model}")
+        self.log(f"[Predict] platform_devices={'/'.join(getattr(self, 'platform_devices', []))}")
         self.log(f"[Predict] selected_models={selected}")
 
-        # Validate. The platform is fixed to CPU + Mobilint NPU, so no device
-        # config is required. `pred_model` may be a prefix, a directory, or a _y*.json.
+        # Validate. The platform comes from the Device Configuration combo, so no
+        # device config file is required. `pred_model` may be a prefix, a directory,
+        # or a _y*.json.
         try:
             if not selected:
                 raise ValueError("No models selected. Please check at least one model in the list.")
