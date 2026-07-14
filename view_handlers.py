@@ -21,8 +21,9 @@ class ModelSignals(QObject):
 class ViewHandler:
     """Base class for handling model views."""
     
-    def __init__(self, view_name, model_settings, frame_queue, result_queue, 
-                 shutdown_flag, model_signals, views_without_model=None):
+    def __init__(self, view_name, model_settings, frame_queue, result_queue,
+                 shutdown_flag, model_signals, views_without_model=None,
+                 display_slot=None):
         """
         Initialize the view handler.
         
@@ -54,9 +55,13 @@ class ViewHandler:
         self.wait_count = 0
         self.avg_wait_ms = 0.0
         
-        # Display signal for this view. Only the four UI slots have one; views
-        # beyond them run headless (stats still collected, nothing rendered).
-        self.update_signal = getattr(model_signals, f"update_{view_name}_display", None)
+        # Display signal for this view. `display_slot` is the UI tile this view was
+        # assigned (view1..view4), or None when the model is not visualizable or no
+        # tile was left. A view without a slot runs headless: it still executes and
+        # still contributes to the statistics, it is just not drawn.
+        self.display_slot = display_slot
+        self.update_signal = (getattr(model_signals, f"update_{display_slot}_display", None)
+                              if display_slot else None)
         self.headless = self.update_signal is None
         
         # Get model type and execution mode

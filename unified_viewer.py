@@ -72,6 +72,11 @@ DEMO_VLM_PROMPT = os.environ.get("DEMO_VLM_PROMPT") or None
 def _asset(name: str) -> str:
     return name if os.path.isabs(name) else os.path.join(_HERE, name)
 
+# Only these models are rendered. Everything else in the deployment still loads,
+# infers and is measured exactly as before -- it simply gets no view. The single
+# source of truth: do not test model names for "renderability" anywhere else.
+VISUALIZABLE_MODELS = {"qwen2_vl", "resnet50", "yolo11s", "llama1b"}
+
 # The .ui provides four QLabel slots and four display signals. A schedule may
 # activate more concurrent models than that; the extra views run headless —
 # they execute and contribute to the statistics, they just aren't rendered.
@@ -375,11 +380,8 @@ class UnifiedViewer(QMainWindow):
                 if view not in view_to_model_map:
                     self.views_without_model.add(view)
                     print(f"[UnifiedViewer] {view} not used in this combination (no model assigned) [{os.path.basename(self.schedule_file)}]")
-            extra = [v for v in scheduled if v not in DISPLAY_SLOTS]
-            if extra:
-                print(f"[UnifiedViewer] Running headless (no display slot) for: {', '.join(extra)}")
-
             print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file} for {self.current_combination}")
+            self._assign_display_slots()
         except Exception as e:
             print(f"[UnifiedViewer ERROR] Failed to load {self.schedule_file}: {e}")
             # Set default settings if file loading fails
@@ -390,8 +392,42 @@ class UnifiedViewer(QMainWindow):
                 "view4": {"model": "resnet50", "execution": "cpu"}
             }
             self.view_names = list(DISPLAY_SLOTS)
-            # No views are marked as without model in case of error
-    
+            self._assign_display_slots()
+
+    def _assign_display_slots(self):
+        """Decide which scheduled views get a display slot: whitelist only, max four.
+
+        This is purely a rendering decision. Every scheduled view still gets a worker
+        process, still runs inference and still feeds the throughput / drop-rate /
+        score figures -- a model that is not visualizable is not excluded from the
+        deployment, it just has no tile.
+        """
+        self.display_slot_of = {}
+        skipped = []
+        for view in self.view_names:
+            model = (self.model_settings.get(view, {}) or {}).get("model", "")
+            if model in VISUALIZABLE_MODELS:
+                if len(self.display_slot_of) < len(DISPLAY_SLOTS):
+                    self.display_slot_of[view] = DISPLAY_SLOTS[len(self.display_slot_of)]
+                else:
+                    skipped.append(f"{model} ({view}, no slot left)")
+            else:
+                skipped.append(f"{model} ({view}, not visualizable)")
+
+        shown = [f"{self.model_settings[v]['model']} -> {slot}"
+                 for v, slot in self.display_slot_of.items()]
+        print(f"[UnifiedViewer] Visualizing {len(shown)}/{len(self.view_names)} views: "
+              f"{', '.join(shown) or 'none'}")
+        if skipped:
+            print(f"[UnifiedViewer] Running without a view (still executed and measured): "
+                  f"{', '.join(skipped)}")
+        if not self.display_slot_of:
+            running = ", ".join((self.model_settings.get(v, {}) or {}).get('model', '?')
+                                for v in self.view_names)
+            print(f"[UnifiedViewer] No visualizable models in this deployment. "
+                  f"Running: {running}. Execution and measurement continue as normal; "
+                  f"the whitelist is: {', '.join(sorted(VISUALIZABLE_MODELS))}.")
+
     def initialize_ui_components(self):
         """Initialize UI components."""
         self.view1 = self.findChild(QLabel, "view1")
@@ -404,6 +440,8 @@ class UnifiedViewer(QMainWindow):
         if self.stop_all_button is not None:
             self.stop_all_button.clicked.connect(self.on_stop_all_clicked)
 
+        self._layout_visible_views()
+
         # Define and connect signals
         self.model_signals = ModelSignals()
         self.model_signals.update_view1_display.connect(self.update_view1_display)
@@ -411,6 +449,84 @@ class UnifiedViewer(QMainWindow):
         self.model_signals.update_view3_display.connect(self.update_view3_display)
         self.model_signals.update_view4_display.connect(self.update_view4_display)
     
+    def _layout_visible_views(self):
+        """Pack the used tiles, and cross out any cell the grid leaves over.
+
+        A single view sitting in one corner of a 2x2 grid with three dead cells looks
+        broken on stage, so the grid is re-flowed to the number of views: 1 -> one
+        tile, 2 -> side by side, 3-4 -> 2x2. Re-flowing can still leave one cell over
+        (three views in a 2x2), and that cell gets the X image rather than being left
+        as a blank patch of window -- an empty tile should look deliberately empty.
+        """
+        from PyQt5.QtWidgets import QGridLayout
+        from utils import create_x_image, convert_cv_to_qt
+        grid = self.findChild(QGridLayout, "videoLayout")
+        used = [DISPLAY_SLOTS[i] for i in range(len(getattr(self, 'display_slot_of', {}) or {}))]
+
+        if grid is None:
+            print("[UnifiedViewer] videoLayout not found; leaving the .ui layout as-is.")
+            return
+
+        for slot in DISPLAY_SLOTS:
+            widget = getattr(self, slot, None)
+            if widget is None:
+                continue
+            try:
+                grid.removeWidget(widget)
+                widget.setVisible(False)
+            except Exception as e:
+                print(f"[Layout] {slot}: {e}")
+
+        if not used:
+            self._show_no_visualizable_message(grid)
+            return
+
+        cols = 1 if len(used) <= 1 else 2
+        rows = (len(used) + cols - 1) // cols
+        for i, slot in enumerate(used):
+            widget = getattr(self, slot, None)
+            if widget is not None:
+                widget.setVisible(True)
+                grid.addWidget(widget, i // cols, i % cols)
+
+        # Cells the re-flow could not fill: show the X placeholder in the spare slots.
+        spare = [s for s in DISPLAY_SLOTS if s not in used]
+        for cell in range(len(used), rows * cols):
+            if not spare:
+                break
+            slot = spare.pop(0)
+            widget = getattr(self, slot, None)
+            if widget is None:
+                continue
+            try:
+                pixmap = convert_cv_to_qt(create_x_image())
+                if not pixmap.isNull():
+                    widget.setPixmap(pixmap)
+                    widget.setScaledContents(True)
+                widget.setVisible(True)
+                grid.addWidget(widget, cell // cols, cell % cols)
+            except Exception as e:
+                print(f"[Layout] X placeholder for {slot}: {e}")
+
+    def _show_no_visualizable_message(self, grid):
+        """Say why the window is empty instead of showing a black one.
+
+        The deployment is still running and still being measured -- the window just has
+        nothing it is allowed to draw. Leaving it blank would read as a crash.
+        """
+        running = ", ".join(sorted(
+            (self.model_settings.get(v, {}) or {}).get('model', '?') for v in self.view_names))
+        message = QLabel(
+            "No visualizable models in this deployment.\n\n"
+            f"Running (executing and being measured): {running or 'nothing'}\n"
+            f"Visualizable models: {', '.join(sorted(VISUALIZABLE_MODELS))}\n\n"
+            "Throughput, drop rate and score are unaffected.")
+        message.setAlignment(Qt.AlignCenter)
+        message.setWordWrap(True)
+        message.setStyleSheet("font-size: 16px; padding: 24px; color: #ddd; background: #202020;")
+        self.no_visual_label = message
+        grid.addWidget(message, 0, 0)
+
     def initialize_state_variables(self):
         """Initialize state variables."""
         # Global flag for signaling threads to exit
@@ -580,6 +696,7 @@ class UnifiedViewer(QMainWindow):
                 self.shutdown_flag,
                 self.model_signals,
                 self.views_without_model,
+                display_slot=(getattr(self, 'display_slot_of', {}) or {}).get(view_name),
             )
             setattr(self, f"{view_name}_handler", handler)
             handler.start_display_thread()
@@ -619,15 +736,19 @@ class UnifiedViewer(QMainWindow):
         """
         from PyQt5.QtGui import QPainter, QColor, QFont
         self._frozen = True
-        for view_name in DISPLAY_SLOTS:
+        # Only the tiles actually in use; hidden ones must stay hidden, not be
+        # resurrected as "stopped" black squares.
+        slot_to_view = {slot: view for view, slot in
+                        (getattr(self, 'display_slot_of', {}) or {}).items()}
+        for view_name in slot_to_view:
             widget = getattr(self, view_name, None)
             if widget is None:
                 continue
             try:
                 pixmap = (getattr(self, '_last_pixmaps', {}) or {}).get(view_name)
                 if pixmap is None or pixmap.isNull():
-                    # Never ran (or never produced a frame): say so rather than go black.
-                    cfg = self.model_settings.get(view_name, {}) or {}
+                    # Never produced a frame: say so rather than go black.
+                    cfg = self.model_settings.get(slot_to_view[view_name], {}) or {}
                     import demo_render as dr
                     from utils import convert_cv_to_qt
                     pixmap = convert_cv_to_qt(dr.placeholder(
