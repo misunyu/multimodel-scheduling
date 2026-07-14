@@ -176,10 +176,11 @@ class ScheduleExecutor:
 
         self._viewer.show()
 
-        # Apply 5-second warmup: run for duration+5, but measurement starts after warmup inside viewer
+        # Run for duration + warmup; the viewer starts measuring after the warmup.
+        from unified_viewer import WARMUP_SECONDS
         measured_duration = self.default_duration
-        warmup_seconds = 5
-        run_duration = measured_duration + warmup_seconds
+        warmup_seconds = WARMUP_SECONDS
+        run_duration = int(measured_duration + warmup_seconds)
         self._viewer.start_execution(run_duration)
 
         # Schedule moving to the next combination after run_duration + small buffer (ms)

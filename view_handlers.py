@@ -49,6 +49,9 @@ class ViewHandler:
         self.infer_count = 0
         self.avg_infer_time = 0.0
         self.avg_fps = 0.0
+        # Re-stamped when the warmup ends (reset_stats); until then y1 is measured
+        # from construction so nothing divides by zero.
+        self.measure_t0 = time.time()
         
         # Waiting time stats (time from enqueue to start of preprocessing)
         self.total_wait_ms = 0.0
@@ -107,6 +110,10 @@ class ViewHandler:
         self.wait_count = 0
         self.avg_wait_ms = 0.0
         self.late_count = 0
+        # The clock y1 divides by. Stamped here, when the warmup ends and counting
+        # starts, so achieved throughput is measured over exactly the window whose
+        # completions it counts.
+        self.measure_t0 = time.time()
 
     def note_latency(self, latency_ms):
         """Record a completed request's end-to-end latency; count deadline misses."""
@@ -187,12 +194,28 @@ class ViewHandler:
         self.total_infer_time += infer_time
         self.infer_count += 1
         self.avg_infer_time = self.total_infer_time / self.infer_count
-        self.avg_fps = 1000.0 / self.avg_infer_time if self.avg_infer_time > 0 else 0.0
-        
+
+        # y1 = ACHIEVED throughput: completions per second of measured wall clock.
+        #
+        # It used to be 1000/avg_infer_time, which is a capability derived from the
+        # forward pass alone -- it reported resnet50 at 315 fps while the pipeline
+        # actually completed 100/s, and yolo11s at 233 against 31. It could not see
+        # preprocessing, postprocessing, visualisation or queueing, i.e. most of what
+        # a placement decision has to trade off, and it disagreed with y2, which was
+        # already end-to-end. Counting completions makes y1 and y2 measure the same
+        # thing: work that got all the way through.
+        elapsed = self.measured_seconds()
+        self.avg_fps = (self.infer_count / elapsed) if elapsed > 0 else 0.0
+
         # Log performance data
         async_log(model_name, infer_time, self.avg_fps, log_enabled)
-        
+
         return self.avg_fps, self.avg_infer_time
+
+    def measured_seconds(self):
+        """Wall-clock seconds since the measurement window opened (post-warmup)."""
+        t0 = getattr(self, 'measure_t0', None)
+        return (time.time() - t0) if t0 else 0.0
 
 class YoloViewHandler(ViewHandler):
     """Handler for YOLO model views."""

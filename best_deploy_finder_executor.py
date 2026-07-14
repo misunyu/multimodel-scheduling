@@ -743,6 +743,8 @@ class BestDeployFinderApp(QMainWindow):
             load_static_profiles,
             featurize_from_combo,
             predict_targets,
+            combo_has_generative,
+            score_combo,
             _load_yaml_or_json,
             _iter_combos_from_schedule,
         )
@@ -778,16 +780,21 @@ class BestDeployFinderApp(QMainWindow):
         for name, combo_blob in combos:
             X = featurize_from_combo(S, combo_blob)
             self._validate_feature_vector(X, model_prefix)
-            y1_pred, y2_pred, y3_pred = predict_targets(model_prefix, X)
+            # A vision-only set generates no tokens, so the y3 model is neither loaded
+            # nor scored -- it used to predict ~0.89 tokens for a set with no LLM in it
+            # and hand every such combination beta*0.89 of free score.
+            gen = combo_has_generative(combo_blob)
+            y1_pred, y2_pred, y3_pred = predict_targets(model_prefix, X, with_y3=gen)
             # y1 = norm throughput, y2 = deadline miss rate, y3 = norm tokens
             fps = float(y1_pred[0]); miss = float(y2_pred[0]); tok = float(y3_pred[0])
-            score = fps + float(beta) * tok - float(alpha) * miss
+            score = score_combo(fps, miss, tok, gen, alpha, beta)
             rows.append({
                 "source": sched_path.name,
                 "combination": str(name),
                 "pred_norm_throughput": fps,
                 "pred_deadline_miss_rate": miss,
                 "pred_norm_tokens": tok,
+                "has_generative": gen,
                 "pred_score": score,
             })
 

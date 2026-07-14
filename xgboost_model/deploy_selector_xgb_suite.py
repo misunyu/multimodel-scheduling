@@ -540,18 +540,76 @@ def write_coverage(M: pd.DataFrame, model_out_prefix: Path) -> Dict[str, Any]:
     return coverage
 
 
-def train_targets(X: pd.DataFrame, Y: pd.DataFrame, model_out_prefix: Path) -> None:
+def train_targets(X: pd.DataFrame, Y: pd.DataFrame, model_out_prefix: Path,
+                  M: pd.DataFrame = None) -> None:
     xgb = _lazy_import_xgb()
     feat_names = list(X.columns)
     Path(str(model_out_prefix)).parent.mkdir(parents=True, exist_ok=True)
     Path(str(model_out_prefix) + "_features.json").write_text(json.dumps(feat_names), encoding="utf-8")
+
+    # y3 is trained ONLY on windows that actually generated tokens. Feeding it the
+    # y3=0 of vision-only sets would teach it that some feature combinations mean
+    # "no tokens", when the truth is that the question was never asked -- and that is
+    # exactly the confusion that produced a 0.89 token prediction for a set with no
+    # LLM in it. The `views.sum.view.is_llm` feature counts LLM/VLM views, so it is
+    # the row-level answer to "does this window generate".
+    gen_mask = None
+    if "views.sum.view.is_llm" in X.columns:
+        gen_mask = X["views.sum.view.is_llm"].values > 0
+
     for tag, col in _TARGETS:
-        yv = Y[col].values.astype(float)
-        params, mae = _cv_select_params(xgb, X.values, yv, feat_names)
+        Xi, Yi = X, Y
+        if tag == "y3" and gen_mask is not None:
+            Xi, Yi = X[gen_mask], Y[gen_mask]
+            dropped = int((~gen_mask).sum())
+            print(f"[train] y3: {dropped} vision-only rows excluded "
+                  f"({len(Xi)} of {len(X)} kept)")
+            if len(Xi) == 0:
+                print("[train] y3: no generative rows; skipping the y3 model entirely.")
+                continue
+        yv = Yi[col].values.astype(float)
+        params, mae = _cv_select_params(xgb, Xi.values, yv, feat_names)
         print(f"[train] {tag} ({col}): params max_depth={params['max_depth']} eta={params['eta']} cv_mae={mae:.4f}")
-        d = xgb.DMatrix(X.values, label=yv, feature_names=feat_names)
+        d = xgb.DMatrix(Xi.values, label=yv, feature_names=feat_names)
         bst = xgb.train(params, d, num_boost_round=300)
         bst.save_model(str(model_out_prefix) + f"_{tag}.json")
+
+
+def combo_has_generative(combo_blob) -> bool:
+    """Does this working set contain any LLM/VLM view?
+
+    Decided from the registry (`kind_of`), never from a hardcoded name list, so adding
+    a model does not silently fall on the wrong side of the split.
+    """
+    for v in _rows_from_combo_struct(combo_blob):
+        m = v.get("model")
+        if not m:
+            continue
+        try:
+            if _model_kind(m) in ("llm", "vlm"):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def score_combo(y1: float, y2: float, y3: float, has_generative: bool,
+                alpha: float, beta: float) -> float:
+    """S = y1 - alpha*y2, plus beta*y3 only when the set actually generates tokens.
+
+    A vision-only set has no token throughput to trade off: measured y3 is 0, but the
+    predictor -- never trained on such a set -- happily emits ~0.89, which at beta=0.5
+    handed every vision-only combination half a point of free score. The term is not
+    zeroed after the fact; it is not in the objective at all.
+
+    NOTE: this makes the score's scale depend on the set type, so scores are comparable
+    only WITHIN one working set (which is all they are used for: ranking placements).
+    Never compare a score across working sets.
+    """
+    s = float(y1) - float(alpha) * float(y2)
+    if has_generative:
+        s += float(beta) * float(y3)
+    return s
 
 
 def _align_features(X: pd.DataFrame, model_in_prefix: Path) -> pd.DataFrame:
@@ -565,16 +623,27 @@ def _align_features(X: pd.DataFrame, model_in_prefix: Path) -> pd.DataFrame:
     return X
 
 
-def predict_targets(model_in_prefix: Path, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def predict_targets(model_in_prefix: Path, X: pd.DataFrame,
+                    with_y3: bool = True) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Predict y1/y2 (and y3 only when asked).
+
+    `with_y3=False` for a vision-only set: the y3 booster is not loaded and not run.
+    Returning a number and discarding it later would leave the door open for someone to
+    use it; the honest answer for a set that generates no tokens is that the question
+    does not apply.
+    """
     xgb = _lazy_import_xgb()
     X = _align_features(X.copy(), model_in_prefix)
     dmat = xgb.DMatrix(X.values, feature_names=list(X.columns))
-    preds = []
+    preds = {}
     for tag, _ in _TARGETS:
+        if tag == "y3" and not with_y3:
+            preds[tag] = np.zeros(X.shape[0], dtype=float)
+            continue
         bst = xgb.Booster(model_file=str(model_in_prefix) + f"_{tag}.json")
         # All targets are normalized to [0,1]; clip predictions to the valid range.
-        preds.append(np.clip(bst.predict(dmat), 0.0, 1.0))
-    return preds[0], preds[1], preds[2]
+        preds[tag] = np.clip(bst.predict(dmat), 0.0, 1.0)
+    return preds["y1"], preds["y2"], preds["y3"]
 
 
 # Backward-compatible alias (older callers expected 2 targets).
@@ -637,9 +706,10 @@ def main():
         results = []
         for name, combo_blob in _iter_combos_from_schedule(schedule):
             X = featurize_from_combo(S, combo_blob)
-            y1, y2, y3 = predict_targets(prefix, X)
+            gen = combo_has_generative(combo_blob)
+            y1, y2, y3 = predict_targets(prefix, X, with_y3=gen)
             T, miss, Ttok = float(y1[0]), float(y2[0]), float(y3[0])
-            score = T + args.beta * Ttok - args.alpha * miss
+            score = score_combo(T, miss, Ttok, gen, args.alpha, args.beta)
             results.append((name, T, miss, Ttok, score))
             print(f"{name}\tT={T:.3f}\tmiss={miss:.3f}\tT_tok={Ttok:.3f}\tscore={score:.3f}")
         if results:

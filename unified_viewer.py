@@ -3,6 +3,7 @@ Main UnifiedViewer class for the multimodel scheduling application.
 """
 import os
 import json
+import time
 import signal
 import yaml
 from datetime import datetime
@@ -81,6 +82,12 @@ VISUALIZABLE_MODELS = {"qwen2_vl", "resnet50", "yolo11s", "llama1b"}
 # activate more concurrent models than that; the extra views run headless —
 # they execute and contribute to the statistics, they just aren't rendered.
 DISPLAY_SLOTS = ["view1", "view2", "view3", "view4"]
+
+# Seconds discarded before measurement starts. 5s was not enough: llama1b's first
+# inference lands at 13.4s in the 8-model set, so the window opened while it was still
+# loading and the vision models ran uncontended -- which read back as a 15% optimistic
+# deadline-miss rate. Measured in DURATION_CONVERGENCE_REPORT.md.
+WARMUP_SECONDS = float(os.environ.get("WARMUP_SECONDS", "20"))
 MAX_VIEWS = 8
 # Colors cycled through when rendering the per-view performance summary.
 VIEW_COLORS = ["gray", "purple", "green", "blue", "darkorange", "brown", "teal", "magenta"]
@@ -916,10 +923,11 @@ class UnifiedViewer(QMainWindow):
         Args:
             duration (int): Duration in seconds for the execution to run.
         """
-        print(f"Starting execution with duration: {duration} seconds")
-        # We treat the first 5 seconds as warmup; only measure after that.
+        print(f"Starting execution with duration: {duration} seconds "
+              f"(warmup {WARMUP_SECONDS}s excluded)")
+        # Warmup is excluded from the measurement window.
         try:
-            self.window_duration_sec = max(0.0, float(duration) - 5.0)
+            self.window_duration_sec = max(0.0, float(duration) - WARMUP_SECONDS)
         except Exception:
             self.window_duration_sec = None
         
@@ -938,9 +946,9 @@ class UnifiedViewer(QMainWindow):
             self.initialize_processes()
             self.initialize_threads()
         
-        # Schedule a warmup window: reset all metrics after 5 seconds from start
+        # Reset all metrics once the warmup has elapsed; measurement starts there.
         try:
-            QTimer.singleShot(5000, self._begin_measurement_window)
+            QTimer.singleShot(int(WARMUP_SECONDS * 1000), self._begin_measurement_window)
         except Exception:
             pass
             
@@ -952,8 +960,20 @@ class UnifiedViewer(QMainWindow):
         print("Execution duration completed, stopping model execution...")
         self.stop_execution()
         
+    def measured_window_sec(self):
+        """Wall-clock length of the measurement window so far (0 before warmup ends)."""
+        t0 = getattr(self, '_measure_t0', None)
+        if not t0:
+            return 0.0
+        end = getattr(self, '_measure_t_end', None) or time.time()
+        return max(0.0, end - t0)
+
     def _begin_measurement_window(self):
         """Reset all per-view and feeder counters after warmup to start measurement."""
+        import time as _t
+        self._measure_t0 = _t.time()
+        self._measure_t_end = None
+        print(f"[UnifiedViewer] Warmup over ({WARMUP_SECONDS}s); measurement window open.")
         try:
             for name in [f"{v}_handler" for v in self.view_names]:
                 handler = getattr(self, name, None)
@@ -976,6 +996,11 @@ class UnifiedViewer(QMainWindow):
             return
         # Mark as stopped to ensure idempotency
         self._already_stopped = True
+
+        # Freeze the measurement clock here: everything below (y1's completions, y2's
+        # offered count) must divide by the same window.
+        if getattr(self, '_measure_t0', None) and not getattr(self, '_measure_t_end', None):
+            self._measure_t_end = time.time()
 
         # Immediately signal all local threads/feeders to stop enqueuing
         try:
@@ -1285,7 +1310,10 @@ class UnifiedViewer(QMainWindow):
             #   offered  = requests demanded over the window = infps * window_sec
             #   on_time  = completions whose end-to-end latency <= deadline
             #   miss     = offered - on_time  (dropped, late, and undelivered all count)
-            wsec = float(self.window_duration_sec) if getattr(self, 'window_duration_sec', None) else 1.0
+            # The ACTUAL measured window, not the nominal one: y1 counts completions
+            # over this same clock, so y2's "offered" must use it too or the two
+            # targets are normalised against different windows.
+            wsec = float(self.measured_window_sec() or self.window_duration_sec or 1.0)
             miss_by_view = {}
             for v in self.view_names:
                 handler = getattr(self, f"{v}_handler", None)
