@@ -10,6 +10,7 @@ bind to. Functionality and CLI remain compatible.
 
 import sys
 import os
+import signal
 import argparse
 import yaml
 import json
@@ -330,6 +331,42 @@ def main():
     # Create the InfoWindow instance
     info = InfoWindow(parent=None)
 
+    # SIGTERM is how the parent GUI asks us to stop (QProcess.terminate). Python's
+    # default handler would kill us outright, leaving the view workers holding the
+    # NPU, and the next run would fail to allocate. Route it through the viewer's
+    # normal cleanup instead, so the models get disposed.
+    def _graceful_signal(signum, _frame):
+        print(f"[Main] Signal {signum} received; shutting down cleanly.", flush=True)
+        viewer = getattr(_signal_target.get('executor'), '_viewer', None)
+        if viewer is not None:
+            try:
+                # shutdown_all = cleanup (dispose models) -> quit() -> forced backstop.
+                # Going through it rather than quit()-ing ourselves matters: Qt does not
+                # always leave exec_() when torch/Mobilint leave non-daemon threads
+                # behind, and a process that lingers gets SIGKILLed by the parent.
+                viewer.shutdown_all()
+                return
+            except Exception as e:
+                print(f"[Main] Cleanup during signal failed (exiting anyway): {e}", flush=True)
+        try:
+            QApplication.instance().quit()
+        except Exception:
+            pass
+        QTimer.singleShot(3000, lambda: os._exit(0))
+
+    _signal_target = {}
+    signal.signal(signal.SIGTERM, _graceful_signal)
+    signal.signal(signal.SIGINT, _graceful_signal)
+
+    # Python only runs signal handlers between bytecodes, and Qt's event loop sits in
+    # C the whole time -- so without something that periodically hands control back to
+    # the interpreter, the handler above never runs and SIGTERM is effectively ignored
+    # until the parent gives up and SIGKILLs us (which orphans the view workers with
+    # the models still on the NPU). This idle timer is that something.
+    _sig_pump = QTimer()
+    _sig_pump.start(200)
+    _sig_pump.timeout.connect(lambda: None)
+
     # If schedule_name is provided, run executor-only mode and send InfoWindow to back
     if args.schedule_name:
         try:
@@ -343,6 +380,7 @@ def main():
         except Exception:
             pass
         executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info, selected_combo=args.schedule_name)
+        _signal_target['executor'] = executor
         # Disable Start button since we auto-run and no controller
         try:
             info.start_button.setEnabled(False)
@@ -364,6 +402,7 @@ def main():
 
     # Default GUI mode with controller
     executor = ScheduleExecutor(schedule_file=schedule_path, duration=args.duration, info_window=info)
+    _signal_target['executor'] = executor
     controller = Controller(executor)
 
     # Assign controller as the parent so InfoWindow's built-in handlers call our methods

@@ -6,7 +6,8 @@ import json
 import signal
 import yaml
 from datetime import datetime
-from PyQt5.QtWidgets import QMainWindow, QLabel, QWidget, QVBoxLayout, QFileDialog
+from PyQt5.QtWidgets import (QMainWindow, QLabel, QWidget, QVBoxLayout, QFileDialog,
+                             QPushButton)
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
 from multiprocessing import Process, Queue, Event
@@ -397,7 +398,12 @@ class UnifiedViewer(QMainWindow):
         self.view2 = self.findChild(QLabel, "view2")
         self.view3 = self.findChild(QLabel, "view3")
         self.view4 = self.findChild(QLabel, "view4")
-        
+
+        # Stop All: the demo needs one obvious way to halt everything on stage.
+        self.stop_all_button = self.findChild(QPushButton, "stop_all_button")
+        if self.stop_all_button is not None:
+            self.stop_all_button.clicked.connect(self.on_stop_all_clicked)
+
         # Define and connect signals
         self.model_signals = ModelSignals()
         self.model_signals.update_view1_display.connect(self.update_view1_display)
@@ -579,26 +585,113 @@ class UnifiedViewer(QMainWindow):
             handler.start_display_thread()
     
     # View update methods
+    def _set_view_pixmap(self, view_name, pixmap):
+        """Show a frame and remember it, so a stopped view can keep its last one."""
+        widget = getattr(self, view_name, None)
+        if widget is None:
+            return
+        if getattr(self, '_frozen', False):
+            return  # execution has stopped; do not overwrite the frozen frame
+        widget.setPixmap(pixmap)
+        widget.setScaledContents(True)
+        if not hasattr(self, '_last_pixmaps'):
+            self._last_pixmaps = {}
+        self._last_pixmaps[view_name] = pixmap
+
     def update_view1_display(self, pixmap):
-        """Update view1 display."""
-        self.view1.setPixmap(pixmap)
-        self.view1.setScaledContents(True)
-    
+        self._set_view_pixmap('view1', pixmap)
+
     def update_view2_display(self, pixmap):
-        """Update view2 display."""
-        self.view2.setPixmap(pixmap)
-        self.view2.setScaledContents(True)
-    
+        self._set_view_pixmap('view2', pixmap)
+
     def update_view3_display(self, pixmap):
-        """Update view3 display."""
-        self.view3.setPixmap(pixmap)
-        self.view3.setScaledContents(True)
-    
+        self._set_view_pixmap('view3', pixmap)
+
     def update_view4_display(self, pixmap):
-        """Update view4 display."""
-        self.view4.setPixmap(pixmap)
-        self.view4.setScaledContents(True)
-    
+        self._set_view_pixmap('view4', pixmap)
+
+    def freeze_views(self, label="STOPPED"):
+        """Keep each view's last frame and stamp it as stopped.
+
+        The demo is explained *after* the run stops, so the final frames and the
+        numbers on them have to stay on screen. Blanking the views here would throw
+        away exactly what the presenter is about to point at.
+        """
+        from PyQt5.QtGui import QPainter, QColor, QFont
+        self._frozen = True
+        for view_name in DISPLAY_SLOTS:
+            widget = getattr(self, view_name, None)
+            if widget is None:
+                continue
+            try:
+                pixmap = (getattr(self, '_last_pixmaps', {}) or {}).get(view_name)
+                if pixmap is None or pixmap.isNull():
+                    # Never ran (or never produced a frame): say so rather than go black.
+                    cfg = self.model_settings.get(view_name, {}) or {}
+                    import demo_render as dr
+                    from utils import convert_cv_to_qt
+                    pixmap = convert_cv_to_qt(dr.placeholder(
+                        cfg.get('model', '-'), cfg.get('execution', '-'), f"{label} (no frames)"))
+                    if pixmap.isNull():
+                        continue
+                stamped = pixmap.copy()
+                painter = QPainter(stamped)
+                w, h = stamped.width(), stamped.height()
+                painter.fillRect(0, h - 34, w, 34, QColor(30, 30, 30, 220))
+                font = QFont()
+                font.setBold(True)
+                font.setPixelSize(20)
+                painter.setFont(font)
+                painter.setPen(QColor(255, 90, 90))
+                painter.drawText(10, h - 10, label)
+                painter.end()
+                widget.setPixmap(stamped)
+                widget.setScaledContents(True)
+            except Exception as e:
+                # One view failing to freeze must not stop the others freezing.
+                print(f"[Freeze] {view_name}: {e}")
+
+    def on_stop_all_clicked(self):
+        """The Stop All button: same cleanup path as closing the window."""
+        print("[Stop All] Requested by the user.")
+        self.shutdown_views(close_after=False)
+
+    def shutdown_views(self, close_after: bool):
+        """THE cleanup path. Both Stop All and the window's X come through here.
+
+        Order: signal workers -> join/terminate -> (each worker disposes its model in
+        its own finally) -> save metrics -> stop timers -> drain queues -> freeze the
+        views. Every step is individually guarded: a view that fails to clean up must
+        not prevent the rest from being cleaned up, or the NPU stays held and the next
+        run dies with BadAlloc.
+        """
+        try:
+            self.stop_execution()          # idempotent; safe to call twice
+        except Exception as e:
+            print(f"[Shutdown] stop_execution failed (continuing): {e}")
+        try:
+            self.freeze_views("STOPPED")
+        except Exception as e:
+            print(f"[Shutdown] freeze_views failed (continuing): {e}")
+        try:
+            if hasattr(self, 'stop_all_button') and self.stop_all_button is not None:
+                self.stop_all_button.setEnabled(False)   # re-entry guard
+                self.stop_all_button.setText("Stopped")
+        except Exception as e:
+            print(f"[Shutdown] button update failed (continuing): {e}")
+        try:
+            # One last refresh so the frozen screen shows the final numbers. The cpu
+            # timer is stopped by now, so these values then simply stay put.
+            self.update_cpu_npu_usage()
+        except Exception as e:
+            print(f"[Shutdown] final metrics refresh failed (continuing): {e}")
+        if close_after:
+            try:
+                self.close()
+            except Exception as e:
+                print(f"[Shutdown] window close failed: {e}")
+
+
     # Signal handling and shutdown methods
     def signal_handler(self, sig, frame):
         """Handle SIGINT signal (Ctrl+C)."""
@@ -618,70 +711,71 @@ class UnifiedViewer(QMainWindow):
         os._exit(0)
     
     def closeEvent(self, event):
-        """Handle window close event.
-        - Always stop execution and timers.
-        - In executor-only mode (--schedule_name): shut down entire application.
-        - Otherwise: dispose this window so a fresh viewer can be created later.
+        """The window's X. Runs exactly the same cleanup as the Stop All button.
+
+        Keeping these two on one path is the whole point: if X cleaned up differently
+        from Stop, one of the two would inevitably leave the NPU held and the next run
+        would fail with BadAlloc -- mid-demo.
         """
         event.accept()
-        # Immediately set shutdown flags to stop video generation
-        try:
-            self.shutdown_flag.set()
-            self.global_exit_flag = True
-        except Exception:
-            pass
+        self.shutdown_views(close_after=False)   # already closing; do not recurse
 
-        # Set all shutdown events to stop processes
-        for name in [f"{v}_shutdown_event" for v in self.view_names] + ['video_shutdown_event']:
-            ev = getattr(self, name, None)
-            try:
-                if ev:
-                    ev.set()
-            except Exception:
-                pass
-
-        # Clean up model execution and resources once
-        try:
-            self.stop_execution()
-        except Exception:
-            pass
-        # Ensure all queues are drained/closed between runs to prevent BrokenPipe on next schedule
-        try:
-            self._cleanup_queues()
-        except Exception:
-            pass
-
-        # Stop and delete CPU timer if present
         try:
             if hasattr(self, 'cpu_timer') and self.cpu_timer is not None:
-                self.cpu_timer.stop()
                 self.cpu_timer.deleteLater()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Shutdown] timer teardown failed (continuing): {e}")
 
-        # If running in executor-only mode, shut down everything; otherwise dispose this window
         if getattr(self, 'executor_only', False):
-            print("[UnifiedViewer] Close event in executor-only mode - terminating application")
+            print("[UnifiedViewer] Close in executor-only mode - terminating application")
             try:
                 if self.info_window:
                     self.info_window.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[Shutdown] info window close failed (continuing): {e}")
             self.shutdown_all()
         else:
             print("[UnifiedViewer] Close event triggered - closing viewer window")
             try:
                 self.deleteLater()
-            except Exception:
-                pass
-    
+            except Exception as e:
+                print(f"[Shutdown] deleteLater failed: {e}")
+
     def shutdown_all(self):
-        """Clean up resources and shut down the application."""
-        # First stop all model execution
-        self.stop_execution()
-            
-        print("[Shutdown] Forcing exit")
-        os._exit(0)
+        """Stop everything, then end the process -- cleanup first, never skipped."""
+        try:
+            self.shutdown_views(close_after=False)
+        except Exception as e:
+            print(f"[Shutdown] cleanup failed (exiting anyway): {e}")
+
+        from PyQt5.QtWidgets import QApplication
+        import threading
+        print("[Shutdown] Cleanup complete; quitting the event loop.", flush=True)
+
+        # Backstop FIRST, and on a plain threading.Timer -- not a QTimer. quit() does
+        # not reliably make exec_() return here (the Mobilint runtime and torch leave
+        # threads behind), and once the loop has stopped dispatching, a QTimer can
+        # never fire: the backstop that was supposed to save us would be the one thing
+        # guaranteed not to run, and the process would hang forever holding nothing but
+        # a stale window. A threading.Timer is independent of Qt entirely.
+        #
+        # This forces the exit only AFTER cleanup above has finished, so nothing is
+        # skipped: models are disposed, results are written, workers are reaped.
+        def _force():
+            print("[Shutdown] Event loop did not exit in time; forcing exit.", flush=True)
+            os._exit(0)
+        try:
+            t = threading.Timer(3.0, _force)
+            t.daemon = True
+            t.start()
+        except Exception as e:
+            print(f"[Shutdown] Could not arm the exit backstop ({e}); exiting now.")
+            os._exit(0)
+
+        try:
+            QApplication.instance().quit()
+        except Exception as e:
+            print(f"[Shutdown] quit() failed: {e}")
     
     # Monitoring and statistics methods
     def start_execution(self, duration):
@@ -817,36 +911,53 @@ class UnifiedViewer(QMainWindow):
         print("[Stop Execution] Model execution stopped, window remains open with last results")
         
     def _cleanup_queues(self):
-        """Drain, close, and nullify all multiprocessing queues safely between runs."""
+        """Drain, close, and nullify all multiprocessing queues safely between runs.
+
+        Two things here are load-bearing, both learned the hard way:
+
+        `cancel_join_thread()` must come FIRST. Each queue has a background feeder
+        thread that can be blocked writing into a pipe whose reader (the worker
+        process) has just been terminated. Closing before cancelling makes teardown
+        wait on a thread that will never make progress.
+
+        The drain must be BOUNDED. It used to be `while True: q.get_nowait()`, which
+        hung the whole shutdown on the X path: a queue still being topped up by a
+        blocked feeder never reports empty, so the loop never ends and the window
+        never closes -- leaving the NPU held and the next run dead on arrival.
+        """
         import time as _t
-        # Helper to drain a queue without blocking
+
+        DRAIN_LIMIT = 10000       # items
+        DRAIN_SECONDS = 1.0       # per queue
+
         def _drain(q):
             if not q:
                 return
+            deadline = _t.time() + DRAIN_SECONDS
+            for _ in range(DRAIN_LIMIT):
+                if _t.time() > deadline:
+                    print("[Cleanup] Drain deadline hit; abandoning the rest of the queue.")
+                    return
+                try:
+                    q.get_nowait()
+                except Exception:
+                    return            # Empty, closed, or broken: nothing more to take
+
+        def _cancel(q):
+            if not q:
+                return
             try:
-                while True:
-                    try:
-                        q.get_nowait()
-                    except Exception:
-                        break
-            except Exception:
-                pass
-        # Helper to close a queue safely
+                q.cancel_join_thread()   # before anything else: never wait on a stuck feeder
+            except Exception as e:
+                print(f"[Cleanup] cancel_join_thread failed (continuing): {e}")
+
         def _close(q):
             if not q:
                 return
             try:
-                try:
-                    q.close()
-                except Exception:
-                    pass
-                try:
-                    # Prevent hanging on Python's background feeder thread
-                    q.cancel_join_thread()
-                except Exception:
-                    pass
-            except Exception:
-                pass
+                q.close()
+            except Exception as e:
+                print(f"[Cleanup] queue close failed (continuing): {e}")
         # Give local feeders a moment to observe shutdown_flag
         try:
             _t.sleep(0.05)
@@ -859,6 +970,7 @@ class UnifiedViewer(QMainWindow):
         for name in q_names:
             q = getattr(self, name, None)
             try:
+                _cancel(q)
                 _drain(q)
                 _close(q)
             finally:

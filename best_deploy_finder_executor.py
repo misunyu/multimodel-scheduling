@@ -41,11 +41,6 @@ DEMO_INPUT_DEFAULTS = {
     "DEMO_VLM_PROMPT": "",                          # "" -> the engine's default prompt
 }
 
-# Executors still running when the GUI closes are moved here so Python does not
-# garbage-collect the QProcess (which would take the running child down with it).
-# The old Popen-based launch let the executor outlive the GUI; keep that.
-_DETACHED_EXECUTORS = []
-
 
 def discover_file_backed_models(models_root: str):
     """Vision models deployable from the models/ folder.
@@ -966,11 +961,15 @@ class BestDeployFinderApp(QMainWindow):
         return proc
 
     def closeEvent(self, event):
-        """Let a running executor outlive this window, instead of dying with it.
+        """Take running executors down with the GUI: terminate, wait, then kill.
 
-        The output callbacks are bound to widgets that are about to be destroyed, so
-        disconnect them first: otherwise they fire on a deleted QProcess and the GUI
-        goes down with a RuntimeError on the way out.
+        An executor left running after its parent closes is an orphan holding the NPU,
+        and the next demo run fails to load with BadAlloc. Terminate first so the
+        executor's own shutdown path runs (it disposes the models); kill only what
+        refuses to go.
+
+        Disconnect the output callbacks before any of this: they are bound to widgets
+        that are about to be destroyed, and would fire on a deleted QProcess.
         """
         for proc in list(getattr(self, '_executor_procs', ())):
             for signal in (proc.readyReadStandardOutput, proc.readyReadStandardError,
@@ -979,9 +978,22 @@ class BestDeployFinderApp(QMainWindow):
                     signal.disconnect()
                 except TypeError:
                     pass  # nothing was connected to this one
-            if proc.state() != QProcess.NotRunning:
-                proc.setParent(None)
-                _DETACHED_EXECUTORS.append(proc)
+            try:
+                if proc.state() != QProcess.NotRunning:
+                    self.log("[Exec] Stopping the executor before exit...")
+                    proc.terminate()
+                    # Its cleanup joins five worker processes and disposes their models,
+                    # which takes real time. Killing early would orphan those workers with
+                    # the NPU still held, so give it room before resorting to SIGKILL.
+                    if not proc.waitForFinished(25000):
+                        self.log("[Warning] Executor did not stop in 25s; killing it. "
+                                 "NPU memory may still be held — check for stray workers.")
+                        proc.kill()
+                        proc.waitForFinished(3000)
+            except Exception as e:
+                # Keep going: a failure to reap one child must not block the others.
+                print(f"[Shutdown] Could not stop an executor (continuing): {e}")
+        self._executor_procs = set()
         super().closeEvent(event)
 
     # ---- Best-vs-worst comparison ------------------------------------------------

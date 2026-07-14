@@ -75,6 +75,8 @@ if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
   CMD+=("${EXTRA_ARGS[@]}")
 fi
 
-# Execute
+# Execute. `exec` so python REPLACES this shell rather than running as its child:
+# the parent GUI stops the executor with SIGTERM, and without exec that signal would
+# kill only this wrapper, orphaning python with the models still loaded on the NPU.
 # shellcheck disable=SC2068
-${CMD[@]}
+exec ${CMD[@]}
