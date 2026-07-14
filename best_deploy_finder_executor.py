@@ -190,6 +190,10 @@ class BestDeployFinderApp(QMainWindow):
             self.predict_best_button.clicked.connect(self.on_predict_best_clicked)
         if hasattr(self, 'load_execute_best_button'):
             self.load_execute_best_button.clicked.connect(self.on_load_execute_best_clicked)
+        if hasattr(self, 'run_worst_button'):
+            self.run_worst_button.clicked.connect(self.on_run_worst_clicked)
+        if hasattr(self, 'run_comparison_button'):
+            self.run_comparison_button.clicked.connect(self.on_run_comparison_clicked)
 
         # Initialize line edits if present
         if hasattr(self, 'deployment_model_input'):
@@ -851,9 +855,15 @@ class BestDeployFinderApp(QMainWindow):
             f.write(yaml.dump(schedules, default_flow_style=False))
         return out_path
 
-    def _launch_executor_subprocess(self, schedule_path: str, combo_name: str = None, duration: int = None):
+    def _launch_executor_subprocess(self, schedule_path: str, combo_name: str = None,
+                                    duration: int = None, on_finished=None):
         """Launch schedule_executor_main.py in a separate process to avoid nested QApps.
         If combo_name is provided, run executor-only mode for that single combination.
+
+        `on_finished(exit_code, results_path)` is called when the run ends. The results
+        path is scraped from the child's own "[Executor] Initialized results file:" line
+        rather than guessed, so the comparison reads the metrics of the run it started
+        and not some other run's file that happens to be newest on disk.
 
         Run under QProcess, not a bare Popen, for two reasons the old code got wrong:
         its output was never read, so a child that died on startup did so invisibly --
@@ -904,12 +914,16 @@ class BestDeployFinderApp(QMainWindow):
                 env.insert(key, str(val))
         proc.setProcessEnvironment(env)
         stderr_tail = deque(maxlen=20)
+        seen = {"results": None}
 
         def _drain_stdout():
             text = bytes(proc.readAllStandardOutput()).decode('utf-8', 'replace')
             for line in text.splitlines():
-                if line.strip():
-                    self.log(f"[Exec] {line}")
+                if not line.strip():
+                    continue
+                if "Initialized results file:" in line:
+                    seen["results"] = line.split("Initialized results file:", 1)[1].strip()
+                self.log(f"[Exec] {line}")
 
         def _drain_stderr():
             text = bytes(proc.readAllStandardError()).decode('utf-8', 'replace')
@@ -928,10 +942,14 @@ class BestDeployFinderApp(QMainWindow):
             else:
                 self.log("[Exec] executor exited normally (code 0).")
             self._executor_procs.discard(proc)
+            if on_finished is not None:
+                on_finished(code, seen["results"])
 
         def _error(err):
             self.log(f"[Error] Failed to launch executor: {proc.errorString()} ({err})")
             self._executor_procs.discard(proc)
+            if on_finished is not None:
+                on_finished(-1, None)
 
         proc.readyReadStandardOutput.connect(_drain_stdout)
         proc.readyReadStandardError.connect(_drain_stderr)
@@ -945,6 +963,7 @@ class BestDeployFinderApp(QMainWindow):
 
         self.log(f"[Exec] Launching executor (cwd={root}): {program} {' '.join(args)}")
         proc.start()
+        return proc
 
     def closeEvent(self, event):
         """Let a running executor outlive this window, instead of dying with it.
@@ -964,6 +983,359 @@ class BestDeployFinderApp(QMainWindow):
                 proc.setParent(None)
                 _DETACHED_EXECUTORS.append(proc)
         super().closeEvent(event)
+
+    # ---- Best-vs-worst comparison ------------------------------------------------
+
+    def _read_predictions(self):
+        """predictions.csv rows, already score-descending (the predictor wrote them so).
+
+        Returns [] when Predict has not been run; callers must say so rather than
+        silently doing nothing.
+        """
+        import csv
+        path = os.path.join(os.path.dirname(__file__), 'predictions.csv')
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                rows = [r for r in csv.DictReader(f) if r.get('combination')]
+        except Exception as e:
+            self.log(f"[Error] Could not read predictions.csv: {e}")
+            return []
+        for r in rows:
+            for k in ('pred_score', 'pred_norm_throughput', 'pred_deadline_miss_rate',
+                      'pred_norm_tokens'):
+                try:
+                    r[k] = float(r.get(k))
+                except Exception:
+                    r[k] = float('nan')
+        return rows
+
+    def _combo_placement(self, combo_name):
+        """{model: device} for a combination in the generated schedule YAML."""
+        import yaml
+        try:
+            doc = yaml.safe_load(open(self.generated_schedule_path, encoding='utf-8'))
+            return {v['model']: v['execution'] for v in (doc.get(combo_name) or {}).values()}
+        except Exception as e:
+            self.log(f"[Warn] Could not read placement for {combo_name}: {e}")
+            return {}
+
+    def _combo_is_runnable(self, combo_name):
+        """A combination is runnable when every model sits on a device it allows.
+
+        The enumeration already honours DEVICE_CONSTRAINTS, so this should always
+        pass; it is here because the worst-scoring row is the one most likely to be
+        odd, and running an impossible combination would fail mid-demo.
+        """
+        import model_registry as reg
+        placement = self._combo_placement(combo_name)
+        if not placement:
+            return False, "no placement found in the schedule"
+        for model, dev in placement.items():
+            try:
+                allowed = reg.allowed_devices(model)
+            except Exception:
+                continue
+            if dev not in allowed:
+                return False, f"{model} cannot run on {dev} (allowed: {'/'.join(allowed)})"
+        return True, ""
+
+    def _pick_best_and_worst(self):
+        """(best_row, worst_row) or (None, reason).
+
+        Worst is the lowest-scoring *runnable* combination, walking up from the bottom.
+        """
+        rows = self._read_predictions()
+        if not rows:
+            return None, ("No predictions found. Press 'Predict Best Deployment' first — "
+                          "the comparison ranks the combinations it produced.")
+        if len(rows) < 2:
+            return None, ("Only one combination was predicted, so there is nothing to "
+                          "compare it against.")
+
+        best = rows[0]
+        ok, why = self._combo_is_runnable(best['combination'])
+        if not ok:
+            return None, f"The best combination ({best['combination']}) is not runnable: {why}"
+
+        worst = None
+        for row in reversed(rows[1:]):
+            ok, why = self._combo_is_runnable(row['combination'])
+            if ok:
+                worst = row
+                break
+            self.log(f"[Compare] Skipping {row['combination']} (lowest score but not "
+                     f"runnable: {why}); trying the next one up.")
+        if worst is None:
+            return None, "No runnable combination to compare against the best one."
+
+        if worst['combination'] == best['combination']:
+            return None, "Best and worst are the same combination; nothing to compare."
+        if abs(worst['pred_score'] - best['pred_score']) < 1e-9:
+            return None, ("Every combination scored the same, so the predictor is not "
+                          "expressing a preference; a comparison would show nothing.")
+        return (best, worst), ""
+
+    def _measured_from_results(self, results_path, combo_name):
+        """The executor's own metrics for `combo_name`. No new measurement is invented."""
+        import json
+        if not results_path or not os.path.exists(results_path):
+            self.log(f"[Warn] No results file for {combo_name} at {results_path}")
+            return None
+        try:
+            blob = json.loads(open(results_path, encoding='utf-8').read())
+        except Exception as e:
+            self.log(f"[Warn] Could not read {results_path}: {e}")
+            return None
+        entries = [e for e in (blob if isinstance(blob, list) else [blob])
+                   if e.get('combination') == combo_name]
+        if not entries:
+            self.log(f"[Warn] {os.path.basename(results_path)} has no entry for {combo_name}.")
+            return None
+        e = entries[-1]
+        total = e.get('total') or {}
+        return {
+            'combination': combo_name,
+            'throughput_fps': total.get('total_throughput_fps'),
+            'tokens_per_s': total.get('total_tokens_per_s'),
+            'deadline_miss_rate': total.get('deadline_miss_rate'),
+            'window_sec': e.get('window_sec'),
+            'views': {v: {'model': d.get('model'), 'execution': d.get('execution'),
+                          'throughput_fps': d.get('throughput_fps'),
+                          'tokens_per_s': d.get('tokens_per_s')}
+                      for v, d in (e.get('models') or {}).items()},
+        }
+
+    def _run_duration(self):
+        try:
+            return max(1, int(self.duration_input.text()))
+        except Exception:
+            return 60
+
+    def _set_run_buttons_enabled(self, enabled):
+        for name in ('run_worst_button', 'run_comparison_button',
+                     'load_execute_best_button', 'predict_best_button'):
+            if hasattr(self, name):
+                getattr(self, name).setEnabled(enabled)
+
+    def _set_run_status(self, text):
+        if hasattr(self, 'run_status_label'):
+            self.run_status_label.setText(text)
+
+    def on_run_worst_clicked(self):
+        picked, reason = self._pick_best_and_worst()
+        if picked is None:
+            self._compare_unavailable(reason)
+            return
+        _, worst = picked
+        self.log(f"[Compare] Running WORST: {worst['combination']} "
+                 f"(predicted score {worst['pred_score']:.4f})")
+        self._set_run_status(f"Running: WORST ({worst['combination']})")
+        self._launch_executor_subprocess(self.generated_schedule_path,
+                                         combo_name=worst['combination'],
+                                         duration=self._run_duration())
+
+    def on_run_comparison_clicked(self):
+        """Run best, then worst, then show them side by side.
+
+        Sequential on purpose: the NPU time-slices between whatever is resident, so
+        running both at once would have each stealing the other's throughput and both
+        measurements would be junk.
+        """
+        picked, reason = self._pick_best_and_worst()
+        if picked is None:
+            self._compare_unavailable(reason)
+            return
+        best, worst = picked
+        duration = self._run_duration()
+        self._comparison = {'best_row': best, 'worst_row': worst,
+                            'best': None, 'worst': None}
+
+        self.log(f"[Compare] Sequential comparison, {duration}s each "
+                 f"(~{2 * duration + 30}s total, plus model load).")
+        self.log(f"[Compare] BEST  {best['combination']}: predicted score {best['pred_score']:.4f}, "
+                 f"placement {self._placement_str(best['combination'])}")
+        self.log(f"[Compare] WORST {worst['combination']}: predicted score {worst['pred_score']:.4f}, "
+                 f"placement {self._placement_str(worst['combination'])}")
+
+        self._set_run_buttons_enabled(False)
+        self._set_run_status(f"Running: BEST ({best['combination']})  —  1 of 2")
+
+        def after_best(code, results_path):
+            self._comparison['best'] = self._measured_from_results(
+                results_path, best['combination'])
+            if self._comparison['best'] is None:
+                self.log("[Compare] The best run produced no metrics; aborting the comparison.")
+                self._set_run_status("Comparison aborted: the best run produced no metrics.")
+                self._set_run_buttons_enabled(True)
+                return
+            self.log(f"[Compare] BEST measured: {self._fmt_measured(self._comparison['best'])}")
+            self._set_run_status(f"Running: WORST ({worst['combination']})  —  2 of 2   "
+                                 f"[BEST done: {self._fmt_measured(self._comparison['best'])}]")
+            self._launch_executor_subprocess(self.generated_schedule_path,
+                                             combo_name=worst['combination'],
+                                             duration=duration, on_finished=after_worst)
+
+        def after_worst(code, results_path):
+            self._comparison['worst'] = self._measured_from_results(
+                results_path, worst['combination'])
+            self._set_run_buttons_enabled(True)
+            if self._comparison['worst'] is None:
+                self.log("[Compare] The worst run produced no metrics; nothing to compare.")
+                self._set_run_status("Comparison incomplete: the worst run produced no metrics.")
+                return
+            self.log(f"[Compare] WORST measured: {self._fmt_measured(self._comparison['worst'])}")
+            self.show_comparison(best, worst, self._comparison['best'], self._comparison['worst'])
+
+        self._launch_executor_subprocess(self.generated_schedule_path,
+                                         combo_name=best['combination'],
+                                         duration=duration, on_finished=after_best)
+
+    def _compare_unavailable(self, reason):
+        self.log(f"[Compare] Unavailable: {reason}")
+        self._set_run_status("")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("Comparison unavailable")
+        box.setText(reason)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.exec_()
+
+    def _placement_str(self, combo_name):
+        p = self._combo_placement(combo_name)
+        return ", ".join(f"{m}→{d.upper()}" for m, d in sorted(p.items())) or "?"
+
+    @staticmethod
+    def _fmt_measured(m):
+        if not m:
+            return "-"
+        def _n(v, s):
+            return f"{v:{s}}" if isinstance(v, (int, float)) else "-"
+        return (f"{_n(m.get('throughput_fps'), '.1f')} FPS, "
+                f"{_n(m.get('tokens_per_s'), '.1f')} tok/s, "
+                f"miss {_n(m.get('deadline_miss_rate'), '.1%')}")
+
+    def show_comparison(self, best_row, worst_row, best_m, worst_m):
+        """Side-by-side panel: what the predictor said, and what actually happened.
+
+        Both predicted and measured figures are shown. If the measured order
+        contradicts the predicted one, that is stated plainly -- the honest result is
+        the interesting one, and hiding it would defeat the point of the comparison.
+        """
+        from PyQt5.QtWidgets import (QTableWidget, QTableWidgetItem, QVBoxLayout,
+                                     QDialogButtonBox, QHeaderView)
+        from PyQt5.QtGui import QColor, QFont
+
+        def num(v):
+            return v if isinstance(v, (int, float)) and v == v else None
+
+        b_fps, w_fps = num(best_m.get('throughput_fps')), num(worst_m.get('throughput_fps'))
+        b_tok, w_tok = num(best_m.get('tokens_per_s')), num(worst_m.get('tokens_per_s'))
+        b_miss, w_miss = num(best_m.get('deadline_miss_rate')), num(worst_m.get('deadline_miss_rate'))
+
+        b_place, w_place = self._combo_placement(best_row['combination']), \
+            self._combo_placement(worst_row['combination'])
+        moved = sorted(m for m in set(b_place) | set(w_place)
+                       if b_place.get(m) != w_place.get(m))
+
+        # higher_is_better per row; None = do not highlight
+        rows = [
+            ("Predicted score", f"{best_row['pred_score']:.4f}", f"{worst_row['pred_score']:.4f}", True),
+            ("Predicted throughput (norm)", f"{best_row['pred_norm_throughput']:.3f}",
+             f"{worst_row['pred_norm_throughput']:.3f}", True),
+            ("Predicted deadline-miss (norm)", f"{best_row['pred_deadline_miss_rate']:.3f}",
+             f"{worst_row['pred_deadline_miss_rate']:.3f}", False),
+            ("Placement", self._placement_str(best_row['combination']),
+             self._placement_str(worst_row['combination']), None),
+            ("Moved between devices", ", ".join(
+                f"{m}: {w_place.get(m, '-').upper()}→{b_place.get(m, '-').upper()}" for m in moved) or "-",
+             "", None),
+            ("── MEASURED ──", "", "", None),
+            ("Throughput (FPS)", f"{b_fps:.1f}" if b_fps is not None else "-",
+             f"{w_fps:.1f}" if w_fps is not None else "-", True),
+            ("Tokens/s (LLM+VLM)", f"{b_tok:.1f}" if b_tok is not None else "-",
+             f"{w_tok:.1f}" if w_tok is not None else "-", True),
+            ("Deadline-miss rate", f"{b_miss:.1%}" if b_miss is not None else "-",
+             f"{w_miss:.1%}" if w_miss is not None else "-", False),
+            ("Measured window (s)", str(best_m.get('window_sec') or '-'),
+             str(worst_m.get('window_sec') or '-'), None),
+        ]
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Best vs Worst placement")
+        table = QTableWidget(len(rows), 3, dlg)
+        table.setHorizontalHeaderLabels([
+            "", f"BEST — {best_row['combination']}", f"WORST — {worst_row['combination']}"])
+        table.verticalHeader().setVisible(False)
+
+        better = QColor(210, 245, 210)
+        worse = QColor(250, 220, 220)
+        bold = QFont()
+        bold.setBold(True)
+
+        for r, (label, bval, wval, higher_better) in enumerate(rows):
+            table.setItem(r, 0, QTableWidgetItem(label))
+            bi, wi = QTableWidgetItem(str(bval)), QTableWidgetItem(str(wval))
+            if higher_better is not None:
+                try:
+                    bnum = float(str(bval).rstrip('%'))
+                    wnum = float(str(wval).rstrip('%'))
+                    b_wins = (bnum > wnum) if higher_better else (bnum < wnum)
+                    win_item, lose_item = (bi, wi) if b_wins else (wi, bi)
+                    if bnum != wnum:
+                        win_item.setBackground(better)
+                        win_item.setFont(bold)
+                        lose_item.setBackground(worse)
+                except ValueError:
+                    pass
+            table.setItem(r, 1, bi)
+            table.setItem(r, 2, wi)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.resizeRowsToContents()
+
+        # Did the prediction hold? Say so either way.
+        verdict = QLabel(dlg)
+        verdict.setWordWrap(True)
+        if b_fps is None or w_fps is None:
+            verdict.setText("Measured throughput unavailable for one of the runs.")
+        elif b_fps > w_fps:
+            verdict.setText(
+                f"✔ The predictor was right: the combination it ranked first measured "
+                f"{b_fps:.1f} FPS against {w_fps:.1f} FPS for the one it ranked last "
+                f"({(b_fps / w_fps if w_fps else float('inf')):.2f}× the throughput).")
+            verdict.setStyleSheet("color: #1a7f37; font-weight: bold; padding: 6px;")
+        else:
+            verdict.setText(
+                f"✘ The predicted order did NOT hold: the best-ranked combination measured "
+                f"{b_fps:.1f} FPS but the worst-ranked one measured {w_fps:.1f} FPS. "
+                f"The ranking did not reflect the hardware on this run.")
+            verdict.setStyleSheet("color: #b35900; font-weight: bold; padding: 6px;")
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, dlg)
+        buttons.rejected.connect(dlg.reject)
+        buttons.accepted.connect(dlg.accept)
+
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(table)
+        layout.addWidget(verdict)
+        layout.addWidget(buttons)
+        dlg.resize(860, 460)
+
+        # Mirror the headline numbers into the status bar the .ui already has.
+        if hasattr(self, 'throughput_value') and b_fps is not None:
+            self.throughput_value.setText(f"{b_fps:.1f} (best) vs {w_fps:.1f} (worst)")
+        if hasattr(self, 'drop_value') and b_miss is not None and w_miss is not None:
+            self.drop_value.setText(f"{b_miss:.1%} (best) vs {w_miss:.1%} (worst)")
+        if hasattr(self, 'score_value'):
+            self.score_value.setText(
+                f"{best_row['pred_score']:.3f} (best) vs {worst_row['pred_score']:.3f} (worst)")
+
+        self._set_run_status(
+            f"Comparison done — BEST {best_row['combination']}: {self._fmt_measured(best_m)}   |   "
+            f"WORST {worst_row['combination']}: {self._fmt_measured(worst_m)}")
+        self.log(f"[Compare] {verdict.text()}")
+        dlg.exec_()
 
     def on_load_execute_best_clicked(self):
         """Load best predicted deployment and start execution.
@@ -1001,9 +1373,9 @@ class BestDeployFinderApp(QMainWindow):
         if not os.path.exists(schedule_path):
             self.log(f"[Error] Schedule file not found: {schedule_path}")
             return
-        # Optional: pick duration from UI if available later; for now, default to 60
-        duration = 60
+        duration = self._run_duration()
         # 4) Launch executor in a subprocess with selected combo
+        self._set_run_status(f"Running: BEST ({best_combo})")
         self._launch_executor_subprocess(schedule_path, combo_name=best_combo, duration=duration)
 
     def on_predict_best_clicked(self):
