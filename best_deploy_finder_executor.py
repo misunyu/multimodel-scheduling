@@ -15,8 +15,10 @@ import argparse
 from pathlib import Path
 from PyQt5 import uic
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QDialog, QLabel, QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout, QMessageBox
+from PyQt5.QtGui import QStandardItemModel, QStandardItem, QBrush
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QFileDialog, QDialog, QLabel,
+                             QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout, QMessageBox,
+                             QAbstractItemView)
 
 
 # The platform the user picks in the Device Configuration combo. Each choice ties
@@ -97,25 +99,49 @@ def _infer_model_prefix(p: Path) -> Path:
         return p.parent / prefix
 
 
-class ModelChecklistModel(QStandardItemModel):
-    """Checkable list of model names (no extension) shown in model_tree_view."""
+class WorkingSetListModel(QStandardItemModel):
+    """Single-selection list of the working sets the predictor was trained on.
+
+    One row per set, read from `<prefix>_coverage.json` -- never hardcoded. Because
+    the user can only pick a set the predictor actually saw, an out-of-distribution
+    selection is unconstructible rather than merely warned about.
+
+    The member models live on `Qt.UserRole` so downstream code reads them directly
+    instead of parsing the display label. Rows whose models are not all deployable
+    on this machine are disabled, with the blocking reason in the tooltip.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setHorizontalHeaderLabels(["Model"])
+        self.setHorizontalHeaderLabels(["Trained Working Set"])
 
-    def populate(self, names):
+    def populate(self, model_sets, blockers_for):
+        """`model_sets`: list of lists of model names. `blockers_for(models)` ->
+        {model: reason} for the members that cannot be deployed here."""
         self.removeRows(0, self.rowCount())
-        for name in names:
-            item = QStandardItem(name)
-            item.setCheckable(True)
-            item.setCheckState(Qt.Unchecked)
+        for idx, models in enumerate(model_sets, start=1):
+            names = sorted(models)
+            item = QStandardItem(f"Set {idx} — {', '.join(names)}  ({len(names)} models)")
             item.setEditable(False)
+            item.setCheckable(False)
+            item.setData(list(names), Qt.UserRole)
+            blockers = blockers_for(names)
+            if blockers:
+                item.setEnabled(False)
+                item.setSelectable(False)
+                item.setForeground(QBrush(Qt.gray))
+                item.setToolTip("Not deployable here — "
+                                + "; ".join(f"{m}: {r}" for m, r in sorted(blockers.items())))
+            else:
+                item.setToolTip("Trained working set: in-distribution for this predictor.")
             self.appendRow(item)
 
-    def checked_model_names(self):
-        return [self.item(r).text() for r in range(self.rowCount())
-                if self.item(r).checkState() == Qt.Checked]
+    def models_at(self, row):
+        item = self.item(row)
+        return list(item.data(Qt.UserRole) or []) if item is not None else []
+
+    def enabled_rows(self):
+        return [r for r in range(self.rowCount()) if self.item(r).isEnabled()]
 
 
 class BestDeployFinderApp(QMainWindow):
@@ -126,12 +152,15 @@ class BestDeployFinderApp(QMainWindow):
         # Default models root to ./models
         self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models')
 
-        # The tree view lists deployable model NAMES (no extension) with checkboxes.
-        self.model_list = ModelChecklistModel(self)
+        # The tree view lists the predictor's TRAINED WORKING SETS, one per row, pick
+        # exactly one. Populated by on_device_config_changed below (it depends on the
+        # predictor prefix, which the Device Configuration combo decides).
+        self.model_list = WorkingSetListModel(self)
         self.model_tree_view.setModel(self.model_list)
         self.model_tree_view.setRootIsDecorated(False)
         self.model_tree_view.setHeaderHidden(False)
-        self._reload_model_list()
+        self.model_tree_view.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.model_tree_view.setSelectionBehavior(QAbstractItemView.SelectRows)
 
         # Wire up browse buttons if present
         if hasattr(self, 'deploy_model_browse_button'):
@@ -154,9 +183,16 @@ class BestDeployFinderApp(QMainWindow):
         if hasattr(self, 'log_text_edit'):
             self.log_text_edit.setReadOnly(True)
 
-        # Device Configuration combo: picking a platform selects both the predictor
-        # and the device pair placements are enumerated over. Default to CPU-NPU so
-        # a fresh launch behaves exactly as before this became selectable.
+        # State: input FPS mapping per model. Set before the combo is wired, because
+        # applying the default selection reads it.
+        self.input_fps_by_model = {}
+
+        # Default outputs
+        self.generated_schedule_path = os.path.join(os.path.dirname(__file__), 'model_schedules.yaml')
+
+        # Device Configuration combo: picking a platform selects the predictor, the
+        # device pair placements are enumerated over, AND the working sets offered
+        # (each predictor has its own coverage file). Default to CPU-NPU.
         self.platform_devices = list(DEVICE_PROFILES[DEFAULT_DEVICE_PROFILE]["devices"])
         if hasattr(self, 'device_config_combo'):
             self.device_config_combo.clear()
@@ -165,16 +201,6 @@ class BestDeployFinderApp(QMainWindow):
             self.device_config_combo.currentTextChanged.connect(self.on_device_config_changed)
             self.on_device_config_changed(self.device_config_combo.currentText())
 
-        # State: input FPS mapping per model
-        self.input_fps_by_model = {}
-
-        # Set when the user opts to predict outside the predictor's training
-        # distribution; propagated to the log and to predictions.csv.
-        self.extrapolated = False
-
-        # Default outputs
-        self.generated_schedule_path = os.path.join(os.path.dirname(__file__), 'model_schedules.yaml')
-
     def _log(self, message: str):
         if hasattr(self, 'log_text_edit') and self.log_text_edit is not None:
             # QPlainTextEdit supports appendPlainText, not append
@@ -182,38 +208,100 @@ class BestDeployFinderApp(QMainWindow):
         else:
             print(message)
 
-    def _reload_model_list(self):
-        """Rescan and show every deployable model name in the tree view.
+    def _model_blockers(self):
+        """{model: reason} for every model that cannot be deployed on this machine.
 
-        Vision models come from models/onnx + models/mobilint; generative models
-        (LLM/VLM) come from the registry and load from HuggingFace.
+        Reuses the per-model discovery: vision models need a `.onnx` (to run on CPU)
+        and, only when the platform includes the NPU, a `.mxq`; generative models need
+        a static profile entry. A model absent from this map is deployable.
         """
         file_backed, cpu_only, npu_only = discover_file_backed_models(self.models_root)
         try:
-            hf_backed = discover_hf_backed_models(self._resolve_static_json())
+            hf_backed = set(discover_hf_backed_models(self._resolve_static_json()))
         except Exception:
-            hf_backed = []
-        deployable = sorted(set(file_backed) | set(hf_backed))
-        self.model_list.populate(deployable)
-        self._log(f"[Models] vision (onnx + mxq): {', '.join(file_backed) or 'none'}")
-        if hf_backed:
-            self._log(f"[Models] generative (HuggingFace): {', '.join(hf_backed)}")
-        if cpu_only:
-            self._log(f"[Models] Skipped (no .mxq for NPU): {', '.join(cpu_only)}")
-        if npu_only:
-            self._log(f"[Models] Skipped (no .onnx for CPU): {', '.join(npu_only)}")
+            hf_backed = set()
+        needs_mxq = 'npu' in (getattr(self, 'platform_devices', None) or [])
+
+        blockers = {}
+        for m in npu_only:                      # has .mxq, no .onnx -> cannot run on CPU
+            blockers[m] = "missing .onnx (needed for CPU)"
+        if needs_mxq:
+            for m in cpu_only:                  # has .onnx, no .mxq -> cannot run on NPU
+                blockers[m] = "missing .mxq (needed for NPU)"
+        self._deployable = set(file_backed) | hf_backed | (set() if needs_mxq else set(cpu_only))
+        return blockers
+
+    def _blockers_for(self, models):
+        """{model: reason} restricted to `models` -- what stops this working set."""
+        known = self._model_blockers()
+        out = {}
+        for m in models:
+            if m in known:
+                out[m] = known[m]
+            elif m not in getattr(self, '_deployable', set()):
+                # Not a file-backed model and not a profiled generative one.
+                out[m] = "no static profile / no model file"
+        return out
+
+    def _reload_working_sets(self):
+        """Repopulate the list from the CURRENT predictor's coverage file.
+
+        The trained working sets are the single source of truth for what may be
+        selected; they are read from `<prefix>_coverage.json` and never hardcoded.
+        """
+        pred = self.prediction_model_input.text() if hasattr(self, 'prediction_model_input') else ''
+        try:
+            sets = self.trained_working_sets(pred)
+        except Exception as e:
+            sets = []
+            self._log(f"[Error] Could not read the predictor's training coverage: {e}")
+
+        self.model_list.populate(sets, self._blockers_for)
+
+        if not sets:
+            self._log(f"[Error] No trained working sets found for '{pred}'. Expected model_sets "
+                      f"in <prefix>_coverage.json. Nothing can be selected.")
+            self._set_predict_enabled(False, "no trained working sets")
+            return
+
+        usable = self.model_list.enabled_rows()
+        self._log(f"[Sets] {len(sets)} trained working set(s) from "
+                  f"{Path(_infer_model_prefix(Path(pred))).name}_coverage.json; "
+                  f"{len(usable)} deployable here.")
+        for r in range(self.model_list.rowCount()):
+            if not self.model_list.item(r).isEnabled():
+                self._log(f"[Sets] Disabled — {self.model_list.item(r).toolTip()}")
+
+        if not usable:
+            self._set_predict_enabled(False, "no working set is fully deployable on this machine")
+            return
+
+        self._set_predict_enabled(True)
+        # Default to the first selectable row, so there is never a "nothing selected" state.
+        self.model_tree_view.setCurrentIndex(self.model_list.index(usable[0], 0))
+
+    def _set_predict_enabled(self, enabled: bool, why: str = ""):
+        if hasattr(self, 'predict_best_button'):
+            self.predict_best_button.setEnabled(enabled)
+        if not enabled:
+            self._log(f"[Error] 'Predict Best Deployment' disabled: {why}.")
+            if hasattr(self, 'label_best_deploy_value'):
+                self.label_best_deploy_value.setText(f"n/a — {why}")
 
     def _get_selected_model_names(self):
-        """Model names checked in the tree view."""
-        models = self.model_list.checked_model_names()
+        """The models of the selected working set (read off Qt.UserRole, not parsed)."""
+        idx = self.model_tree_view.currentIndex()
+        if not idx.isValid():
+            return []
+        models = self.model_list.models_at(idx.row())
         if models:
-            self._log(f"[Info] Selected models: {', '.join(models)}")
+            self._log(f"[Info] Selected working set: {', '.join(models)}")
         return models
 
     def on_input_rate_clicked(self):
         models = self._get_selected_model_names()
         if not models:
-            self._log("[Warning] No models selected. Please select folders in the model tree.")
+            self._log("[Warning] No working set selected. Pick one in the list above.")
             return
         # Load the dialog UI
         dialog_ui_path = os.path.join(os.path.dirname(__file__), 'input_rate_dialog.ui')
@@ -295,13 +383,16 @@ class BestDeployFinderApp(QMainWindow):
             self.models_root = folder
             if hasattr(self, 'deployment_model_input'):
                 self.deployment_model_input.setText(folder)
-            self._reload_model_list()
+            # Availability of each working set depends on what is in the models folder.
+            self._reload_working_sets()
 
     def select_prediction_model(self):
         # Expect a folder that contains <prefix>_y1.json and <prefix>_y2.json
         path = QFileDialog.getExistingDirectory(self, 'Select Prediction Model Folder', os.getcwd())
         if path and hasattr(self, 'prediction_model_input'):
             self.prediction_model_input.setText(path)
+            # A different predictor means a different coverage file, hence different sets.
+            self._reload_working_sets()
 
     def on_device_config_changed(self, label: str):
         """Apply the platform picked in the Device Configuration combo.
@@ -319,10 +410,13 @@ class BestDeployFinderApp(QMainWindow):
         if hasattr(self, 'prediction_model_input'):
             self.prediction_model_input.setText(prefix)
         self._log(f"[Device] {label}: devices={'/'.join(self.platform_devices)}, predictor={prefix}")
+        # Each predictor has its own coverage file, so the offered working sets --
+        # and which of them are deployable -- change with the platform.
+        self._reload_working_sets()
 
     def get_checked_top_level_dirs(self):
-        """Backwards-compatible alias: the tree now holds model names, not folders."""
-        return self.model_list.checked_model_names()
+        """Backwards-compatible alias: the tree now holds trained working sets."""
+        return self._get_selected_model_names()
 
     def log(self, msg):
         from datetime import datetime
@@ -389,39 +483,6 @@ class BestDeployFinderApp(QMainWindow):
         """The model sets this predictor was actually trained on, as lists of names."""
         cov = self._load_coverage(pred_model)
         return [s.split(",") for s in cov.get("model_sets", []) if s]
-
-    def _closest_trained_set(self, selected, pred_model):
-        """The trained working set overlapping the selection most (None if none exist).
-
-        Ties break on the set that adds the fewest models the user did not pick, then
-        on name, so the suggestion is stable rather than dependent on file ordering.
-        """
-        sets = self.trained_working_sets(pred_model)
-        if not sets:
-            return None
-        sel = set(selected)
-        # Sort descending by (overlap, -additions); the name is the final tiebreak.
-        return sorted(sets, key=lambda s: (-len(sel & set(s)), len(set(s) - sel),
-                                           ",".join(sorted(s))))[0]
-
-    def apply_trained_set(self, models):
-        """Check exactly `models` in the tree view, unchecking everything else."""
-        wanted = set(models)
-        applied, absent = [], []
-        for row in range(self.model_list.rowCount()):
-            item = self.model_list.item(row)
-            if item.text() in wanted:
-                item.setCheckState(Qt.Checked)
-                applied.append(item.text())
-            else:
-                item.setCheckState(Qt.Unchecked)
-        absent = sorted(wanted - set(applied))
-        if absent:
-            self.log(f"[Warning] Trained set names not present in the model list "
-                     f"(not deployable here): {', '.join(absent)}")
-        self.log(f"[Coverage] Applied trained working set: {{{', '.join(sorted(applied))}}}. "
-                 f"Press 'Predict Best Deployment' again to run on it.")
-        return applied
 
     def check_selection_coverage(self, model_names, pred_model):
         """Compare the checked models against the predictor's training coverage.
@@ -636,9 +697,6 @@ class BestDeployFinderApp(QMainWindow):
                 "pred_deadline_miss_rate": miss,
                 "pred_norm_tokens": tok,
                 "pred_score": score,
-                # True when the user chose to predict outside the predictor's training
-                # distribution: these scores are extrapolations, not fits.
-                "extrapolated": bool(getattr(self, 'extrapolated', False)),
             })
 
         df = pd.DataFrame(rows).sort_values(["pred_score"], ascending=[False]).reset_index(drop=True)
@@ -808,54 +866,16 @@ class BestDeployFinderApp(QMainWindow):
                 self.label_best_deploy_value.setText('-')
             return
 
-        # Step 0b: Warn when the selection lies outside the predictor's training
-        # distribution -- the ranking is then an extrapolation, not a fit.
-        self.extrapolated = False
+        # Step 0b: Internal consistency check. The list only offers working sets the
+        # predictor was trained on, so this must always pass -- a warning here means
+        # the list-building logic is broken, not that the user did something wrong.
+        # Log it and continue rather than blocking them with a dialog.
         try:
             ood = self.check_selection_coverage(selected, pred_model)
         except Exception as e:
             ood = [f"Coverage check failed: {e}"]
-        if ood:
-            for w in ood:
-                self.log(f"[Warning][OOD] {w}")
-
-            trained_sets = self.trained_working_sets(pred_model)
-            suggestion = self._closest_trained_set(selected, pred_model)
-
-            detail = ["\n".join(f"• {w}" for w in ood)]
-            if trained_sets:
-                shown = trained_sets[:8]
-                listing = "\n".join("    {" + ", ".join(sorted(s)) + "}" for s in shown)
-                more = (f"\n    ... and {len(trained_sets) - len(shown)} more"
-                        if len(trained_sets) > len(shown) else "")
-                detail.append(f"Trained working sets for this predictor:\n{listing}{more}")
-
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Warning)
-            box.setWindowTitle("Selection outside training distribution")
-            box.setText("The selected models do not match any working set the "
-                        "predictor was trained on. Predictions will be extrapolated "
-                        "and the ranking may be unreliable.")
-            box.setInformativeText("\n\n".join(detail))
-            cancel_btn = box.addButton(QMessageBox.Cancel)
-            proceed_btn = box.addButton("Proceed anyway", QMessageBox.DestructiveRole)
-            use_btn = (box.addButton("Use a trained set", QMessageBox.ActionRole)
-                       if suggestion else None)
-            box.setDefaultButton(cancel_btn)
-            box.exec_()
-            clicked = box.clickedButton()
-
-            if clicked is use_btn and use_btn is not None:
-                self.apply_trained_set(suggestion)
-                if hasattr(self, 'label_best_deploy_value'):
-                    self.label_best_deploy_value.setText('-')
-                return
-            if clicked is not proceed_btn:
-                self.log("[Predict] Cancelled by user (out-of-distribution selection).")
-                return
-            self.extrapolated = True
-            self.log("[Warning][OOD] Proceeding anyway: extrapolated=true. "
-                     "The ranking below is an extrapolation, not a fit -- do not trust it.")
+        for w in ood:
+            self.log(f"[BUG] selection should always be in-distribution: {w}")
 
         # Step 1: Generate schedule YAML (using generate_all_combinations)
         try:
@@ -879,8 +899,7 @@ class BestDeployFinderApp(QMainWindow):
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText(str(combo_number))
             # Log top predictions summary
-            tag = " (EXTRAPOLATED -- outside training distribution)" if getattr(self, 'extrapolated', False) else ""
-            self.log(f"[Step2] Top-1 combination: {best_combo}{tag}")
+            self.log(f"[Step2] Top-1 combination: {best_combo}")
             try:
                 topn = min(5, len(df))
                 self.log("[Step2] Top predictions:")
