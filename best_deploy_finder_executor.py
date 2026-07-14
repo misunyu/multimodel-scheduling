@@ -168,6 +168,10 @@ class BestDeployFinderApp(QMainWindow):
         # State: input FPS mapping per model
         self.input_fps_by_model = {}
 
+        # Set when the user opts to predict outside the predictor's training
+        # distribution; propagated to the log and to predictions.csv.
+        self.extrapolated = False
+
         # Default outputs
         self.generated_schedule_path = os.path.join(os.path.dirname(__file__), 'model_schedules.yaml')
 
@@ -340,6 +344,85 @@ class BestDeployFinderApp(QMainWindow):
             raise FileNotFoundError(f"Static profiling JSON not found in: {[str(c) for c in candidates]}")
         return p
 
+    def preflight_check(self, pred_model):
+        """Everything the prediction needs, checked before we bother the user.
+
+        Runs ahead of the coverage check so that a broken environment (no xgboost)
+        or a missing artifact reports itself as such, instead of surfacing as an
+        out-of-distribution warning followed by a stack trace.
+        Returns a list of blocking errors; empty means good to go.
+        """
+        errors = []
+        try:
+            import xgboost  # noqa: F401
+        except Exception as e:
+            errors.append(f"xgboost is not installed in this environment ({e}). "
+                          f"The placement predictor cannot run. Launch the GUI with the "
+                          f"interpreter from runtime_env.sh ($PYTHON_BIN).")
+
+        try:
+            prefix = _infer_model_prefix(Path(pred_model))
+        except Exception as e:
+            errors.append(f"Prediction model prefix could not be resolved: {e}")
+            return errors
+
+        missing = [Path(str(prefix) + suffix).name
+                   for suffix in ("_y1.json", "_y2.json", "_y3.json",
+                                  "_features.json", "_coverage.json")
+                   if not Path(str(prefix) + suffix).exists()]
+        if missing:
+            errors.append(f"Predictor artifacts missing next to {prefix.name}: "
+                          f"{', '.join(missing)}.")
+        return errors
+
+    def _load_coverage(self, pred_model):
+        """The predictor's `<prefix>_coverage.json` as a dict ({} when unreadable)."""
+        import json
+        try:
+            prefix = _infer_model_prefix(Path(pred_model))
+            cov_path = Path(str(prefix) + "_coverage.json")
+            return json.loads(cov_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def trained_working_sets(self, pred_model):
+        """The model sets this predictor was actually trained on, as lists of names."""
+        cov = self._load_coverage(pred_model)
+        return [s.split(",") for s in cov.get("model_sets", []) if s]
+
+    def _closest_trained_set(self, selected, pred_model):
+        """The trained working set overlapping the selection most (None if none exist).
+
+        Ties break on the set that adds the fewest models the user did not pick, then
+        on name, so the suggestion is stable rather than dependent on file ordering.
+        """
+        sets = self.trained_working_sets(pred_model)
+        if not sets:
+            return None
+        sel = set(selected)
+        # Sort descending by (overlap, -additions); the name is the final tiebreak.
+        return sorted(sets, key=lambda s: (-len(sel & set(s)), len(set(s) - sel),
+                                           ",".join(sorted(s))))[0]
+
+    def apply_trained_set(self, models):
+        """Check exactly `models` in the tree view, unchecking everything else."""
+        wanted = set(models)
+        applied, absent = [], []
+        for row in range(self.model_list.rowCount()):
+            item = self.model_list.item(row)
+            if item.text() in wanted:
+                item.setCheckState(Qt.Checked)
+                applied.append(item.text())
+            else:
+                item.setCheckState(Qt.Unchecked)
+        absent = sorted(wanted - set(applied))
+        if absent:
+            self.log(f"[Warning] Trained set names not present in the model list "
+                     f"(not deployable here): {', '.join(absent)}")
+        self.log(f"[Coverage] Applied trained working set: {{{', '.join(sorted(applied))}}}. "
+                 f"Press 'Predict Best Deployment' again to run on it.")
+        return applied
+
     def check_selection_coverage(self, model_names, pred_model):
         """Compare the checked models against the predictor's training coverage.
 
@@ -467,6 +550,30 @@ class BestDeployFinderApp(QMainWindow):
             raise ValueError("No models selected. Check at least one model in the list.")
         return self.build_schedule_from_selection(models, self.generated_schedule_path)
 
+    def _validate_feature_vector(self, X, model_prefix):
+        """Fail loudly when the featurized row does not match the trained columns.
+
+        `_align_features` zero-fills columns it cannot find and drops ones it does not
+        expect, both silently -- a featurizer/predictor mismatch would then produce a
+        confident number from a partly-zero vector. Check it instead of trusting it.
+        """
+        import json
+        fpath = Path(str(model_prefix) + "_features.json")
+        if not fpath.exists():
+            raise FileNotFoundError(
+                f"{fpath.name} is missing, so the feature column order cannot be verified. "
+                f"XGBoost would consume the columns positionally and silently mispredict.")
+        trained = json.loads(fpath.read_text(encoding="utf-8"))
+        produced = list(X.columns)
+        missing = [c for c in trained if c not in produced]
+        extra = [c for c in produced if c not in trained]
+        if missing or extra:
+            raise ValueError(
+                f"Feature mismatch against {fpath.name} (trained={len(trained)}, "
+                f"produced={len(produced)}). Missing (would be zero-filled): "
+                f"{', '.join(missing) or 'none'}. Unexpected (would be dropped): "
+                f"{', '.join(extra) or 'none'}. Retrain the predictor or update the featurizer.")
+
     def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.3, beta: float = 0.5):
         """Predict best combination using three-target XGBoost JSON models.
         - model_input_path can be either:
@@ -501,9 +608,23 @@ class BestDeployFinderApp(QMainWindow):
         if not combos:
             raise ValueError("No combinations found in schedule YAML.")
 
+        # Every model must have a static profile: `_device_static` returns NaN for an
+        # unprofiled model and `featurize_from_combo` fills NaN with 0.0, so a missing
+        # profile would otherwise sail through as a confident prediction over an
+        # all-zero feature row instead of failing.
+        unprofiled = sorted({v.get("model") for _, blob in combos
+                             for v in (blob or {}).values()
+                             if isinstance(v, dict) and v.get("model") not in S})
+        if unprofiled:
+            raise ValueError(
+                f"No static profile for: {', '.join(unprofiled)}. These models are not in "
+                f"{Path(static_json_path).name}, so their features would be all zeros and "
+                f"the prediction would be meaningless. Profile them first (profile_models.py).")
+
         rows = []
         for name, combo_blob in combos:
             X = featurize_from_combo(S, combo_blob)
+            self._validate_feature_vector(X, model_prefix)
             y1_pred, y2_pred, y3_pred = predict_targets(model_prefix, X)
             # y1 = norm throughput, y2 = deadline miss rate, y3 = norm tokens
             fps = float(y1_pred[0]); miss = float(y2_pred[0]); tok = float(y3_pred[0])
@@ -515,6 +636,9 @@ class BestDeployFinderApp(QMainWindow):
                 "pred_deadline_miss_rate": miss,
                 "pred_norm_tokens": tok,
                 "pred_score": score,
+                # True when the user chose to predict outside the predictor's training
+                # distribution: these scores are extrapolations, not fits.
+                "extrapolated": bool(getattr(self, 'extrapolated', False)),
             })
 
         df = pd.DataFrame(rows).sort_values(["pred_score"], ascending=[False]).reset_index(drop=True)
@@ -667,8 +791,26 @@ class BestDeployFinderApp(QMainWindow):
                 self.label_best_deploy_value.setText('-')
             return
 
-        # Step 0: Warn when the selection lies outside the predictor's training
+        # Step 0a: Preflight. Runs BEFORE the coverage check so a broken environment
+        # or a missing artifact never masquerades as an out-of-distribution warning.
+        problems = self.preflight_check(pred_model)
+        if problems:
+            for p in problems:
+                self.log(f"[Error][Preflight] {p}")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Critical)
+            box.setWindowTitle("Cannot run the predictor")
+            box.setText("The placement predictor cannot run in this environment.")
+            box.setInformativeText("\n\n".join(f"• {p}" for p in problems))
+            box.setStandardButtons(QMessageBox.Ok)
+            box.exec_()
+            if hasattr(self, 'label_best_deploy_value'):
+                self.label_best_deploy_value.setText('-')
+            return
+
+        # Step 0b: Warn when the selection lies outside the predictor's training
         # distribution -- the ranking is then an extrapolation, not a fit.
+        self.extrapolated = False
         try:
             ood = self.check_selection_coverage(selected, pred_model)
         except Exception as e:
@@ -676,18 +818,44 @@ class BestDeployFinderApp(QMainWindow):
         if ood:
             for w in ood:
                 self.log(f"[Warning][OOD] {w}")
+
+            trained_sets = self.trained_working_sets(pred_model)
+            suggestion = self._closest_trained_set(selected, pred_model)
+
+            detail = ["\n".join(f"• {w}" for w in ood)]
+            if trained_sets:
+                shown = trained_sets[:8]
+                listing = "\n".join("    {" + ", ".join(sorted(s)) + "}" for s in shown)
+                more = (f"\n    ... and {len(trained_sets) - len(shown)} more"
+                        if len(trained_sets) > len(shown) else "")
+                detail.append(f"Trained working sets for this predictor:\n{listing}{more}")
+
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Warning)
             box.setWindowTitle("Selection outside training distribution")
             box.setText("The selected models do not match any working set the "
                         "predictor was trained on. Predictions will be extrapolated "
                         "and the ranking may be unreliable.")
-            box.setInformativeText("\n\n".join(f"• {w}" for w in ood))
-            box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-            box.setDefaultButton(QMessageBox.Cancel)
-            if box.exec_() != QMessageBox.Ok:
+            box.setInformativeText("\n\n".join(detail))
+            cancel_btn = box.addButton(QMessageBox.Cancel)
+            proceed_btn = box.addButton("Proceed anyway", QMessageBox.DestructiveRole)
+            use_btn = (box.addButton("Use a trained set", QMessageBox.ActionRole)
+                       if suggestion else None)
+            box.setDefaultButton(cancel_btn)
+            box.exec_()
+            clicked = box.clickedButton()
+
+            if clicked is use_btn and use_btn is not None:
+                self.apply_trained_set(suggestion)
+                if hasattr(self, 'label_best_deploy_value'):
+                    self.label_best_deploy_value.setText('-')
+                return
+            if clicked is not proceed_btn:
                 self.log("[Predict] Cancelled by user (out-of-distribution selection).")
                 return
+            self.extrapolated = True
+            self.log("[Warning][OOD] Proceeding anyway: extrapolated=true. "
+                     "The ranking below is an extrapolation, not a fit -- do not trust it.")
 
         # Step 1: Generate schedule YAML (using generate_all_combinations)
         try:
@@ -711,7 +879,8 @@ class BestDeployFinderApp(QMainWindow):
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText(str(combo_number))
             # Log top predictions summary
-            self.log(f"[Step2] Top-1 combination: {best_combo}")
+            tag = " (EXTRAPOLATED -- outside training distribution)" if getattr(self, 'extrapolated', False) else ""
+            self.log(f"[Step2] Top-1 combination: {best_combo}{tag}")
             try:
                 topn = min(5, len(df))
                 self.log("[Step2] Top predictions:")
