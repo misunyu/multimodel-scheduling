@@ -1,0 +1,41 @@
+# Working set definitions -- the canonical source for schedule generation and
+# re-collection. 15 sets: 5 existing 4-model sets + 10 new.
+#
+# y3 masking (score S = y1 - alpha*y2, no beta*y3 term) applies to any set with no
+# LLM/VLM. Decided at runtime from model_registry.kind_of(), not from this file --
+# the `y3` field here is documentation only.
+#
+# Device constraint: qwen2_vl runs on {gpu, npu} only (no CPU); every other model is
+# unconstrained. So a set's free-placement count excludes qwen2_vl.
+#
+# Stratified sampling (S8, S10) is applied at schedule-generation time, not here:
+# both have 7 freely-placed models = 128 combinations, sampled down to ~32.
+
+sets:
+  # ---- existing 5 (4-model) ----
+  base1: [llama1b, qwen2_vl, resnet50, yolo11n]
+  base2: [llama1b, qwen2_vl, resnet50, yolo11s]
+  base3: [llama1b, qwen2_vl, resnet50, yolo11m]
+  base4: [llama1b, qwen2_vl, resnet50, yolo11l]
+  base5: [llama1b, qwen2_vl, resnet50, yolo11x]
+
+  # ---- new 10 ----
+  S1:  [resnet50, yolo11s]                                                    # 2, vision-only
+  S2:  [mobilenet_v2, resnet50, yolo11s]                                      # 3, vision-only
+  S3:  [llama1b, resnet50, yolo11s]                                           # 3, LLM
+  S4:  [qwen2_vl, resnet50, yolo11s]                                          # 3, VLM
+  S5:  [llama1b, qwen2_vl, mobilenet_v2, resnet50, yolo11s]                   # 5
+  S6:  [llama1b, qwen2_vl, mobilenet_v2, resnet50, yolo11s, yolo11m]          # 6
+  S7:  [llama1b, qwen2_vl, mobilenet_v2, resnet50, yolo11s, yolo11m, yolo11l] # 7
+  S8:  [llama1b, qwen2_vl, mobilenet_v2, resnet50, yolo11s, yolo11m, yolo11l, yolo11x]  # 8, stratified
+  S9:  [mobilenet_v2, resnet50, yolo11n, yolo11s, yolo11m]                    # 5, vision-only
+  S10: [mobilenet_v2, resnet50, yolo11n, yolo11s, yolo11m, yolo11l, yolo11x]  # 7, vision-only, stratified
+
+# Rate factors by set size (measured in PRE_COLLECTION_FINAL.md).
+rate_factors_by_size:
+  small:  {max_models: 2, factors: [2.0, 3.0, 4.0]}   # <=2 models: no placement signal below 3x
+  medium: {max_models: 5, factors: [1.0, 2.0, 3.0]}   # 3-5 models
+  large:  {max_models: 99, factors: [1.0, 1.5, 2.0]}  # >=6 models: y2 saturates at 3x
+
+stratified_sets: [S8, S10]
+stratified_target: 32
