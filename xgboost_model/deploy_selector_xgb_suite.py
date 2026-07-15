@@ -304,6 +304,7 @@ def featurize_window(window: Dict[str, Any],
     devices: List[str] = []
     y1_vision_fps = 0.0
     y3_tokens = 0.0
+    y3_valid = False   # True iff some LLM/VLM view is on an accelerator (npu/gpu)
     for _, view in models.items():
         model_name = view.get("model")
         exec_dev_raw = view.get("execution")
@@ -320,6 +321,12 @@ def featurize_window(window: Dict[str, Any],
             y1_vision_fps += float(view.get("throughput_fps", 0.0) or 0.0)
         else:
             y3_tokens += float(view.get("tokens_per_s", 0.0) or 0.0)
+            # A generative model on the CPU takes ~198s per generation, so in a 180s
+            # window it completes 0-1 and its token throughput is pure noise (measured
+            # in the pilot). Its y3 must not become a training label. y3 is a usable
+            # label only when at least one LLM/VLM view actually runs on an accelerator.
+            if dev in ("npu", "gpu"):
+                y3_valid = True
 
     X = _aggregate(per_view_rows)
 
@@ -345,6 +352,9 @@ def featurize_window(window: Dict[str, Any],
         # Model set / devices of this window, used to record training coverage.
         "models": ",".join(sorted(model_names)),
         "devices": ",".join(sorted(set(devices))),
+        # Per-COMBINATION y3 validity, not per-set: a set with an LLM whose LLM sits on
+        # CPU has no usable token label. Used to mask the y3 training rows.
+        "y3_valid": bool(y3_valid),
     }
     # y1_vision_fps and y3_tokens are RAW here; normalized per-workload in build_dataset.
     return X, (y1_vision_fps, y2, y3_tokens), meta
@@ -547,25 +557,30 @@ def train_targets(X: pd.DataFrame, Y: pd.DataFrame, model_out_prefix: Path,
     Path(str(model_out_prefix)).parent.mkdir(parents=True, exist_ok=True)
     Path(str(model_out_prefix) + "_features.json").write_text(json.dumps(feat_names), encoding="utf-8")
 
-    # y3 is trained ONLY on windows that actually generated tokens. Feeding it the
-    # y3=0 of vision-only sets would teach it that some feature combinations mean
-    # "no tokens", when the truth is that the question was never asked -- and that is
-    # exactly the confusion that produced a 0.89 token prediction for a set with no
-    # LLM in it. The `views.sum.view.is_llm` feature counts LLM/VLM views, so it is
-    # the row-level answer to "does this window generate".
-    gen_mask = None
-    if "views.sum.view.is_llm" in X.columns:
+    # y3 is trained ONLY on windows whose token throughput is a real measurement: at
+    # least one LLM/VLM view actually ran on an accelerator. This is a per-COMBINATION
+    # decision, not per-set -- a set that contains an LLM but places it on the CPU has
+    # y3~0 noise (a CPU generation takes ~198s, 0-1 finish in the 180s window), and a
+    # vision-only set has no tokens at all. Both must be excluded, or the model learns
+    # that certain feature combinations mean "no tokens" and then predicts ~0.89 tokens
+    # for a set with no LLM in it. `M["y3_valid"]` carries this per-row (set in
+    # featurize_window). Fall back to the coarse set-level feature only when M is absent.
+    if M is not None and "y3_valid" in M.columns:
+        gen_mask = M["y3_valid"].values.astype(bool)
+    elif "views.sum.view.is_llm" in X.columns:
         gen_mask = X["views.sum.view.is_llm"].values > 0
+    else:
+        gen_mask = None
 
     for tag, col in _TARGETS:
         Xi, Yi = X, Y
         if tag == "y3" and gen_mask is not None:
             Xi, Yi = X[gen_mask], Y[gen_mask]
             dropped = int((~gen_mask).sum())
-            print(f"[train] y3: {dropped} vision-only rows excluded "
-                  f"({len(Xi)} of {len(X)} kept)")
+            print(f"[train] y3: {dropped} rows masked (no LLM/VLM on accelerator); "
+                  f"{len(Xi)} of {len(X)} kept")
             if len(Xi) == 0:
-                print("[train] y3: no generative rows; skipping the y3 model entirely.")
+                print("[train] y3: no valid generative rows; skipping the y3 model.")
                 continue
         yv = Yi[col].values.astype(float)
         params, mae = _cv_select_params(xgb, Xi.values, yv, feat_names)
@@ -573,6 +588,40 @@ def train_targets(X: pd.DataFrame, Y: pd.DataFrame, model_out_prefix: Path,
         d = xgb.DMatrix(Xi.values, label=yv, feature_names=feat_names)
         bst = xgb.train(params, d, num_boost_round=300)
         bst.save_model(str(model_out_prefix) + f"_{tag}.json")
+
+
+def out_of_fold_predictions(X: pd.DataFrame, Y: pd.DataFrame, M: pd.DataFrame,
+                            folds: int = 3, seed: int = 42) -> pd.DataFrame:
+    """Predict every row using models trained WITHOUT that row (k-fold), for honest
+    validation. A row's y3 prediction is left NaN when its own y3 label is masked.
+
+    Returns a DataFrame with pred_y1/pred_y2/pred_y3 aligned to X's index, so a caller
+    can rank combinations within a set using predictions the model never saw at train.
+    """
+    xgb = _lazy_import_xgb()
+    feat = list(X.columns)
+    n = len(X)
+    rng = np.random.RandomState(seed)
+    fold_id = rng.randint(0, folds, size=n)
+    y3_valid = (M["y3_valid"].values.astype(bool) if (M is not None and "y3_valid" in M.columns)
+                else np.ones(n, bool))
+    out = {t: np.full(n, np.nan) for _, t in [("y1", "pred_y1"), ("y2", "pred_y2"), ("y3", "pred_y3")]}
+    name = {"y1_total_throughput_fps": "pred_y1", "y2_deadline_miss_rate": "pred_y2",
+            "y3_total_tokens_per_s": "pred_y3"}
+    for f in range(folds):
+        tr = fold_id != f
+        te = fold_id == f
+        for tag, col in _TARGETS:
+            tr_mask = tr & (y3_valid if tag == "y3" else np.ones(n, bool))
+            te_mask = te & (y3_valid if tag == "y3" else np.ones(n, bool))
+            if tr_mask.sum() == 0 or te_mask.sum() == 0:
+                continue
+            d = xgb.DMatrix(X.values[tr_mask], label=Y[col].values[tr_mask].astype(float),
+                            feature_names=feat)
+            bst = xgb.train(_PARAMS, d, num_boost_round=300)
+            pred = np.clip(bst.predict(xgb.DMatrix(X.values[te_mask], feature_names=feat)), 0.0, 1.0)
+            out[name[col]][np.where(te_mask)[0]] = pred
+    return pd.DataFrame(out, index=X.index)
 
 
 def combo_has_generative(combo_blob) -> bool:
