@@ -423,14 +423,20 @@ def build_dataset_from_file(perf_json_path: Path,
 
 
 def _normalize_targets(Y: pd.DataFrame, M: pd.DataFrame) -> pd.DataFrame:
-    """Normalize raw throughput targets to [0,1] within each (workload, rate) group.
+    """Normalize raw throughput targets to [0,1] within each (models, workload, rate).
 
-    T(x) = F(x) / Fmax, where Fmax is the max measured throughput across placements
-    of the same workload at the same input-rate level (paper Sec. 3). y2 (deadline
-    miss rate) is already in [0,1] and left unchanged.
+    T(x) = F(x) / Fmax, where Fmax is the max measured throughput across PLACEMENTS OF
+    THE SAME WORKING SET at the same input-rate level. The group MUST include the model
+    set (`models`): a 2-model set and an 8-model set can share the same workload
+    (yolo11s is the detection model in nine of the fifteen sets) and the same rate, and
+    normalising them together would divide the small set's throughput by the large
+    set's Fmax -- a set-size confound. Normalising per working set makes T a within-set
+    "fraction of the best placement", which is exactly what the score ranks. y2 (miss
+    rate) is already in [0,1] and left unchanged.
     """
     Y = Y.copy()
-    grp = list(zip(M.get("workload", pd.Series([None] * len(M))),
+    grp = list(zip(M.get("models", pd.Series([None] * len(M))),
+                   M.get("workload", pd.Series([None] * len(M))),
                    M.get("rate_factor", pd.Series([None] * len(M)))))
     for col in ("y1_total_throughput_fps", "y3_total_tokens_per_s"):
         vals = Y[col].values.astype(float)
