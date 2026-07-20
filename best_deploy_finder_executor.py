@@ -220,6 +220,10 @@ class BestDeployFinderApp(QMainWindow):
             self.device_config_combo.currentTextChanged.connect(self.on_device_config_changed)
             self.on_device_config_changed(self.device_config_combo.currentText())
 
+        # The run row (Run Best / Run Worst / Run Comparison) acts on a prediction, so it
+        # is gated on predictions.csv existing: disabled until Predict Best has produced one.
+        self._refresh_run_buttons_by_prediction()
+
     def _log(self, message: str):
         if hasattr(self, 'log_text_edit') and self.log_text_edit is not None:
             # QPlainTextEdit supports appendPlainText, not append
@@ -1138,6 +1142,22 @@ class BestDeployFinderApp(QMainWindow):
             if hasattr(self, name):
                 getattr(self, name).setEnabled(enabled)
 
+    def _refresh_run_buttons_by_prediction(self):
+        """Enable the run row only once a prediction exists (predictions.csv present).
+
+        Run Best / Run Worst / Run Comparison all act on the prediction, so before
+        Predict Best has been pressed there is nothing for them to run. Gate them on the
+        predictions.csv the predictor writes, and say so in a tooltip while disabled.
+        Predict Best itself is never gated here.
+        """
+        has_pred = os.path.exists(os.path.join(os.path.dirname(__file__), 'predictions.csv'))
+        for name in ('load_execute_best_button', 'run_worst_button', 'run_comparison_button'):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            btn.setEnabled(has_pred)
+            btn.setToolTip("" if has_pred else "Run Predict Best first")
+
     def _set_run_status(self, text):
         if hasattr(self, 'run_status_label'):
             self.run_status_label.setText(text)
@@ -1483,6 +1503,8 @@ class BestDeployFinderApp(QMainWindow):
                     self.log(f"  {i+1}. {df.iloc[i]['combination']} -> {float(df.iloc[i]['pred_score']):.4f}")
             except Exception:
                 pass
+            # predictions.csv now exists -> the run row can act on it.
+            self._refresh_run_buttons_by_prediction()
         except Exception as e:
             self.log(f"[Error][Step2] {e}")
             if hasattr(self, 'label_best_deploy_value'):
