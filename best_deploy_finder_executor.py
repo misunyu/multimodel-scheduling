@@ -347,6 +347,10 @@ class BestDeployFinderApp(QMainWindow):
 
         # Add rows to a grid layout: labels aligned to the longest name width
         spin_boxes = {}
+        # Default each model's rate to its baseline_rate (1x load) — the same value
+        # build_schedule_from_selection uses for infps. A value the user already set
+        # in a previous dialog still wins.
+        baseline = self._load_baseline_rates()
         # Determine pixel width of the longest model name for alignment
         fm = container_widget.fontMetrics()
         adv = getattr(fm, 'horizontalAdvance', None)
@@ -367,22 +371,35 @@ class BestDeployFinderApp(QMainWindow):
         except Exception:
             pass
 
+        default_src = []
         for row, model in enumerate(models):
             label = QLabel(model, container_widget)
             label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             label.setMinimumWidth(max_label_px + pad_px)
 
             spin = QDoubleSpinBox(container_widget)
-            spin.setDecimals(1)
-            spin.setMinimum(0.1)
-            spin.setMaximum(1000.0)
+            # 3 decimals so LLM/VLM baselines (llama1b 0.138, qwen2_vl 0.217)
+            # survive the round-trip instead of collapsing to 0.1.
+            spin.setDecimals(3)
+            spin.setMinimum(0.001)
+            spin.setMaximum(10000.0)
             spin.setSingleStep(0.1)
-            # Pre-fill from existing mapping or default 30.0
-            spin.setValue(float(self.input_fps_by_model.get(model, 10.0)))
+            # Pre-fill: user-set value > baseline_rate (1x) > legacy 10.0 fallback.
+            if model in self.input_fps_by_model:
+                value = float(self.input_fps_by_model[model])
+                default_src.append(f"{model}: {value:g} (user)")
+            elif baseline.get(model):
+                value = float(baseline[model])
+                default_src.append(f"{model}: {value:g} (baseline 1x)")
+            else:
+                value = 10.0
+                default_src.append(f"{model}: {value:g} (fallback, no baseline_rate)")
+            spin.setValue(value)
 
             container_layout.addWidget(label, row, 0)
             container_layout.addWidget(spin, row, 1)
             spin_boxes[model] = spin
+        self._log("[Info] Input-rate defaults — " + ", ".join(default_src))
 
         # Attach spin boxes dict for retrieval on accept
         dlg._spin_boxes_by_model = spin_boxes
@@ -397,7 +414,7 @@ class BestDeployFinderApp(QMainWindow):
             for model, spin in spin_boxes.items():
                 self.input_fps_by_model[model] = float(spin.value())
             # Log results
-            pairs = ", ".join([f"{m}: {v:.1f}" for m, v in sorted(self.input_fps_by_model.items())])
+            pairs = ", ".join([f"{m}: {v:g}" for m, v in sorted(self.input_fps_by_model.items())])
             self._log(f"[Info] Updated input rates: {pairs}")
 
     def on_configure_inputs_clicked(self):
@@ -534,6 +551,24 @@ class BestDeployFinderApp(QMainWindow):
             raise FileNotFoundError(f"Static profiling JSON not found in: {[str(c) for c in candidates]}")
         return p
 
+    def _load_baseline_rates(self) -> dict:
+        """Per-model baseline_rate (1x load) from the static profile JSON.
+
+        Single source for both the input-rate dialog defaults and the infps
+        fallback in build_schedule_from_selection, so the two never diverge.
+        Returns {model: baseline_rate}; a model may map to None if the profile
+        row has no baseline_rate.
+        """
+        import json
+        try:
+            static_json = self._resolve_static_json()
+            return {r['model']: r.get('baseline_rate')
+                    for r in json.loads(Path(static_json).read_text()).get('total_data', [])
+                    if r.get('model')}
+        except Exception as e:
+            self.log(f"[Warn] Could not load baseline rates: {e}")
+            return {}
+
     def preflight_check(self, pred_model):
         """Everything the prediction needs, checked before we bother the user.
 
@@ -654,13 +689,7 @@ class BestDeployFinderApp(QMainWindow):
                  f"(both shareable). Models: {', '.join(models)}")
 
         # Baseline rates for default infps (1x). Overridable per model via the dialog.
-        static_json = self._resolve_static_json()
-        baseline = {}
-        try:
-            baseline = {r['model']: r.get('baseline_rate')
-                        for r in json.loads(Path(static_json).read_text()).get('total_data', [])}
-        except Exception as e:
-            self.log(f"[Warn] Could not load baseline rates: {e}")
+        baseline = self._load_baseline_rates()
 
         workload_id = next((m for m in models if reg.get(m).get("task") == "detection"), models[0])
         schedules, meta = {}, {}
