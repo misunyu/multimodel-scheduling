@@ -31,6 +31,14 @@ python schedule_executor_main.py --schedule <schedule.yaml> --duration 30 --auto
 
 1. **Schedule Generation**: User selects ONNX models -> `ScheduleGenerator` builds 2^N device-assignment combinations -> writes YAML schedule files
 2. **Prediction**: Schedule YAML + device config -> `DeployPredictor` (XGBoost) -> ranks combinations by predicted throughput/QoS
+
+The predictor scores `S = y1 + β·y3 − α·y2` over three targets — y1 normalized throughput,
+y2 deadline miss rate, y3 normalized token throughput — with the y3 term omitted entirely for
+vision-only sets. All three are normalized *within* a working set, so scores rank placements
+inside one set and are meaningless across sets. Featurization needs the static per-device
+profiles in `xgboost_model/performance_data/sample_profiling_data/`, and per-platform models
+live in `xgboost_model/artifacts/{cpu_npu,cpu_gpu}/`. See `XGBOOST_MLA100_SWAP.md` for the
+schema, the two wiring traps, and the open β question.
 3. **Execution**: `ScheduleExecutor` iterates combinations -> launches `UnifiedViewer` per combination -> model processors run inference -> real-time metrics displayed
 
 ### Key Modules
@@ -46,7 +54,8 @@ python schedule_executor_main.py --schedule <schedule.yaml> --duration 30 --auto
 | `image_processing.py` | Pre/post-processing (letterboxing, NMS, class label rendering) |
 | `schedule_generator_logic.py` | `ScheduleGenerator`: builds combination schedules from model selections |
 | `deploy_predictor_logic.py` | `DeployPredictor`: wraps XGBoost suite for best-combination prediction |
-| `xgboost_model/deploy_selector_xgb_suite.py` | XGBoost training/prediction with multiple modes (rank, score, double, two_target) |
+| `xgboost_model/deploy_selector_xgb_suite.py` | XGBoost featurization/training/prediction over three targets (y1/y2/y3) |
+| `deploy_predictor_logic_legacy.py`, `xgboost_model/deploy_selector_xgb_suite_legacy.py` | Pre-MLA100 two-target predictor, kept only so the published figures reproduce — do not use in new code |
 
 ### Configuration Files
 
