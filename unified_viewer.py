@@ -467,82 +467,71 @@ class UnifiedViewer(QMainWindow):
         self.model_signals.update_view4_display.connect(self.update_view4_display)
     
     def _layout_visible_views(self):
-        """Pack the used tiles, and cross out any cell the grid leaves over.
+        """Always show the .ui's fixed 2x2 grid: fill the used tiles, cross out the rest.
 
-        A single view sitting in one corner of a 2x2 grid with three dead cells looks
-        broken on stage, so the grid is re-flowed to the number of views: 1 -> one
-        tile, 2 -> side by side, 3-4 -> 2x2. Re-flowing can still leave one cell over
-        (three views in a 2x2), and that cell gets the X image rather than being left
-        as a blank patch of window -- an empty tile should look deliberately empty.
+        The display grid is FIXED at the four cells schedule_executor_display.ui defines
+        (view1..view4). The first M cells hold the visualizable models (M = the
+        whitelist intersection of the running set, at most four) and receive live
+        frames; the remaining 4-M cells get the X placeholder, so an unused cell reads
+        as deliberately empty and never as a black blank. M == 0 crosses out all four
+        and logs why. The grid is NEVER reflowed to M -- a two-model set shows two live
+        tiles plus two X, not a 1x2 strip.
         """
         from PyQt5.QtWidgets import QGridLayout
         from utils import create_x_image, convert_cv_to_qt
         grid = self.findChild(QGridLayout, "videoLayout")
-        used = [DISPLAY_SLOTS[i] for i in range(len(getattr(self, 'display_slot_of', {}) or {}))]
-
         if grid is None:
             print("[UnifiedViewer] videoLayout not found; leaving the .ui layout as-is.")
             return
 
-        for slot in DISPLAY_SLOTS:
+        # display_slot_of maps whitelist views -> DISPLAY_SLOTS[0..M-1], so the used
+        # display widgets are exactly the first M of DISPLAY_SLOTS.
+        used = set(DISPLAY_SLOTS[i]
+                   for i in range(len(getattr(self, 'display_slot_of', {}) or {})))
+        COLS = 2  # fixed 2x2, matching schedule_executor_display.ui's default layout
+
+        # Defensive: whitelist yields at most 4, but if more views ever map in, warn and
+        # keep only the first four cells (the .ui has exactly four).
+        if len(used) > len(DISPLAY_SLOTS):
+            print(f"[UnifiedViewer] {len(used)} display slots requested but the grid has "
+                  f"{len(DISPLAY_SLOTS)}; showing the first {len(DISPLAY_SLOTS)}.")
+
+        x_pixmap = None
+        filled = 0
+        for i, slot in enumerate(DISPLAY_SLOTS):   # always lay out all four cells
             widget = getattr(self, slot, None)
             if widget is None:
                 continue
             try:
                 grid.removeWidget(widget)
-                widget.setVisible(False)
-            except Exception as e:
-                print(f"[Layout] {slot}: {e}")
-
-        if not used:
-            self._show_no_visualizable_message(grid)
-            return
-
-        cols = 1 if len(used) <= 1 else 2
-        rows = (len(used) + cols - 1) // cols
-        for i, slot in enumerate(used):
-            widget = getattr(self, slot, None)
-            if widget is not None:
-                widget.setVisible(True)
-                grid.addWidget(widget, i // cols, i % cols)
-
-        # Cells the re-flow could not fill: show the X placeholder in the spare slots.
-        spare = [s for s in DISPLAY_SLOTS if s not in used]
-        for cell in range(len(used), rows * cols):
-            if not spare:
-                break
-            slot = spare.pop(0)
-            widget = getattr(self, slot, None)
-            if widget is None:
+            except Exception:
+                pass
+            widget.setVisible(True)
+            grid.addWidget(widget, i // COLS, i % COLS)
+            if slot in used:
+                filled += 1  # live model tile; frames arrive via display_slot_of
                 continue
+            # Inactive cell: explicit X placeholder -- never a black blank.
             try:
-                pixmap = convert_cv_to_qt(create_x_image())
-                if not pixmap.isNull():
-                    widget.setPixmap(pixmap)
+                if x_pixmap is None:
+                    x_pixmap = convert_cv_to_qt(create_x_image(label="No display"))
+                if x_pixmap is not None and not x_pixmap.isNull():
+                    widget.setPixmap(x_pixmap)
                     widget.setScaledContents(True)
-                widget.setVisible(True)
-                grid.addWidget(widget, cell // cols, cell % cols)
             except Exception as e:
                 print(f"[Layout] X placeholder for {slot}: {e}")
 
-    def _show_no_visualizable_message(self, grid):
-        """Say why the window is empty instead of showing a black one.
-
-        The deployment is still running and still being measured -- the window just has
-        nothing it is allowed to draw. Leaving it blank would read as a crash.
-        """
-        running = ", ".join(sorted(
-            (self.model_settings.get(v, {}) or {}).get('model', '?') for v in self.view_names))
-        message = QLabel(
-            "No visualizable models in this deployment.\n\n"
-            f"Running (executing and being measured): {running or 'nothing'}\n"
-            f"Visualizable models: {', '.join(sorted(VISUALIZABLE_MODELS))}\n\n"
-            "Throughput, drop rate and score are unaffected.")
-        message.setAlignment(Qt.AlignCenter)
-        message.setWordWrap(True)
-        message.setStyleSheet("font-size: 16px; padding: 24px; color: #ddd; background: #202020;")
-        self.no_visual_label = message
-        grid.addWidget(message, 0, 0)
+        if filled == 0:
+            # All four crossed out. The screen already shows four X tiles; also state the
+            # reason in the log. Execution and measurement continue regardless.
+            running = ", ".join(sorted(
+                (self.model_settings.get(v, {}) or {}).get('model', '?') for v in self.view_names))
+            print(f"[UnifiedViewer] No visualizable models in this deployment -- all four "
+                  f"slots crossed out. Running (executed and measured): {running or 'nothing'}. "
+                  f"Whitelist: {', '.join(sorted(VISUALIZABLE_MODELS))}. "
+                  f"Throughput, drop rate and score are unaffected.")
+        print(f"[UnifiedViewer] Display grid fixed 2x2: {filled} model tile(s) + "
+              f"{len(DISPLAY_SLOTS) - filled} X slot(s).")
 
     def initialize_state_variables(self):
         """Initialize state variables."""

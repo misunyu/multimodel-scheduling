@@ -146,27 +146,28 @@ def resolve_cpu_model_onnx(logical_name: str) -> str:
 # Image/Qt and system utilities (existing)
 # -------------------------------------------------------------
 
-def create_x_image(width=640, height=480):
+def create_x_image(width=640, height=480, label="No model specified"):
     """
     Create an image with a black background and a white X across it.
-    
+
     Args:
         width: Width of the image
         height: Height of the image
-        
+        label: Caption drawn across the centre (e.g. "No display" for an inactive slot)
+
     Returns:
         A numpy array representing the image
     """
     # Create a black image
     img = np.zeros((height, width, 3), np.uint8)
-    
+
     # Draw a white X
     cv2.line(img, (0, 0), (width, height), (255, 255, 255), 5)
     cv2.line(img, (0, height), (width, 0), (255, 255, 255), 5)
-    
+
     # Add text
     font = cv2.FONT_HERSHEY_SIMPLEX
-    text = "No model specified"
+    text = label
     text_size = cv2.getTextSize(text, font, 1, 2)[0]
     text_x = (width - text_size[0]) // 2
     text_y = (height + text_size[1]) // 2

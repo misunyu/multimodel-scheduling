@@ -187,7 +187,7 @@ def main():
     c.add_argument("--static_json", required=True)
     c.add_argument("--rate_factors", nargs="*", type=float, default=[3.0])
     c.add_argument("--alpha", type=float, default=0.3)
-    c.add_argument("--beta", type=float, default=0.5)
+    c.add_argument("--beta", type=float, default=1.0)  # LM y3 weighted equally with vision y1
 
     args = ap.parse_args()
     if args.cmd == "cv":

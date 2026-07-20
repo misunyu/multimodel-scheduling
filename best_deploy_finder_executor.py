@@ -760,7 +760,9 @@ class BestDeployFinderApp(QMainWindow):
                 f"{', '.join(missing) or 'none'}. Unexpected (would be dropped): "
                 f"{', '.join(extra) or 'none'}. Retrain the predictor or update the featurizer.")
 
-    def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.3, beta: float = 0.5):
+    def predict_best_combination(self, schedule_yaml_path: str, model_input_path: str, alpha: float = 0.3, beta: float = 1.0):
+        # beta=1.0 weights LM token throughput (y3) equally with vision throughput (y1);
+        # same value for CPU-NPU and CPU-GPU. Canonical default: deploy_selector_xgb_suite.DEFAULT_BETA.
         """Predict best combination using three-target XGBoost JSON models.
         - model_input_path can be either:
           - A directory containing files: <prefix>_y1.json, <prefix>_y2.json (and _y3.json)

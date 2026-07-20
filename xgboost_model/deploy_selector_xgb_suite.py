@@ -425,33 +425,54 @@ def build_dataset_from_file(perf_json_path: Path,
 def _normalize_targets(Y: pd.DataFrame, M: pd.DataFrame) -> pd.DataFrame:
     """Normalize raw throughput targets to [0,1] within each (models, workload, rate).
 
-    T(x) = F(x) / Fmax, where Fmax is the max measured throughput across PLACEMENTS OF
-    THE SAME WORKING SET at the same input-rate level. The group MUST include the model
+    All three targets are put on the SAME within-group [0,1] scale, so the score's
+    alpha/beta weight comparable quantities ("fraction of the best placement in this
+    working set") rather than a mix of normalized and raw units.
+
+    Group key is `(models, workload, rate)` for every target. It MUST include the model
     set (`models`): a 2-model set and an 8-model set can share the same workload
     (yolo11s is the detection model in nine of the fifteen sets) and the same rate, and
-    normalising them together would divide the small set's throughput by the large
-    set's Fmax -- a set-size confound. Normalising per working set makes T a within-set
-    "fraction of the best placement", which is exactly what the score ranks. y2 (miss
-    rate) is already in [0,1] and left unchanged.
+    normalising them together would divide the small set by the large set's extreme --
+    a set-size confound.
+
+    - y1, y3 (higher is better): T = F / Fmax  (fraction of the group's best).
+    - y2 = deadline miss rate (LOWER is better): min-max within the group,
+      y2_norm = (y2 - y2_min) / (y2_max - y2_min), so the group's best (fewest misses)
+      maps to 0 and the worst to 1. Direction is preserved: score's `- alpha*y2_norm`
+      still penalizes the worse placement. Note this is min-max (not F/Fmax): applying
+      the y1/y3 direction to a "lower-is-better" target would invert its meaning.
+      A group with no miss-rate spread maps to 0 (division-by-zero guard).
     """
     Y = Y.copy()
     grp = list(zip(M.get("models", pd.Series([None] * len(M))),
                    M.get("workload", pd.Series([None] * len(M))),
                    M.get("rate_factor", pd.Series([None] * len(M)))))
+    # Group indices shared by all three targets (identical key).
+    groups = {}
+    for i, g in enumerate(grp):
+        groups.setdefault(g, []).append(i)
+
+    # y1, y3: higher is better -> fraction of the group's max.
     for col in ("y1_total_throughput_fps", "y3_total_tokens_per_s"):
         vals = Y[col].values.astype(float)
         out = np.zeros_like(vals)
-        # group indices
-        groups = {}
-        for i, g in enumerate(grp):
-            groups.setdefault(g, []).append(i)
         for g, idxs in groups.items():
             fmax = max((vals[i] for i in idxs), default=0.0)
             for i in idxs:
                 out[i] = (vals[i] / fmax) if fmax > 1e-9 else 0.0
         Y[col] = out
-    # y2 clip to [0,1] for safety
-    Y["y2_deadline_miss_rate"] = np.clip(Y["y2_deadline_miss_rate"].values.astype(float), 0.0, 1.0)
+
+    # y2: lower is better -> min-max within the same group (best=0, worst=1),
+    # keeping the "smaller is better" direction the score's -alpha*y2 term relies on.
+    y2 = np.clip(Y["y2_deadline_miss_rate"].values.astype(float), 0.0, 1.0)
+    out2 = np.zeros_like(y2)
+    for g, idxs in groups.items():
+        lo = min(y2[i] for i in idxs)
+        hi = max(y2[i] for i in idxs)
+        span = hi - lo
+        for i in idxs:
+            out2[i] = ((y2[i] - lo) / span) if span > 1e-9 else 0.0
+    Y["y2_deadline_miss_rate"] = out2
     return Y
 
 
@@ -648,13 +669,22 @@ def combo_has_generative(combo_blob) -> bool:
     return False
 
 
+# Runtime scoring weights (policy parameters, NOT learned; identical for both platforms).
+# S = 1.0*y1 - alpha*y2 (+ beta*y3 when the combo generates tokens). All three targets are
+# on the same within-set [0,1] scale, so beta=1.0 weights LM token throughput (y3) equally
+# with vision throughput (y1); alpha=0.3 is the deadline-miss penalty. These are defaults;
+# callers may override per invocation.
+DEFAULT_ALPHA: float = 0.3
+DEFAULT_BETA: float = 1.0
+
+
 def score_combo(y1: float, y2: float, y3: float, has_generative: bool,
                 alpha: float, beta: float) -> float:
     """S = y1 - alpha*y2, plus beta*y3 only when the set actually generates tokens.
 
     A vision-only set has no token throughput to trade off: measured y3 is 0, but the
-    predictor -- never trained on such a set -- happily emits ~0.89, which at beta=0.5
-    handed every vision-only combination half a point of free score. The term is not
+    predictor -- never trained on such a set -- happily emits ~0.89, which at beta>0
+    would hand every vision-only combination beta*0.89 of free score. The term is not
     zeroed after the fact; it is not in the objective at all.
 
     NOTE: this makes the score's scale depend on the set type, so scores are comparable
@@ -733,8 +763,8 @@ def main():
     ap_pc.add_argument("--schedule_yaml", required=True)
     ap_pc.add_argument("--static_json", required=True)
     ap_pc.add_argument("--model_in", required=True)
-    ap_pc.add_argument("--alpha", type=float, default=0.3, help="deadline-miss penalty (normalized)")
-    ap_pc.add_argument("--beta", type=float, default=0.5, help="token-throughput reward (normalized)")
+    ap_pc.add_argument("--alpha", type=float, default=DEFAULT_ALPHA, help="deadline-miss penalty (normalized)")
+    ap_pc.add_argument("--beta", type=float, default=DEFAULT_BETA, help="token-throughput reward (normalized)")
     ap_pc.add_argument("--topk", type=int, default=0)
 
     args = ap.parse_args()
