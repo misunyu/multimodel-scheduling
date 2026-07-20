@@ -46,10 +46,13 @@ class BestDeployFinderApp(QMainWindow):
         self.models_root = models_root or os.path.join(os.path.dirname(__file__), 'models_onnx')
 
         # Default prediction model settings
-        self.default_gpu_pred_model_dir = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'gpu')
-        self.default_gpu_pred_model_prefix = 'xgb_model_x3_double'
-        self.default_npu_pred_model_dir = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'npu')
-        self.default_npu_pred_model_prefix = 'xgb_model_npu_double'
+        # Each platform keeps its own directory so that resolving a directory to a model
+        # prefix is unambiguous -- with both platforms in one directory the glob would
+        # pick deploy_cpu_gpu alphabetically even when NPU is selected.
+        self.default_gpu_pred_model_dir = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'cpu_gpu')
+        self.default_gpu_pred_model_prefix = 'deploy_cpu_gpu'
+        self.default_npu_pred_model_dir = os.path.join(os.path.dirname(__file__), 'xgboost_model', 'artifacts', 'cpu_npu')
+        self.default_npu_pred_model_prefix = 'deploy_cpu_npu'
 
         # Setup file system model and tree view
         self.fs_model = CheckableFileSystemModel(self)
@@ -1156,14 +1159,15 @@ class BestDeployFinderApp(QMainWindow):
                     self.label_best_deploy_value.setText(str(combo_number))
                 # Update the predicted metrics to the status labels
                 try:
-                    top_fps = float(df.iloc[0]['pred_total_throughput_fps'])
-                    top_drop = float(df.iloc[0]['pred_drop_rate_fps'])
+                    # y1/y2 are normalized to [0,1] within the working set, not raw FPS.
+                    top_fps = float(df.iloc[0]['pred_norm_throughput'])
+                    top_drop = float(df.iloc[0]['pred_deadline_miss_rate'])
                     top_score = float(df.iloc[0]['pred_score'])
                     if hasattr(self, 'throughput_value'):
                         try:
-                            self.throughput_value.setText(f"{top_fps:.2f} FPS")
+                            self.throughput_value.setText(f"{top_fps:.3f} (norm)")
                         except Exception:
-                            self.throughput_value.setText(f"{top_fps} FPS")
+                            self.throughput_value.setText(f"{top_fps} (norm)")
                     if hasattr(self, 'drop_value'):
                         try:
                             self.drop_value.setText(f"{top_drop:.3f}")

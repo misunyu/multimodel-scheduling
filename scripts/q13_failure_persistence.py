@@ -47,7 +47,7 @@ PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
-from deploy_predictor_logic import DeployPredictor          # noqa: E402
+from deploy_predictor_logic_legacy import DeployPredictor          # noqa: E402
 from qos_recovery_validation import (                        # noqa: E402
     compute_windowed_v,
     load_csv,

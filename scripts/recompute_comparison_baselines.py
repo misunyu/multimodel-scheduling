@@ -157,7 +157,7 @@ def main():
     output_random_csv = Path("experimental_results/random_search_base_results_x3.csv")
 
     sys.path.append(str(Path.cwd() / "xgboost_model"))
-    from deploy_selector_xgb_suite import (
+    from deploy_selector_xgb_suite_legacy import (
         _index_schedules_from_csv, 
         load_models, 
         featurize_window, 

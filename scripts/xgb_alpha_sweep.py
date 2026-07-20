@@ -10,7 +10,7 @@ import math
 # Import functions from deploy_selector_xgb_suite.py
 sys.path.append(str(Path.cwd() / "xgboost_model"))
 try:
-    from deploy_selector_xgb_suite import (
+    from deploy_selector_xgb_suite_legacy import (
         load_models, 
         featurize_from_combo, 
         _index_schedules_from_csv

@@ -39,7 +39,7 @@ PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
-from deploy_predictor_logic import DeployPredictor
+from deploy_predictor_logic_legacy import DeployPredictor
 from qos_recovery_validation import (
     compute_windowed_v,
     find_phase_boundaries,

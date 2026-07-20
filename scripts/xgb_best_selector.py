@@ -33,7 +33,7 @@ Note: Default model prefix is xgboost_model/artifacts/gpu/xgb_model_rank.
 # Import functions from deploy_selector_xgb_suite.py
 sys.path.append(str(Path.cwd() / "xgboost_model"))
 try:
-    from deploy_selector_xgb_suite import (
+    from deploy_selector_xgb_suite_legacy import (
         load_models, 
         _index_schedules_from_csv,
         _find_schedule,

@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 # But we can just copy necessary parts or import from the existing script.
 sys.path.append(str(Path.cwd() / "xgboost_model"))
 try:
-    from deploy_selector_xgb_suite import featurize_from_combo, _norm_exec, _rows_from_combo_struct
+    from deploy_selector_xgb_suite_legacy import featurize_from_combo, _norm_exec, _rows_from_combo_struct
 except ImportError:
     print("Could not import from deploy_selector_xgb_suite. Make sure the path is correct.")
     sys.exit(1)
