@@ -19,6 +19,7 @@ routing skips generative views rather than starting a worker for them.
 import time
 import os
 import queue
+import sys
 from threading import Thread  # noqa: F401  (kept for callers importing from here)
 
 import cv2
@@ -93,6 +94,10 @@ def _ort_session(onnx_path: str, gpu: bool):
         so.log_severity_level = 3
     except Exception:
         pass
+    # Pin onnxruntime's own threads here (replaces torch.set_num_threads); concurrency
+    # comes from running views in parallel, not from threading inside one worker.
+    so.intra_op_num_threads = 1
+    so.inter_op_num_threads = 1
     providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if gpu else ["CPUExecutionProvider"]
     sess = ort.InferenceSession(onnx_path, sess_options=so, providers=providers)
     if gpu and "CUDAExecutionProvider" not in sess.get_providers():
@@ -100,14 +105,65 @@ def _ort_session(onnx_path: str, gpu: bool):
     return sess
 
 
+def _nms_numpy(xyxy, scores, iou_thres):
+    """Greedy IoU NMS matching torchvision.ops.nms (kept for a torch-free vision path).
+
+    Same algorithm torchvision uses: sort by score descending (stable), greedily keep
+    the top box and drop any remaining box whose IoU with it exceeds `iou_thres`.
+    Box area is (x2-x1)*(y2-y1) with no +1, as in torchvision. Returns kept indices
+    into `xyxy`, in descending-score order -- identical selection to torchvision.
+    """
+    if xyxy.shape[0] == 0:
+        return np.empty((0,), dtype=np.int64)
+    x1, y1, x2, y2 = xyxy[:, 0], xyxy[:, 1], xyxy[:, 2], xyxy[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = np.argsort(-scores, kind="stable")
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(int(i))
+        if order.size == 1:
+            break
+        rest = order[1:]
+        xx1 = np.maximum(x1[i], x1[rest])
+        yy1 = np.maximum(y1[i], y1[rest])
+        xx2 = np.minimum(x2[i], x2[rest])
+        yy2 = np.minimum(y2[i], y2[rest])
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+        iou = inter / (areas[i] + areas[rest] - inter)
+        order = rest[iou <= iou_thres]
+    return np.asarray(keep, dtype=np.int64)
+
+
 def _limit_cpu_threads():
-    """One torch thread per vision worker (NMS only); concurrency comes from
-    running the views in parallel, not from threading inside one worker."""
-    try:
-        import torch
-        torch.set_num_threads(1)
-    except Exception as e:
-        print(f"[worker] could not pin torch threads: {e}")
+    """Pin this vision worker to one CPU thread, WITHOUT importing torch.
+
+    The vision worker runs onnxruntime-gpu, whose cuDNN conflicts with torch's
+    (different sublibrary versions) if both are loaded in the same process -- the
+    conv nodes then silently fall back to CPU. So thread-limiting must not go
+    through torch.set_num_threads. onnxruntime's own intra-op threads are pinned
+    per-session in _ort_session; here we only cap the numpy/BLAS backend used by
+    the CPU post-processing, via env vars (honored on first BLAS import).
+    """
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS"):
+        os.environ.setdefault(var, "1")
+
+
+def _assert_gpu_clean(device: str, view_name=None):
+    """For a GPU vision worker, fail loudly if torch has been imported into this
+    process. torch's cuDNN conflicts with onnxruntime-gpu's (sublibrary version
+    mismatch); when both are present, onnxruntime silently runs conv on CPU. Better
+    to stop than to record contaminated GPU numbers that are really CPU.
+    """
+    if reg.norm_device(device) == "gpu" and "torch" in sys.modules:
+        raise RuntimeError(
+            f"[vision gpu view={view_name}] torch is loaded in this process; it breaks "
+            f"onnxruntime-gpu's cuDNN and conv would silently fall back to CPU. The vision "
+            f"runtime must stay torch-free (numpy NMS, no torch thread limit). "
+            f"Loaded torch modules: {[m for m in sys.modules if m == 'torch' or m.startswith('torch.')][:5]}")
 
 
 def _onnx_path(model_name: str) -> str:
@@ -195,13 +251,10 @@ def _yolo_decode(raw_out, meta, conf_thres, iou_thres):
     xyxy[:, [0, 2]] -= left
     xyxy[:, [1, 3]] -= top
     xyxy /= r
-    try:
-        import torch
-        from torchvision.ops import nms
-        idx = nms(torch.from_numpy(xyxy).float(),
-                  torch.from_numpy(cls_scores).float(), iou_thres).cpu().numpy()
-    except Exception:
-        idx = np.argsort(-cls_scores)[:300]
+    # numpy NMS (torch-free); numerically equivalent to torchvision.ops.nms. torch must
+    # NOT be imported in this process or onnxruntime-gpu's cuDNN conflicts and conv
+    # silently falls back to CPU.
+    idx = _nms_numpy(xyxy.astype(np.float32), cls_scores.astype(np.float32), iou_thres)
     return [(*xyxy[i].tolist(), float(cls_scores[i]), int(cls_ids[i])) for i in idx]
 
 
@@ -217,6 +270,7 @@ def _detection_worker(device, input_queue, output_queue, shutdown_event,
                       conf_thres=0.25, iou_thres=0.45):
     """Shared detection loop. Emits FSRR's (frame, infer_ms, wait_ms) 3-tuple."""
     _limit_cpu_threads()
+    _assert_gpu_clean(device, view_name)
     device = reg.norm_device(device)
     spec = reg.get(model_name) or {}
     size = int(spec.get("input_size", 640))
@@ -310,6 +364,7 @@ def _classification_worker(device, input_queue, output_queue, shutdown_event,
                            view_name=None, model_name="resnet50", ready_event=None):
     """Shared classification loop. Emits FSRR's (frame, class_name, infer_ms, wait_ms)."""
     _limit_cpu_threads()
+    _assert_gpu_clean(device, view_name)
     device = reg.norm_device(device)
     spec = reg.get(model_name) or {}
     size = int(spec.get("input_size", 224))

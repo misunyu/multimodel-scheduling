@@ -459,19 +459,12 @@ class UnifiedViewer(QMainWindow):
                     # Informational: this view is simply unused by the selected combination
                     print(f"[UnifiedViewer] {view} not used in this combination (no model assigned) [{os.path.basename(self.schedule_file)}]")
 
-            # Detect PyTorch availability for NPU execution and remap to CPU if unavailable
-            torch_available = True
-            try:
-                import torch  # noqa: F401
-            except Exception:
-                torch_available = False
-            if not torch_available:
-                # Remap any NPU executions to CPU to avoid runtime import errors
-                for v, cfg in self.model_settings.items():
-                    exec_dev = (cfg or {}).get("execution", "cpu")
-                    if isinstance(exec_dev, str) and exec_dev.lower().startswith("npu"):
-                        cfg["execution"] = "cpu"
-                        print(f"[UnifiedViewer] PyTorch not found; falling back to CPU for {v} (was {exec_dev})")
+            # NOTE: do NOT import torch here. Vision workers run as threads in this
+            # process alongside onnxruntime-gpu; importing torch anywhere in the process
+            # loads its cuDNN, which conflicts with onnxruntime-gpu's and makes GPU conv
+            # silently fall back to CPU. NPU availability is now handled in the worker
+            # (mblt_model_zoo), which fails loudly there if the backend is missing —
+            # the old torch-presence remap to CPU was both obsolete and a cuDNN hazard.
 
             print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file} for {self.current_combination}")
         except Exception as e:
