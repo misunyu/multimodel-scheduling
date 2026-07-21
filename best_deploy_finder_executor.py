@@ -11,6 +11,7 @@ Usage:
 
 import os
 import sys
+import json
 import argparse
 import yaml
 from pathlib import Path
@@ -29,6 +30,69 @@ from schedule_generator_logic import ScheduleGenerator
 from deploy_predictor_logic import DeployPredictor
 
 
+def discover_file_backed_models(models_root: str):
+    """Vision models deployable from the models/ folder.
+
+    `models/onnx/<name>.onnx`     -> runnable on CPU
+    `models/mobilint/<name>.mxq`  -> the compiled form, runnable on the Mobilint NPU
+
+    A model is deployable when both exist. Returns (deployable, cpu_only, npu_only)
+    as sorted lists of bare names (no extension).
+    """
+    def _names(d, ext):
+        if not os.path.isdir(d):
+            return set()
+        return {os.path.splitext(f)[0] for f in os.listdir(d) if f.lower().endswith(ext)}
+
+    cpu = _names(os.path.join(models_root, 'onnx'), '.onnx')
+    npu = _names(os.path.join(models_root, 'mobilint'), '.mxq')
+    return sorted(cpu & npu), sorted(cpu - npu), sorted(npu - cpu)
+
+
+def discover_hf_backed_models(static_json_path):
+    """Generative models (LLM / VLM) deployable from HuggingFace checkpoints.
+
+    These have no local .onnx/.mxq -- the runtime loads them from the Hub -- so
+    availability is gated on having a static profile entry (i.e. they were profiled
+    and therefore have the features the predictor needs).
+    """
+    try:
+        import model_registry as reg
+        profiled = {r.get('model') for r in
+                    json.loads(Path(static_json_path).read_text()).get('total_data', [])}
+        return sorted(m for m in reg.model_names()
+                      if reg.kind_of(m) in ('llm', 'vlm') and m in profiled)
+    except Exception:
+        return []
+
+
+def _infer_model_prefix(p: Path) -> Path:
+    """Resolve a directory / bare prefix / one target JSON to the shared model prefix.
+
+    A directory holds exactly one predictor here (fsrr keeps cpu_npu and cpu_gpu in
+    separate dirs), so globbing *_y1.json inside it is unambiguous.
+    """
+    # Bare prefix (e.g. .../deploy_cpu_npu) whose _y1.json exists.
+    if not p.is_dir() and Path(str(p) + "_y1.json").exists():
+        return p
+    if p.is_dir():
+        for y1 in sorted(p.glob("*_y1.json")):
+            prefix = y1.name[:-len("_y1.json")]
+            if (p / f"{prefix}_y2.json").exists():
+                return p / prefix
+        raise FileNotFoundError(f"No valid model prefix with _y1.json and _y2.json found in: {p}")
+    name = p.name
+    if name.endswith("_y1.json"):
+        prefix = name[:-len("_y1.json")]
+    elif name.endswith("_y2.json"):
+        prefix = name[:-len("_y2.json")]
+    else:
+        raise ValueError(f"Model file must end with _y1.json or _y2.json: {p}")
+    y1 = p.parent / f"{prefix}_y1.json"
+    y2 = p.parent / f"{prefix}_y2.json"
+    if not y1.exists() or not y2.exists():
+        raise FileNotFoundError(f"Missing counterpart JSON next to {p}. Expected both {y1.name} and {y2.name}.")
+    return p.parent / prefix
 
 
 
@@ -236,6 +300,11 @@ class BestDeployFinderApp(QMainWindow):
             if w:
                 w.setParent(None)
 
+        # Per-model baseline_rate (1x load) from the static profile, used as the
+        # pre-fill default so an untouched rate matches what the model was profiled
+        # at rather than an arbitrary constant.
+        baseline_rates = self._load_baseline_rates()
+
         # Add rows to a grid layout: labels aligned to the longest name width
         spin_boxes = {}
         # Determine pixel width of the longest model name for alignment
@@ -267,9 +336,14 @@ class BestDeployFinderApp(QMainWindow):
             spin.setMinimum(0)
             spin.setMaximum(2147483647) # Max 32-bit int, allows 10 digits (up to 2,147,483,647)
             spin.setSingleStep(1)
-            # Pre-fill from existing mapping or default 10
+            # Pre-fill: user-set value first, else the model's profiled baseline_rate,
+            # else 10.
             try:
-                preset = int(self.input_fps_by_model.get(model, 10))
+                if model in self.input_fps_by_model:
+                    preset = int(self.input_fps_by_model.get(model))
+                else:
+                    br = baseline_rates.get(model)
+                    preset = int(round(br)) if br is not None else 10
             except Exception:
                 preset = 10
             spin.setValue(preset)
@@ -1009,6 +1083,169 @@ class BestDeployFinderApp(QMainWindow):
         # Launch executor in a subprocess with selected combo
         self._launch_executor_direct(schedule_path, combo_name=best_combo, duration=duration)
 
+    # ------------------------------------------------------------------
+    # Predictor-adjacent guards (ported from mobilint; additive, no change to
+    # the fsrr in-process execution model). These run before a prediction so a
+    # broken environment, a missing artifact, an undeployable model, or an
+    # out-of-distribution selection reports itself plainly instead of surfacing
+    # as a confident-but-meaningless ranking.
+    # ------------------------------------------------------------------
+    def _resolve_static_json(self) -> Path:
+        """Locate the static profile JSON (feature source) the predictor reads."""
+        root = Path(__file__).resolve().parent
+        candidates = [
+            root / "xgboost_model" / "performance_data" / "sample_profiling_data" / "sample_profiling_data.json",
+            root / "sample_profiling_data.json",
+        ]
+        p = next((c for c in candidates if c.exists()), None)
+        if p is None:
+            raise FileNotFoundError(f"Static profiling JSON not found in: {[str(c) for c in candidates]}")
+        return p
+
+    def _load_baseline_rates(self) -> dict:
+        """Per-model baseline_rate (1x load) from the static profile JSON.
+
+        A single source for the input-rate dialog defaults, so the pre-filled
+        rate matches what the predictor was profiled at. Returns {model:
+        baseline_rate}; a model may map to None if its profile row has no rate.
+        """
+        try:
+            static_json = self._resolve_static_json()
+            return {r['model']: r.get('baseline_rate')
+                    for r in json.loads(Path(static_json).read_text()).get('total_data', [])
+                    if r.get('model')}
+        except Exception as e:
+            self.log(f"[Warn] Could not load baseline rates: {e}")
+            return {}
+
+    def _load_coverage(self, pred_model):
+        """The predictor's `<prefix>_coverage.json` as a dict ({} when unreadable)."""
+        try:
+            prefix = _infer_model_prefix(Path(pred_model))
+            cov_path = Path(str(prefix) + "_coverage.json")
+            return json.loads(cov_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def trained_working_sets(self, pred_model):
+        """The model sets this predictor was actually trained on, as lists of names."""
+        cov = self._load_coverage(pred_model)
+        return [s.split(",") for s in cov.get("model_sets", []) if s]
+
+    def check_selection_coverage(self, model_names, pred_model):
+        """Compare the checked models against the predictor's training coverage.
+
+        `<prefix>_coverage.json` records the model sets, view counts and devices
+        seen during training. A selection outside that distribution still yields
+        a prediction, but the ranking is extrapolated and should not be trusted.
+        Returns a list of human-readable warnings (empty when in-distribution).
+        """
+        prefix = _infer_model_prefix(Path(pred_model))
+        cov_path = Path(str(prefix) + "_coverage.json")
+        if not cov_path.exists():
+            return [f"No training-coverage record next to the predictor "
+                    f"({cov_path.name}); cannot verify the selection is in-distribution."]
+        try:
+            cov = json.loads(cov_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            return [f"Could not read {cov_path.name}: {e}"]
+
+        selected = sorted(model_names)
+        warnings = []
+
+        if ",".join(selected) in set(cov.get("model_sets", [])):
+            return []  # exact training working set
+
+        unseen = [m for m in selected if m not in set(cov.get("models", []))]
+        if unseen:
+            warnings.append(f"Never trained on: {', '.join(unseen)}. "
+                            f"Trained models: {', '.join(cov.get('models', []))}.")
+
+        view_counts = cov.get("view_counts") or []
+        if view_counts and len(selected) not in view_counts:
+            warnings.append(f"{len(selected)} models selected, but training only covered "
+                            f"working sets of {', '.join(str(n) for n in view_counts)} models.")
+
+        sets = [set(s.split(",")) for s in cov.get("model_sets", []) if s]
+        if sets:
+            always = set.intersection(*sets)
+            missing = sorted(always - set(selected))
+            if missing:
+                warnings.append(f"Every training working set included {', '.join(missing)}, "
+                                f"which the selection omits; contention behaviour will differ.")
+        return warnings
+
+    def _npu_selected(self) -> bool:
+        """Whether the Device Type combo currently targets the NPU (needs .mxq)."""
+        if hasattr(self, 'device_type_combo'):
+            return self.device_type_combo.currentText().lower() == 'npus'
+        return False
+
+    def _model_blockers(self):
+        """{model: reason} for every model that cannot be deployed on this machine.
+
+        Vision models need a `.onnx` (CPU) and, when the NPU is targeted, a `.mxq`;
+        generative models need a static profile entry. A model absent from this map
+        is deployable.
+        """
+        file_backed, cpu_only, npu_only = discover_file_backed_models(self.models_root)
+        try:
+            hf_backed = set(discover_hf_backed_models(self._resolve_static_json()))
+        except Exception:
+            hf_backed = set()
+        needs_mxq = self._npu_selected()
+
+        blockers = {}
+        for m in npu_only:                      # has .mxq, no .onnx -> cannot run on CPU
+            blockers[m] = "missing .onnx (needed for CPU)"
+        if needs_mxq:
+            for m in cpu_only:                  # has .onnx, no .mxq -> cannot run on NPU
+                blockers[m] = "missing .mxq (needed for NPU)"
+        self._deployable = set(file_backed) | hf_backed | (set() if needs_mxq else set(cpu_only))
+        return blockers
+
+    def _blockers_for(self, models):
+        """{model: reason} restricted to `models` -- what stops this selection."""
+        known = self._model_blockers()
+        out = {}
+        for m in models:
+            if m in known:
+                out[m] = known[m]
+            elif m not in getattr(self, '_deployable', set()):
+                out[m] = "no static profile / no model file"
+        return out
+
+    def preflight_check(self, pred_model):
+        """Everything the prediction needs, checked before we bother the user.
+
+        Runs ahead of the coverage check so a broken environment (no xgboost) or a
+        missing artifact reports itself as such, instead of surfacing as an
+        out-of-distribution warning followed by a stack trace. Returns a list of
+        blocking errors; empty means good to go.
+        """
+        errors = []
+        try:
+            import xgboost  # noqa: F401
+        except Exception as e:
+            errors.append(f"xgboost is not installed in this environment ({e}). "
+                          f"The placement predictor cannot run. Launch the GUI with the "
+                          f"project interpreter (.venv/bin/python).")
+
+        try:
+            prefix = _infer_model_prefix(Path(pred_model))
+        except Exception as e:
+            errors.append(f"Prediction model prefix could not be resolved: {e}")
+            return errors
+
+        missing = [Path(str(prefix) + suffix).name
+                   for suffix in ("_y1.json", "_y2.json", "_y3.json",
+                                  "_features.json", "_coverage.json")
+                   if not Path(str(prefix) + suffix).exists()]
+        if missing:
+            errors.append(f"Predictor artifacts missing next to {prefix.name}: "
+                          f"{', '.join(missing)}.")
+        return errors
+
     def on_predict_best_clicked(self):
         """Handler invoked when predict_best_button is clicked.
         Also manages internal state for previous/current selections and scores.
@@ -1088,6 +1325,28 @@ class BestDeployFinderApp(QMainWindow):
                     except Exception:
                         pass
             return
+
+        # Preflight: a broken environment or a missing artifact is a hard stop --
+        # report it plainly instead of letting it surface later as a stack trace.
+        preflight_errors = self.preflight_check(pred_model)
+        if preflight_errors:
+            for e in preflight_errors:
+                self.log(f"[Preflight] {e}")
+            if hasattr(self, 'label_best_deploy_value'):
+                self.label_best_deploy_value.setText('-')
+            return
+
+        # Non-blocking advisories: an out-of-distribution selection or an
+        # undeployable model still predicts, but the ranking is extrapolated.
+        try:
+            selected_models = self._get_selected_model_names()
+            for w in self.check_selection_coverage(selected_models, pred_model):
+                self.log(f"[Coverage] {w}")
+            blockers = self._blockers_for(selected_models)
+            for m, reason in sorted(blockers.items()):
+                self.log(f"[Deployability] {m}: {reason}")
+        except Exception as e:
+            self.log(f"[Warn] Coverage/deployability check skipped: {e}")
 
         # Step 1: Generate schedule data (memory based)
         try:
@@ -1223,6 +1482,11 @@ class BestDeployFinderApp(QMainWindow):
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Best Deploy Finder GUI')
     parser.add_argument('--models-root', type=str, help='Path to the models root folder (default: ./models)')
+    # D5: this GUI's mode numbering differs from schedule_executor_main.py's
+    # (which also has 3=Static and 4=Stop-restart+rollback). Here: 0=off,
+    # 1=Adaptive hot-swap, 2=reactive (BoundGuard). Analysis scripts that drive this
+    # GUI therefore run "BoundGuard" as mode 1 or 2 depending on how they invoke it —
+    # see schedule_executor_main.MODE_METHOD_MAP for the executor-side canonical table.
     parser.add_argument('--adaptive-mode', type=int, default=0, choices=[0, 1, 2],
                         help='Adaptive deploy mode: 0=off, 1=adaptive hot-swap, 2=reactive (default: 0)')
     return parser.parse_args()

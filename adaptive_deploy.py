@@ -18,6 +18,8 @@ from model_processors import (
     run_resnet_cpu_process,
     run_yolo_gpu_process,
     run_resnet_gpu_process,
+    worker_target,
+    classify_view,
 )
 
 
@@ -37,40 +39,26 @@ def _same_device(old_cfg, new_cfg):
 
 
 def _create_worker_thread(view_name, cfg, frame_queue, output_queue, shutdown_event, ready_event):
-    """Create (but do not start) the appropriate worker thread for *cfg*."""
+    """Create (but do not start) the appropriate worker thread for *cfg*.
+
+    Registry-driven routing (replaces the old "yolov4" substring test); device from
+    the schedule's execution token (cpu/gpu/npu). Returns None for a generative
+    (llm/vlm — deferred) or unknown model, so the caller can skip the hot-swap.
+    """
     model = cfg.get("model", "")
     execution = cfg.get("execution", "cpu")
 
-    if "yolov4" in model:
-        if execution == "gpu":
-            return Thread(
-                target=run_yolo_gpu_process,
-                args=(frame_queue, output_queue, shutdown_event, view_name, model),
-                kwargs={"ready_event": ready_event},
-                daemon=True,
-            )
-        else:
-            return Thread(
-                target=run_yolo_cpu_process,
-                args=(frame_queue, output_queue, shutdown_event, view_name),
-                kwargs={"ready_event": ready_event},
-                daemon=True,
-            )
-    else:
-        if execution == "gpu":
-            return Thread(
-                target=run_resnet_gpu_process,
-                args=(frame_queue, output_queue, shutdown_event, view_name),
-                kwargs={"ready_event": ready_event},
-                daemon=True,
-            )
-        else:
-            return Thread(
-                target=run_resnet_cpu_process,
-                args=(frame_queue, output_queue, shutdown_event, view_name),
-                kwargs={"ready_event": ready_event},
-                daemon=True,
-            )
+    target, kind, device = worker_target(model, execution)
+    if target is None:
+        print(f"[AdaptiveDeploy] No vision worker for {view_name}: model={model} "
+              f"execution={execution} (generative/deferred or unknown).")
+        return None
+    return Thread(
+        target=target,
+        args=(frame_queue, output_queue, shutdown_event),
+        kwargs={"view_name": view_name, "model_name": model, "ready_event": ready_event},
+        daemon=True,
+    )
 
 
 class AdaptiveDeployManager:
@@ -270,6 +258,11 @@ class AdaptiveDeployManager:
         ready_event = Event()
 
         new_process = _create_worker_thread(vname, new_cfg, new_frame_q, new_output_q, new_shutdown, ready_event)
+        if new_process is None:
+            # Generative/deferred or unknown model: nothing to hot-swap to. Stop the
+            # old worker so the view goes idle rather than serving a stale placement.
+            self._stop_view_worker(vname)
+            return
         new_process.start()
 
         # Watcher thread: waits for ready, then atomically swaps queues
@@ -336,12 +329,14 @@ class AdaptiveDeployManager:
         setattr(v, f"{vname}_shutdown_event", shutdown_ev)
 
         proc = _create_worker_thread(vname, cfg, frame_q, output_q, shutdown_ev, ready_event=None)
+        if proc is None:
+            return
         proc.start()
         setattr(v, f"{vname}_process", proc)
 
         # Update yolo/resnet set
         model = cfg.get("model", "")
-        if "yolov4" in model:
+        if classify_view(model) == "yolo":
             v.yolo_views.add(vname)
             v.resnet_views.discard(vname)
         else:
@@ -393,11 +388,13 @@ class AdaptiveDeployManager:
                 v.headless_shutdown_events[hid],
                 ready_event=None,
             )
+            if proc is None:
+                continue
             proc.start()
             v.headless_processes.append(proc)
 
             model = cfg.get("model", "")
-            if "yolov4" in model:
+            if classify_view(model) == "yolo":
                 v.yolo_views.add(hid)
             else:
                 v.resnet_views.add(hid)
@@ -414,7 +411,7 @@ class AdaptiveDeployManager:
             model = cfg.get("model", "")
 
             # Update yolo/resnet membership
-            if "yolov4" in model:
+            if classify_view(model) == "yolo":
                 v.yolo_views.add(vname)
                 v.resnet_views.discard(vname)
             elif model:
@@ -438,7 +435,7 @@ class AdaptiveDeployManager:
     def _swap_feeder_queue(self, vname, cfg, new_frame_q):
         v = self.viewer
         model = cfg.get("model", "")
-        if "yolov4" in model:
+        if classify_view(model) == "yolo":
             feeder = getattr(v, 'video_feeder', None)
         else:
             feeder = getattr(v, 'resnet_feeder', None)

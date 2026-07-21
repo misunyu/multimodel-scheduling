@@ -21,6 +21,18 @@ from PyQt5.QtCore import QTimer, Qt
 from unified_viewer import UnifiedViewer, InfoWindow
 
 
+# D5: single mode->method mapping for THIS entry point (schedule_executor_main).
+# best_deploy_finder_executor.py uses a different, smaller numbering (see its header
+# and the note on ScheduleExecutor.adaptive_mode). Reused by docs/runbooks.
+MODE_METHOD_MAP = {
+    0: "Stop-and-restart",
+    1: "Adaptive hot-swap",
+    2: "BoundGuard (reactive: validation window + rollback/fallback)",
+    3: "Static",
+    4: "Stop-and-restart + rollback (baseline)",
+}
+
+
 class ScheduleExecutor:
     """Encapsulates state and behavior for running schedule combinations sequentially."""
 
@@ -35,7 +47,18 @@ class ScheduleExecutor:
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
         self._selected_combo = selected_combo
-        self.adaptive_mode = adaptive_mode  # 0=off, 1=adaptive hot-swap, 2=reactive (BoundGuard), 3=static, 4=stop-and-restart + rollback
+        # adaptive_mode -> strategy (single source of truth; see MODE_METHOD_MAP below).
+        #   0 = Stop-and-restart      (default / the implicit else path)
+        #   1 = Adaptive hot-swap
+        #   2 = reactive == BoundGuard (validation window + rollback/fallback)
+        #   3 = Static
+        #   4 = Stop-and-restart + rollback (baseline)
+        # NOTE (D5): this numbering is NOT shared by best_deploy_finder_executor.py,
+        # whose GUI --adaptive-mode uses {0,1,2} with 1=Adaptive, 2=reactive and no
+        # static/mode-4. Some analysis scripts therefore drive "BoundGuard" as mode 1
+        # (the hot-swap manager) rather than mode 2. Always read the mapping for the
+        # entry point you are in.
+        self.adaptive_mode = adaptive_mode
         self.metrics_csv = metrics_csv      # Path for per-second CSV metrics recording
         # Optional per-combo duration override: {combo_name: int_seconds}
         # When a combo is not in this map, default_duration is used.

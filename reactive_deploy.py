@@ -44,6 +44,18 @@ def get_available_gpu_memory_mb(device_id: int = 0) -> float:
 # Rough per-model GPU memory estimates (MB).  These are conservative defaults
 # used when no runtime profiling data is available.
 _MODEL_GPU_MEM_MB = {
+    # New model set (MLA100 port). Vision estimates scale with the yolo11 variant;
+    # llama1b/qwen2_vl are HF fp16 checkpoints, so their GPU footprint is GBs, not the
+    # 200 MB default that the fallback would otherwise hand a generative model.
+    "yolo11n": 80,
+    "yolo11s": 130,
+    "yolo11m": 260,
+    "yolo11l": 380,
+    "yolo11x": 560,
+    "mobilenet_v2": 90,
+    "llama1b": 2600,
+    "qwen2_vl": 5200,
+    # Legacy set (kept so old schedules still estimate sensibly).
     "resnet50": 250,
     "resnext50": 350,
     "mnasnet": 150,
