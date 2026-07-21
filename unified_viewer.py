@@ -558,31 +558,43 @@ class UnifiedViewer(QMainWindow):
 
         # Persistent input queues — only create them once. Output queues and
         # per-view shutdown events are still recreated each phase below.
+        #
+        # C3: the per-view frame-queue depth is the "buffer B" the fluid model
+        # studies. Parametrized via FSRR_FRAME_BUFFER (default 2 = prior behavior,
+        # drop-on-full). A larger B lets backlog Q(k) accumulate and drain instead
+        # of dropping instantly, which is what T_stable = Q/(mu*-lambda) predicts.
+        # Output queues stay at 1 (they gate display, not arrival buffering).
+        try:
+            _fb = int(os.environ.get("FSRR_FRAME_BUFFER", "2"))
+            if _fb < 1:
+                _fb = 1
+        except Exception:
+            _fb = 2
         if not hasattr(self, 'video_frame_queue') or self.video_frame_queue is None:
-            self.video_frame_queue = Queue(maxsize=2)
+            self.video_frame_queue = Queue(maxsize=_fb)
         self.video_shutdown_event = Event()
 
         # View1
         if not hasattr(self, 'view1_frame_queue') or self.view1_frame_queue is None:
-            self.view1_frame_queue = Queue(maxsize=2)
+            self.view1_frame_queue = Queue(maxsize=_fb)
         self.view1_output_queue = Queue(maxsize=1)
         self.view1_shutdown_event = Event()
 
         # View2
         if not hasattr(self, 'view2_frame_queue') or self.view2_frame_queue is None:
-            self.view2_frame_queue = Queue(maxsize=2)
+            self.view2_frame_queue = Queue(maxsize=_fb)
         self.view2_output_queue = Queue(maxsize=1)
         self.view2_shutdown_event = Event()
 
         # View3
         if not hasattr(self, 'view3_frame_queue') or self.view3_frame_queue is None:
-            self.view3_frame_queue = Queue(maxsize=2)
+            self.view3_frame_queue = Queue(maxsize=_fb)
         self.view3_result_queue = Queue(maxsize=1)
         self.view3_shutdown_event = Event()
 
         # View4
         if not hasattr(self, 'view4_frame_queue') or self.view4_frame_queue is None:
-            self.view4_frame_queue = Queue(maxsize=2)
+            self.view4_frame_queue = Queue(maxsize=_fb)
         self.view4_result_queue = Queue(maxsize=1)
         self.view4_shutdown_event = Event()
 
@@ -1831,6 +1843,17 @@ class UnifiedViewer(QMainWindow):
                 except Exception:
                     _el = 1.0
                 _dr = _td / _el if _el > 0 else 0.0
+                # C3 instrumentation (logging only): per-view frame-queue backlog Q(k)
+                # and cumulative drop count, for fluid-model validation. qsize() on the
+                # bounded input queues; sum over scheduled views = total backlog.
+                _q = {}
+                for _vn in ("view1", "view2", "view3", "view4"):
+                    _fq = getattr(self, f"{_vn}_frame_queue", None)
+                    try:
+                        _q[_vn] = int(_fq.qsize()) if _fq is not None else 0
+                    except Exception:
+                        _q[_vn] = 0
+                _backlog_total = sum(_q[v] for v in sched)
                 if not _all_zero:
                     with open(csv_path, 'a', newline='') as _cf:
                         _w = _csv.writer(_cf)
@@ -1838,13 +1861,17 @@ class UnifiedViewer(QMainWindow):
                             _w.writerow(['timestamp', 'combination', 'total_fps',
                                          'view1_fps', 'view2_fps', 'view3_fps', 'view4_fps',
                                          'view1_infer_ms', 'view2_infer_ms', 'view3_infer_ms', 'view4_infer_ms',
-                                         'drop_rate_fps', 'v_score'])
+                                         'drop_rate_fps', 'v_score',
+                                         'backlog_total', 'view1_q', 'view2_q', 'view3_q', 'view4_q',
+                                         'drop_count'])
                         _w.writerow([
                             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             combo, f"{t_fps:.2f}",
                             f"{v1f:.2f}", f"{v2f:.2f}", f"{v3f:.2f}", f"{v4f:.2f}",
                             f"{v1it:.2f}", f"{v2it:.2f}", f"{v3it:.2f}", f"{v4it:.2f}",
                             f"{_dr:.4f}", f"{_v_t:.6f}",
+                            _backlog_total, _q['view1'], _q['view2'], _q['view3'], _q['view4'],
+                            int(_td),
                         ])
         except Exception as _e:
             pass

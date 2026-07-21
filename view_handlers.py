@@ -1,9 +1,55 @@
 """
 View handling components for the multimodel scheduling application.
 """
+import os
 import threading
 import queue
 import time
+
+# C3: when FSRR_RATE_REPLICATE=1, feeders replicate frames to hit the target
+# arrival rate lambda (= infps) even above the source/loop rate, so lambda is
+# actually controllable. Each replicated frame is a real inference (the worker
+# runs a full forward pass per copy), so lambda_actual == target with real load.
+# Default (unset) keeps the prior throttle-only behavior.
+_RATE_REPLICATE = os.environ.get("FSRR_RATE_REPLICATE", "0") == "1"
+
+# C3/B2: per-frame end-to-end latency logging (measurement only). When
+# FSRR_PERFRAME_LOG is a path, each completed frame appends one row
+# (view, model, infer, wait, e2e=infer+wait, deadline=L_SLO, late=e2e>deadline)
+# so miss-rate late-component and p99/p999 tail can be computed. Drops are counted
+# separately by the feeders. Default (unset) = no per-frame logging.
+_PERFRAME_PATH = os.environ.get("FSRR_PERFRAME_LOG", "")
+_perframe_lock = threading.Lock()
+_perframe_fh = None
+
+
+def _perframe_log(view, model, infer_ms, wait_ms, deadline_ms):
+    if not _PERFRAME_PATH:
+        return
+    try:
+        e2e = float(infer_ms) + float(wait_ms or 0.0)
+        late = 1 if (deadline_ms and e2e > float(deadline_ms)) else 0
+        global _perframe_fh
+        with _perframe_lock:
+            if _perframe_fh is None:
+                _perframe_fh = open(_PERFRAME_PATH, "a", buffering=1)
+                _perframe_fh.write("view,model,infer_ms,wait_ms,e2e_ms,deadline_ms,late\n")
+            _perframe_fh.write(f"{view},{model},{float(infer_ms):.2f},{float(wait_ms or 0.0):.2f},"
+                               f"{e2e:.2f},{float(deadline_ms or 0.0):.2f},{late}\n")
+    except Exception:
+        pass
+
+
+def _deadline_ms(model_settings, view_name):
+    """L_SLO for a view: slo_ms if set, else 1000/infps."""
+    try:
+        s = (model_settings or {}).get(view_name, {}) or {}
+        if s.get("slo_ms") is not None:
+            return float(s["slo_ms"])
+        infps = float(s.get("infps", 10.0) or 10.0)
+        return 1000.0 / infps if infps > 0 else 100.0
+    except Exception:
+        return 100.0
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QPixmap
 
@@ -144,6 +190,8 @@ class YoloViewHandler(ViewHandler):
                     if first_display:
                         first_display = False
                     self.update_stats(self.model_type, infer_time)
+                    _perframe_log(self.view_name, self.model_type, infer_time, wait_ms,
+                                  _deadline_ms(self.model_settings, self.view_name))
                     # Update wait statistics if available
                     if wait_ms is not None:
                         self.total_wait_ms += float(wait_ms)
@@ -200,6 +248,8 @@ class ResNetViewHandler(ViewHandler):
                     if first_display:
                         first_display = False
                     self.update_stats(self.model_type, infer_time)
+                    _perframe_log(self.view_name, self.model_type, infer_time, wait_ms,
+                                  _deadline_ms(self.model_settings, self.view_name))
                     # Update wait statistics if available
                     if wait_ms is not None:
                         self.total_wait_ms += float(wait_ms)
@@ -314,10 +364,27 @@ class VideoFeeder:
                         continue
                     interval = self.view_intervals.get(view_name)  # None means no throttle (enqueue every frame)
                     last_ts = self.last_enqueue_ts.get(view_name, 0.0)
-                    if (interval is None) or ((now - last_ts) >= interval):
+                    if interval is None:
+                        n_copies = 1
+                        self.last_enqueue_ts[view_name] = now
+                    elif _RATE_REPLICATE:
+                        # Enqueue as many copies as the elapsed time earns at rate
+                        # 1/interval, so the achieved rate == target infps even when
+                        # infps > source fps (replication). Advance last_ts by whole
+                        # intervals so no rate is lost or gained over time.
+                        if last_ts <= 0.0:
+                            n_copies = 1
+                            self.last_enqueue_ts[view_name] = now
+                        else:
+                            n_copies = int((now - last_ts) / interval)
+                            self.last_enqueue_ts[view_name] = last_ts + n_copies * interval
+                    else:
+                        n_copies = 1 if ((now - last_ts) >= interval) else 0
+                        if n_copies:
+                            self.last_enqueue_ts[view_name] = now
+                    for _ in range(n_copies):
                         try:
                             frame_q.put_nowait((frame.copy(), now))
-                            self.last_enqueue_ts[view_name] = now
                         except queue.Full:
                             try:
                                 self.drop_counts[view_name] += 1
@@ -452,22 +519,31 @@ class ResnetImageFeeder:
                     if interval is None:
                         # If interval is None (infps <= 0), skip feeding this view
                         continue
-                    if (now - last_ts.get(view_name, 0.0)) < interval:
-                        continue
-                    img = self._next_image(view_name)
-                    if img is None:
-                        continue
-                    try:
-                        q.put_nowait((img, now))
-                        last_ts[view_name] = now
-                    except queue.Full:
+                    _lt = last_ts.get(view_name, 0.0)
+                    if _RATE_REPLICATE:
+                        if _lt <= 0.0:
+                            n_copies = 1
+                            last_ts[view_name] = now
+                        else:
+                            n_copies = int((now - _lt) / interval)
+                            last_ts[view_name] = _lt + n_copies * interval
+                    else:
+                        n_copies = 1 if ((now - _lt) >= interval) else 0
+                        if n_copies:
+                            last_ts[view_name] = now
+                    for _ in range(n_copies):
+                        img = self._next_image(view_name)
+                        if img is None:
+                            break
                         try:
-                            self.drop_counts[view_name] = int(self.drop_counts.get(view_name, 0)) + 1
-                        except Exception:
+                            q.put_nowait((img, now))
+                        except queue.Full:
+                            try:
+                                self.drop_counts[view_name] = int(self.drop_counts.get(view_name, 0)) + 1
+                            except Exception:
+                                pass
+                        except (EOFError, BrokenPipeError, OSError):
                             pass
-                        last_ts[view_name] = now
-                    except (EOFError, BrokenPipeError, OSError):
-                        pass
             except Exception as e:
                 print(f"[ResnetImageFeeder ERROR] {e}")
             time.sleep(min_sleep)
