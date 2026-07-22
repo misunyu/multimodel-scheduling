@@ -42,7 +42,9 @@ class ScheduleExecutor:
                  combo_triggers: dict = None,
                  qos_epsilon: float = 1.0,
                  qos_tv: float = 3.0,
-                 qos_window_T: int = 3):
+                 qos_window_T: int = 3,
+                 background: bool = False,
+                 background_max_new_tokens: int = 64):
         self.schedule_file = schedule_file
         self.default_duration = max(1, int(duration))
         self.info_window = info_window
@@ -74,6 +76,15 @@ class ScheduleExecutor:
         # Runtime state for the polling logic.
         self._qos_poll_timer = None
         self._qos_advance_fired = False
+
+        # Background generative load (Q3/Q5 mixed set). Default OFF so every
+        # background-off result reproduces exactly; when ON, generative combo
+        # entries (llama1b/qwen2_vl) run as isolated child processes and their
+        # placement is a coarse switch target. Vision dispatch / QoS untouched.
+        from runtime.background_llm import BackgroundManager
+        self._bg = BackgroundManager(enabled=bool(background),
+                                     max_new_tokens=int(background_max_new_tokens),
+                                     log=print)
 
         self._viewer: UnifiedViewer = None
         self._index: int = 0
@@ -123,6 +134,10 @@ class ScheduleExecutor:
     def stop(self):
         self._running = False
         self._cleanup_viewer()
+        try:
+            self._bg.shutdown()
+        except Exception as e:
+            print(f"[Executor] background shutdown error: {e}")
         self._set_start_button_enabled(True)
         print('[Executor] Execution stopped by user.')
 
@@ -160,6 +175,25 @@ class ScheduleExecutor:
         nxt = self._combinations[self._index + 1]
         return (self._placement_signature(cur) ==
                 self._placement_signature(nxt))
+
+    def _generative_entries(self, combo_name: str):
+        """Return [(model, execution), ...] for the generative (llm/vlm) entries
+        of a combo. Used to drive the background manager's coarse placement
+        switch. Vision entries are excluded (the viewer handles those)."""
+        import model_registry as reg
+        schedules = getattr(self, '_schedules_cache', None) or {}
+        cfg = schedules.get(combo_name) or {}
+        entries = []
+        for entry in cfg.values():
+            if not isinstance(entry, dict):
+                continue
+            model = str(entry.get('model', '') or '')
+            try:
+                if model and reg.is_llm_like(model):
+                    entries.append((model, str(entry.get('execution', 'cpu') or 'cpu')))
+            except Exception:
+                continue
+        return entries
 
     def _placement_signature(self, combo_name: str):
         """Return a hashable, infps-independent signature of a combo's placement.
@@ -228,6 +262,10 @@ class ScheduleExecutor:
                 return
             print('[Executor] All combinations executed. Leaving windows open.')
             self._write_best_header()
+            try:
+                self._bg.shutdown()
+            except Exception as e:
+                print(f"[Executor] background shutdown error: {e}")
             self._running = False
             self._index = 0
             self._set_start_button_enabled(True)
@@ -235,6 +273,15 @@ class ScheduleExecutor:
 
         combo = self._combinations[self._index]
         print(f"[Executor] Starting schedule: {combo}")
+
+        # Reconcile background generative placement to this combo (coarse switch:
+        # kill old-device child, start new-device child). No-op when disabled or
+        # when the combo has no generative entries. Kept ahead of every early
+        # return below so LLM placement tracks each combo transition.
+        try:
+            self._bg.sync(self._generative_entries(combo))
+        except Exception as e:
+            print(f"[Executor] background sync error: {e}")
 
         adaptive = (self.adaptive_mode == 1)
         reactive = (self.adaptive_mode == 2)
@@ -901,7 +948,16 @@ def main():
     parser.add_argument('--stop-after', type=str, default=None,
                         help='Stop the executor after this combo completes '
                              '(combos after it in the yaml are skipped).')
+    parser.add_argument('--background', action='store_true',
+                        help='Run generative (llm/vlm) combo entries as isolated '
+                             'background processes creating accelerator contention '
+                             '(Q3/Q5 mixed set). Default OFF reproduces prior runs.')
+    parser.add_argument('--background-max-new-tokens', type=int, default=64,
+                        help='max_new_tokens per background generation (default 64).')
     args = parser.parse_args()
+    # Env fallback so headless runners can toggle without editing argv.
+    _bg_on = bool(getattr(args, 'background', False)) or \
+        os.environ.get('FSRR_BACKGROUND', '0') not in ('0', '', 'false', 'False')
 
     # Parse --combo-duration overrides into a {combo_name: seconds} dict
     combo_durations: dict = {}
@@ -994,7 +1050,9 @@ def main():
                                         combo_triggers=combo_triggers,
                                         qos_epsilon=args.qos_trigger_epsilon,
                                         qos_tv=args.qos_trigger_tv,
-                                        qos_window_T=args.qos_window_t)
+                                        qos_window_T=args.qos_window_t,
+                                        background=_bg_on,
+                                        background_max_new_tokens=args.background_max_new_tokens)
         except ValueError as e:
             print(f"[Main] ERROR: {e}")
             return 1
@@ -1041,7 +1099,9 @@ def main():
                                     combo_triggers=combo_triggers,
                                     qos_epsilon=args.qos_trigger_epsilon,
                                     qos_tv=args.qos_trigger_tv,
-                                    qos_window_T=args.qos_window_t)
+                                    qos_window_T=args.qos_window_t,
+                                    background=_bg_on,
+                                    background_max_new_tokens=args.background_max_new_tokens)
         # Truncate combos to stop after a specified name, if requested.
         try:
             if args.stop_after and args.stop_after in executor._combinations:
