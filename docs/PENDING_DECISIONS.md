@@ -36,3 +36,13 @@
 3. **NPU DRAM 초과 시 모델 수 조정**: NPU DRAM 측정 방법(maccel API) 확보 후 vision+LLM mxq 동시 적재 가능 여부 판정 필요.
 ### 무회귀
 - 격리 러너를 실제 파이프라인에 붙이지 않았으므로 vision GPU/NPU/BoundGuard 무영향. background 통합은 SKIP.
+
+## [Q3/Q5] 오예측 시나리오 — 자연 발생 미발견 (게이트, 억지 실패 안 함)
+- 무엇: BoundGuard의 distinctive 우위(top-1 실패 → 대안 회복)를 Q3(cpu_gpu)·Q5(cpu_npu)로 실증.
+- 왜 멈춤: **vision-only에선 자연 오예측(top-1 mis-rank)이 구조적으로 안 생김.** 예측기 top-1이 항상 all-accelerator(진짜 최적), 실패 모드는 용량 contention=Q4-like(대안 없음)이지 Q3 아님. 조작 금지 원칙(§0.1)으로 억지 실패 안 함.
+- 데이터: docs/q3_q5_misprediction_report.md (coverage 가드/미학습조합/런타임 V=342 확인).
+- 선택지:
+  (1) **Mixed 셋(LLM/VLM)** = authentic Q3/Q5(LLM이 가속기 점유→vision CPU mis-rank). **프로세스 분리 선행 필수**(cuDNN). 후속.
+  (2) **Controlled injection** = top-1 강제 대체, 논문에 injection 명시. 설득력 약함(대안 자명).
+  (3) **NPU 단일-상주 제약 runtime 구현** = Q5 자연 오예측용. 실행모델 변경.
+- 권장: (1) mixed 경로가 정공법이나 프로세스 분리 선행 필요. 어느 경로로 갈지 사람 판단.
