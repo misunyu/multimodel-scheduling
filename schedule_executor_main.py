@@ -43,6 +43,7 @@ class ScheduleExecutor:
                  qos_epsilon: float = 1.0,
                  qos_tv: float = 3.0,
                  qos_window_T: int = 3,
+                 qos_slope_threshold: float = 0.5,
                  background: bool = False,
                  background_max_new_tokens: int = 64):
         self.schedule_file = schedule_file
@@ -73,6 +74,10 @@ class ScheduleExecutor:
         self.qos_epsilon = float(qos_epsilon)
         self.qos_tv = float(qos_tv)
         self.qos_window_T = int(qos_window_T)
+        # Trend-based validation: commit a candidate whose backlog is draining
+        # faster than this (frames/sec) even if V(t) is still above eps. Flat
+        # (mu~lambda) or rising backlog -> advance. See check_validate.
+        self.qos_slope_threshold = float(qos_slope_threshold)
         # Runtime state for the polling logic.
         self._qos_poll_timer = None
         self._qos_advance_fired = False
@@ -113,6 +118,15 @@ class ScheduleExecutor:
             return
         self._running = True
         self._index = 0
+        # Per-episode record of each *validated* candidate's observed service
+        # rate (frames completed / s over the tail of its T_v window). Used by
+        # _revert_to_best when the candidate budget is exhausted: instead of
+        # default-committing to whatever candidate happened to be last in the
+        # predictor ranking (which has no reason to be good -- in Q4 it was the
+        # worst of five), BoundGuard reverts to the best placement it actually
+        # observed. Auto-advanced candidates (== the violating placement) are
+        # deliberately NOT recorded, so we never revert to the known-bad combo.
+        self._cand_obs = {}
         if duration is not None:
             self.default_duration = max(1, int(duration))
         # Cap total continuous execution time to 1 hour when running a single selected combination
@@ -140,6 +154,25 @@ class ScheduleExecutor:
             print(f"[Executor] background shutdown error: {e}")
         self._set_start_button_enabled(True)
         print('[Executor] Execution stopped by user.')
+
+    def _fire_window_end(self):
+        # Fixed observation window (work 5) elapsed. Stop the run cleanly even if a
+        # combo committed/reverted and stopped advancing. Mirror the natural
+        # schedule-completion path (dump accounting, reset _index=0) so the auto-quit
+        # poller fires and the process exits at exactly the window length.
+        if not getattr(self, '_running', False):
+            return
+        print('[Executor] Fixed observation window elapsed. Stopping execution.')
+        try:
+            self._dump_accounting()
+        except Exception:
+            pass
+        try:
+            self._write_best_header()
+        except Exception:
+            pass
+        self.stop()
+        self._index = 0
 
     # ----------------------------- Internal API ---------------------------- #
 
@@ -246,12 +279,25 @@ class ScheduleExecutor:
             pass
 
     def _run_next(self):
-        # Enforce max continuous runtime (1 hour) in selected-combo mode
+        # Enforce the hard end-time: the 1-hour cap in selected-combo mode, or the
+        # fixed observation window (work 5) anchored at the first candidate. Mirror
+        # the natural schedule-completion path (dump accounting, reset _index=0) so
+        # the auto-quit poller (_on_all_done_quit, which requires _index==0) fires
+        # and the process exits cleanly instead of hanging until the outer timeout.
         if getattr(self, '_end_time', None) is not None:
             remaining = int(self._end_time - time.time())
             if remaining <= 0:
-                print('[Executor] Reached 1-hour cap for selected combination. Stopping execution.')
+                print('[Executor] Hard end-time reached. Stopping execution.')
+                try:
+                    self._dump_accounting()
+                except Exception:
+                    pass
+                try:
+                    self._write_best_header()
+                except Exception:
+                    pass
                 self.stop()
+                self._index = 0
                 return
 
         if self._index >= len(self._combinations):
@@ -261,6 +307,7 @@ class ScheduleExecutor:
                 QTimer.singleShot(300, self._run_next)
                 return
             print('[Executor] All combinations executed. Leaving windows open.')
+            self._dump_accounting()
             self._write_best_header()
             try:
                 self._bg.shutdown()
@@ -273,6 +320,25 @@ class ScheduleExecutor:
 
         combo = self._combinations[self._index]
         print(f"[Executor] Starting schedule: {combo}")
+
+        # Fixed observation window (work 5): anchor the hard end-time at the first
+        # recovery candidate so every variant runs an identical wall-clock window
+        # from overload, regardless of how the candidate walk advances or where it
+        # lands. Without this the run length equals the *final combo's* nominal
+        # duration, which differs by variant (Adaptive holds cand_1 for its full
+        # duration; walk variants land on cand_5's shorter tail; no-dwell reverts
+        # at cand_4), making the strict-t_r recovery verdict depend on run length.
+        # The overload (burst) combo has no trigger, so cand_1 begins at a fixed
+        # offset after overload injection for every variant -> dur is fixed.
+        _hw = os.environ.get("FSRR_HARD_WINDOW_S")
+        if _hw and combo.startswith("cand_") and getattr(self, '_end_time', None) is None:
+            self._end_time = time.time() + float(_hw)
+            print(f"[Executor] Fixed window armed: hard end {float(_hw):.0f}s from {combo}")
+            # A committed/reverted final combo stops advancing, so _run_next (and its
+            # end-time check) is never re-entered -- the run would hold until the
+            # outer timeout. Schedule an independent one-shot that fires at _end_time
+            # regardless of commit/hold, so the run length is exactly the window.
+            QTimer.singleShot(int(float(_hw) * 1000), self._fire_window_end)
 
         # Reconcile background generative placement to this combo (coarse switch:
         # kill old-device child, start new-device child). No-op when disabled or
@@ -464,6 +530,14 @@ class ScheduleExecutor:
         except Exception:
             prev_vscore_for_mgr = getattr(self, '_prev_stable_vscore', None)
 
+        # Placement signature of the combo that was running BEFORE this one, so
+        # the validation trigger can detect a candidate whose placement is
+        # identical to the current (already-violating) one -- there is no
+        # transition to evaluate, so it must auto-advance (see
+        # _maybe_start_qos_trigger).
+        self._prev_placement_sig = (
+            self._placement_signature(prev_combo_for_mgr)
+            if prev_combo_for_mgr else None)
         # Save current state for reactive mode's rollback/fallback tracking
         self._prev_running_combo = combo
         try:
@@ -549,6 +623,187 @@ class ScheduleExecutor:
         except Exception:
             return None
 
+    def _handler_snapshot(self):
+        """Snapshot each active view handler's cumulative accumulators
+        (infer/wait sums and counts) at combo-entry time. The validation V is
+        then computed from the DELTA since this snapshot, so it reflects only
+        post-transition frames -- the cumulative avg_infer/avg_wait the handler
+        exposes are lifetime averages (total/count, never reset on hot-swap) and
+        are therefore contaminated by the previous (burst) phase.
+        Returns {vname: (total_infer, infer_count, total_wait, wait_count)}."""
+        snap = {}
+        if self._viewer is None:
+            return snap
+        for vname in ("view1", "view2", "view3", "view4"):
+            h = getattr(self._viewer, f"{vname}_handler", None)
+            if h is None:
+                continue
+            snap[vname] = (
+                float(getattr(h, 'total_infer_time', 0.0) or 0.0),
+                int(getattr(h, 'infer_count', 0) or 0),
+                float(getattr(h, 'total_wait_ms', 0.0) or 0.0),
+                int(getattr(h, 'wait_count', 0) or 0),
+            )
+        return snap
+
+    def _postswap_vscore(self, snap):
+        """V(t) computed from post-transition frames only (delta since `snap`).
+        Same definition as reactive_deploy._collect_vscore but with per-view
+        latency = (Δtotal_infer/Δinfer_count) + (Δtotal_wait/Δwait_count) so the
+        pre-transition (burst) history does not leak into the validation."""
+        if self._viewer is None or not snap:
+            return None
+        views_without = getattr(self._viewer, 'views_without_model', set())
+        v_sum = 0.0
+        n_active = 0
+        for vname in ("view1", "view2", "view3", "view4"):
+            if vname in views_without or vname not in snap:
+                continue
+            h = getattr(self._viewer, f"{vname}_handler", None)
+            if h is None:
+                continue
+            ti0, ic0, tw0, wc0 = snap[vname]
+            ti = float(getattr(h, 'total_infer_time', 0.0) or 0.0)
+            ic = int(getattr(h, 'infer_count', 0) or 0)
+            tw = float(getattr(h, 'total_wait_ms', 0.0) or 0.0)
+            wc = int(getattr(h, 'wait_count', 0) or 0)
+            d_ic, d_wc = ic - ic0, wc - wc0
+            if d_ic <= 0:
+                continue  # no post-transition frames yet -> skip (not diluted)
+            infer_ms = (ti - ti0) / d_ic
+            wait_ms = ((tw - tw0) / d_wc) if d_wc > 0 else 0.0
+            li = infer_ms + wait_ms
+            if li <= 0:
+                continue
+            ms = getattr(h, 'model_settings', None) or {}
+            infps = float((ms.get(vname) or {}).get('infps', 10.0) or 10.0)
+            l_slo = 1000.0 / infps if infps > 0 else 100.0
+            v_sum += max(0.0, (li / l_slo) - 1.0)
+            n_active += 1
+        if n_active == 0:
+            return None
+        return v_sum / n_active
+
+    def _current_backlog(self):
+        """Total instantaneous frame-queue backlog Q(k) across the four views
+        (same qsize() sum the metrics loop logs). None if unavailable.
+
+        This is the fluid-model backlog: its slope over the T_v window is
+        -(mu*-lambda) for a draining (feasible) candidate and >=0 for an
+        infeasible one, independent of backlog inherited from prior candidates.
+        """
+        if self._viewer is None:
+            return None
+        try:
+            total = 0
+            for vn in ("view1", "view2", "view3", "view4"):
+                fq = getattr(self._viewer, f"{vn}_frame_queue", None)
+                if fq is not None:
+                    total += int(fq.qsize())
+            return total
+        except Exception:
+            return None
+
+    def _current_drops(self):
+        """Per-view cumulative dropped-frame counts (queue-full drops), summed
+        across both feeders. {view: total_drops}. Used by the saturation guard:
+        a queue that is dropping cannot let its backlog grow, so the observed
+        slope no longer estimates lambda-mu -- ongoing drops are direct evidence
+        that arrival > service (infeasible), independent of slope/V."""
+        out = {v: 0 for v in ("view1", "view2", "view3", "view4")}
+        if self._viewer is None:
+            return out
+        for fname in ("video_feeder", "resnet_feeder"):
+            f = getattr(self._viewer, fname, None)
+            dc = getattr(f, "drop_counts", None) if f is not None else None
+            if not dc:
+                continue
+            for v in out:
+                try:
+                    out[v] += int(dc.get(v, 0) or 0)
+                except Exception:
+                    pass
+        return out
+
+    def _current_enqueues(self):
+        """Per-view cumulative successfully-enqueued frame counts, summed across
+        both feeders. {view: total_enqueued}. Used only by the transition
+        frame-accounting audit (enqueued == completed + dropped + residual)."""
+        out = {v: 0 for v in ("view1", "view2", "view3", "view4")}
+        if self._viewer is None:
+            return out
+        for fname in ("video_feeder", "resnet_feeder"):
+            f = getattr(self._viewer, fname, None)
+            ec = getattr(f, "enqueue_counts", None) if f is not None else None
+            if not ec:
+                continue
+            for v in out:
+                try:
+                    out[v] += int(ec.get(v, 0) or 0)
+                except Exception:
+                    pass
+        return out
+
+    def _dump_accounting(self):
+        """Emit the final frame-accounting line for the transition-losslessness
+        audit. Gated by FSRR_ACCT so default runs are unchanged. Per view:
+        enqueued / completed(handler infer_count) / dropped / residual(qsize)."""
+        if not os.environ.get("FSRR_ACCT"):
+            return
+        try:
+            enq = self._current_enqueues()
+            drp = self._current_drops()
+            for v in ("view1", "view2", "view3", "view4"):
+                h = getattr(self._viewer, f"{v}_handler", None)
+                comp = int(getattr(h, 'infer_count', 0) or 0) if h is not None else 0
+                fq = getattr(self._viewer, f"{v}_frame_queue", None)
+                resid = int(fq.qsize()) if fq is not None else 0
+                e = enq.get(v, 0); d = drp.get(v, 0)
+                bal = e - (comp + d + resid)
+                print(f"[ACCT] {v}: enqueued={e} completed={comp} dropped={d} "
+                      f"residual={resid} balance(enq-comp-drop-resid)={bal}",
+                      flush=True)
+        except Exception as ex:
+            print(f"[ACCT] error: {ex}", flush=True)
+
+    def _total_infer_count(self):
+        """Sum of completed-frame counters across foreground view handlers.
+        The delta of this over a window is the aggregate service rate mu_i
+        (frames/s actually completed). Unlike backlog slope, this stays
+        meaningful under saturation: a queue clipped at cap still tells us how
+        many frames drained, so it discriminates candidates in exactly the
+        regime (Q4) where slope and V(t) do not."""
+        if self._viewer is None:
+            return None
+        vw = getattr(self._viewer, 'views_without_model', set())
+        total = 0
+        any_h = False
+        for vname in ("view1", "view2", "view3", "view4"):
+            if vname in vw:
+                continue
+            h = getattr(self._viewer, f"{vname}_handler", None)
+            if h is None:
+                continue
+            total += int(getattr(h, 'infer_count', 0) or 0)
+            any_h = True
+        return total if any_h else None
+
+    @staticmethod
+    def _slope(samples):
+        """Least-squares slope (units/sec) of (t, y) samples; None if <2 or
+        degenerate."""
+        n = len(samples)
+        if n < 2:
+            return None
+        sx = sum(t for t, _ in samples)
+        sy = sum(y for _, y in samples)
+        sxx = sum(t * t for t, _ in samples)
+        sxy = sum(t * y for t, y in samples)
+        denom = n * sxx - sx * sx
+        if abs(denom) < 1e-9:
+            return None
+        return (n * sxy - sx * sy) / denom
+
     def _qos_advance(self, reason):
         if self._qos_advance_fired:
             return
@@ -565,12 +820,147 @@ class ScheduleExecutor:
         # Immediately move to the next combo.
         QTimer.singleShot(0, self._after_stop)
 
+    def _commit_and_stay(self, combo):
+        """Validation passed -> commit-and-stay: skip the remaining candidate
+        phases and hold the committed placement for the rest of the scheduled
+        time. This matches the paper's algorithm (a recovery episode completes
+        on commit) rather than the previous visit-all behaviour (which cycled
+        through later, worse candidates and injected spurious V(t) spikes).
+
+        Total run time is preserved -- the committed placement absorbs the
+        skipped candidates' durations -- so BoundGuard stays time-matched to the
+        baselines (which also hold their chosen placement for the whole run).
+
+        V(t) monitoring continues via the per-second metrics CSV. A re-violation
+        would be a NEW recovery episode (fresh detection window + a new predictor
+        ranking under the then-current conditions), not a resume of this episode;
+        the pre-listed schedule cannot express that, and here the committed
+        placement stays feasible so no re-violation occurs (confirmed from the
+        CSV trace). Background (LLM/VLM) placement is left as-is at the committed
+        combo, since no further combo transition -> no bg.sync (intended)."""
+        self._qos_advance_fired = True
+        self._stop_qos_poll()
+        combos = self._combinations
+        idx = self._index
+        skipped = [combos[j] for j in range(idx + 1, len(combos))]
+        skipped_secs = sum(max(1, int(self.combo_durations.get(c, self.default_duration)))
+                           for c in skipped)
+        # committed combo's own not-yet-consumed cap (validate fires ~T_v in)
+        own_remaining = max(0, int(self.combo_durations.get(combo, self.default_duration))
+                            - int(self.qos_tv))
+        hold_secs = max(1, own_remaining + skipped_secs)
+        # Cancel the per-candidate duration timer; hold the committed placement.
+        if getattr(self, '_duration_timer', None) is not None:
+            try:
+                self._duration_timer.stop()
+            except Exception:
+                pass
+            self._duration_timer = None
+        # Jump the index to the last phase so the next _after_stop ends the run;
+        # the viewer keeps running the committed placement in the meantime.
+        self._index = len(combos) - 1
+        self._duration_timer = QTimer(self._viewer if self._viewer else None)
+        self._duration_timer.setSingleShot(True)
+        self._duration_timer.timeout.connect(self._after_stop)
+        self._duration_timer.start(hold_secs * 1000)
+        if skipped:
+            print(f"[Executor] commit-and-stay: committed '{combo}'; skipping "
+                  f"{skipped[0]}..{skipped[-1]} ({len(skipped)} phases); holding "
+                  f"committed placement for {hold_secs}s; V(t) monitoring continues.")
+        else:
+            print(f"[Executor] commit-and-stay: committed '{combo}' (last phase; "
+                  f"nothing to skip).")
+
+    def _revert_to_best(self, current_combo):
+        """Candidate budget exhausted (all N_cand validated, none committed).
+
+        Instead of default-committing to `current_combo` (the last candidate in
+        the predictor ranking -- no reason to be good, and in Q4 it was the
+        worst of five), revert to the candidate with the highest *observed*
+        service rate. Reverting is itself one more transition, so the search
+        bound becomes T + N_cand(T_v + delta) + delta. If the best observed
+        placement is already the current one, we hold it (no extra delta).
+
+        Only *validated* candidates are in self._cand_obs; the auto-advanced
+        candidate (the violating placement itself) is excluded by construction,
+        so we never revert to the known-bad combo."""
+        obs = {k: v for k, v in self._cand_obs.items()
+               if v.get("rate") is not None}
+        obs_str = ", ".join(f"{k}={v['rate']:.1f}fps" for k, v in obs.items()) or "none"
+        if not obs:
+            print(f"[Executor] exhausted: no candidate service-rate observations; "
+                  f"holding current placement {current_combo}.")
+            self._commit_and_stay(current_combo)
+            return
+        best_combo, best = max(obs.items(), key=lambda kv: kv[1]["rate"])
+        cur_sig = self._placement_signature(current_combo)
+        print(f"[Executor] exhausted -> revert to best (cand={best_combo}, "
+              f"service_rate={best['rate']:.1f} fps); observations: {obs_str}")
+        if best["sig"] == cur_sig:
+            print(f"[Executor] best placement == current ({current_combo}); "
+                  f"no transition needed (saving one delta).")
+            self._commit_and_stay(current_combo)
+            return
+        # Transition to the best placement (adaptive hot-swap w/ backlog
+        # preservation), then hold it for the remaining scheduled time.
+        self._qos_advance_fired = True
+        self._stop_qos_poll()
+        hold_secs = max(1, int(self.combo_durations.get(
+            current_combo, self.default_duration)) - int(self.qos_tv))
+        if getattr(self, '_duration_timer', None) is not None:
+            try:
+                self._duration_timer.stop()
+            except Exception:
+                pass
+            self._duration_timer = None
+        try:
+            # Same dispatch as _run_next: mode 1 -> adaptive hot-swap (backlog
+            # preserved); mode 2 -> reactive. Falling back to the default
+            # stop+restart path would cold-start the workers and discard backlog.
+            self._viewer.update_combination(
+                self.schedule_file, best_combo,
+                adaptive=(self.adaptive_mode == 1),
+                reactive=(self.adaptive_mode == 2))
+            self._prev_running_combo = best_combo
+            self._prev_placement_sig = best["sig"]
+            print(f"[Executor] reverted to best placement '{best_combo}'; "
+                  f"holding for {hold_secs}s; V(t) monitoring continues.")
+        except Exception as e:
+            print(f"[Executor] revert transition error: {e}; holding current.")
+        self._index = len(self._combinations) - 1
+        self._duration_timer = QTimer(self._viewer if self._viewer else None)
+        self._duration_timer.setSingleShot(True)
+        self._duration_timer.timeout.connect(self._after_stop)
+        self._duration_timer.start(hold_secs * 1000)
+
     def _maybe_start_qos_trigger(self, combo):
         self._qos_advance_fired = False
         self._stop_qos_poll()
         policy = self.combo_triggers.get(combo)
         if not policy:
             return
+        # Validation evaluates a *state change*. A candidate whose placement is
+        # identical to the combo we just left is not a transition -- it is the
+        # placement that already triggered the violation, so there is nothing new
+        # to validate and measuring it only captures the leftover drain transient
+        # (which nearly mis-committed cand_1 = top-1 = burst). Auto-advance it.
+        # Safe-by-construction: advancing a candidate costs a bounded search step,
+        # whereas committing an already-failing placement means an unbounded
+        # violation.
+        # The auto-advance guard (skip a candidate whose placement equals the
+        # current violating one) is itself a PROGRESS mechanism. The C2 hybrid
+        # ablation (dwell kept, progress removed) must run WITHOUT it, otherwise
+        # its repeat-top1 schedule is skipped instantly instead of being dwelt on
+        # T_v each time. Gated by FSRR_NO_AUTOADVANCE so BoundGuard/A/B are
+        # unaffected (default keeps the guard on).
+        if policy == "validate" and not os.environ.get("FSRR_NO_AUTOADVANCE"):
+            prev_sig = getattr(self, '_prev_placement_sig', None)
+            if prev_sig is not None and self._placement_signature(combo) == prev_sig:
+                self._qos_advance(
+                    f"combo={combo} placement identical to the current "
+                    f"(violating) placement; no transition to validate, "
+                    f"auto-advancing")
+                return
         # Clear the rolling V(t) history on combo entry so carried-over
         # samples from the previous phase don't pre-trigger the advance.
         try:
@@ -582,6 +972,24 @@ class ScheduleExecutor:
         eps = self.qos_epsilon
         entered_at = time.time()
         poll_count = [0]
+        # Completed-frame count at combo entry (for the no-dwell service-rate obs).
+        entry_count = [self._total_infer_count()]
+        # Backlog samples (elapsed_s, Q) collected across the T_v window for the
+        # trend-based feasibility test (see check_validate).
+        bl_samples = []
+        # Drop samples (elapsed_s, {view: cumulative_drops}) for the saturation
+        # guard: if any view keeps dropping through the last third of the window,
+        # its queue is clipped at cap and the slope no longer estimates lambda-mu,
+        # so the candidate is infeasible regardless of slope/V.
+        drop_samples = []
+        # Completed-frame counter samples (elapsed_s, total_infer_count) for the
+        # best-so-far service-rate criterion used by _revert_to_best.
+        count_samples = []
+        slope_th = self.qos_slope_threshold
+        # Snapshot handler accumulators NOW so the validation V is computed from
+        # post-transition frames only (the exposed avg_infer/avg_wait are
+        # lifetime cumulative averages, contaminated by the previous phase).
+        hsnap = self._handler_snapshot()
 
         def check_v_above():
             if self._qos_advance_fired or not self._running:
@@ -597,35 +1005,151 @@ class ScheduleExecutor:
             if v is None:
                 return
             if v > eps:
-                self._qos_advance(
-                    f"V(t)={v:.3f} > eps={eps} in combo={combo}")
+                # no-dwell (reactive ablation A/B): advance the INSTANT V>eps, with
+                # NO T_v observation. Record a service-rate observation over the
+                # (tiny) elapsed window so best-so-far is kept -- the whole point
+                # is that with no dwell this measurement is near-meaningless, so
+                # best-so-far may pick a bad placement. Same best-so-far / revert
+                # termination as validate: on the last candidate, revert instead
+                # of running off the end.
+                elapsed_nd = time.time() - entered_at
+                svc = None
+                ic_now = self._total_infer_count()
+                if ic_now is not None and entry_count[0] is not None and elapsed_nd > 0:
+                    svc = (ic_now - entry_count[0]) / elapsed_nd
+                self._cand_obs[combo] = {"rate": svc,
+                                         "sig": self._placement_signature(combo)}
+                is_last_nd = (self._index >= len(self._combinations) - 1)
+                reason = (f"no-dwell: V(t)={v:.3f} > eps={eps} in combo={combo} "
+                          f"(svc_rate={'None' if svc is None else f'{svc:.1f}fps'}, "
+                          f"no T_v observation)")
+                if is_last_nd:
+                    print(f"[Executor] QoS-triggered advance: {reason} "
+                          f"(last candidate -> revert-to-best)")
+                    self._revert_to_best(combo)
+                else:
+                    self._qos_advance(reason)
 
         def check_validate():
             if self._qos_advance_fired or not self._running:
                 self._stop_qos_poll()
                 return
-            if (time.time() - entered_at) < self.qos_tv:
-                return  # still inside the T_v validation window
+            elapsed = time.time() - entered_at
+            # Sample the backlog Q(k) every poll across the whole T_v window so
+            # we can fit its slope at the end.
+            bl = self._current_backlog()
+            if bl is not None:
+                bl_samples.append((elapsed, bl))
+            drop_samples.append((elapsed, self._current_drops()))
+            _ic = self._total_infer_count()
+            if _ic is not None:
+                count_samples.append((elapsed, _ic))
+            if elapsed < self.qos_tv:
+                return  # still inside the T_v validation window (collecting)
+            # Validation V uses post-transition frames only (see _postswap_vscore);
+            # v_report is the lifetime-cumulative value kept only for the log so we
+            # can see the contamination gap.
+            # Validation V uses the paper metric: ell_i over the last Delta
+            # seconds (post-swap by construction) + the T-window (_v_history
+            # cleared on combo entry). The old _postswap snapshot-delta workaround
+            # is no longer needed now that ell_i itself is Delta-windowed.
             v = self._current_vscore()
-            poll_count[0] += 1
-            if poll_count[0] % 5 == 1:
-                elapsed = time.time() - entered_at
-                print(f"[Executor] QoS-validate combo={combo} elapsed={elapsed:.1f}s "
-                      f"V(t)={'None' if v is None else f'{v:.3f}'} eps={eps} "
-                      f"(post-T_v)")
-            if v is None:
-                return
-            if v > eps:
-                self._qos_advance(
-                    f"V(t)={v:.3f} > eps={eps} after T_v={self.qos_tv}s "
-                    f"in combo={combo}")
-            else:
-                # Candidate validated — commit, stop polling, let the max-
-                # duration timer (already scheduled) keep the combo alive.
+            v_report = self._postswap_vscore(hsnap)  # kept only for log comparison
+            # Fit the slope over the *last third* of the T_v window only. The
+            # early part after a hot-swap is a transition transient (restarted
+            # workers momentarily burn down the inherited backlog, then it
+            # refills to the ceiling if the candidate is infeasible). Measuring
+            # only the settled tail distinguishes a genuinely draining (feasible)
+            # candidate from one that just spiked-then-saturated. (Same-placement
+            # candidates, whose transient dominates the whole window, are already
+            # auto-advanced above.)
+            tail_start = self.qos_tv * (2.0 / 3.0)
+            tail = [(t, y) for (t, y) in bl_samples if t >= tail_start]
+            slope = self._slope(tail if len(tail) >= 3 else bl_samples)
+            slope_str = 'None' if slope is None else f'{slope:.2f}'
+            # Saturation guard: per-view drops accrued over the last third of the
+            # window. If any view is still dropping, its queue is clipped at cap
+            # and the slope cannot estimate lambda-mu -> infeasible.
+            tail_drops = [(t, d) for (t, d) in drop_samples if t >= tail_start]
+            drop_delta = {_vw: 0 for _vw in ("view1", "view2", "view3", "view4")}
+            if len(tail_drops) >= 2:
+                d0 = tail_drops[0][1]
+                d1 = tail_drops[-1][1]
+                for _vw in drop_delta:
+                    drop_delta[_vw] = int(d1.get(_vw, 0)) - int(d0.get(_vw, 0))
+            saturated_views = [_vw for _vw, dd in drop_delta.items() if dd > 0]
+            _drops_str = (','.join(f'{_vw}:{drop_delta[_vw]}'
+                                   for _vw in drop_delta if drop_delta[_vw] > 0) or 'none')
+            # Service rate over the settled tail (frames completed / s). Recorded
+            # for EVERY validated candidate, whatever the commit decision, so
+            # _revert_to_best can pick the best-observed placement on exhaustion.
+            tail_counts = [(t, c) for (t, c) in count_samples if t >= tail_start]
+            svc_rate = None
+            if len(tail_counts) >= 2:
+                (ct0, cc0), (ct1, cc1) = tail_counts[0], tail_counts[-1]
+                if ct1 > ct0:
+                    svc_rate = (cc1 - cc0) / (ct1 - ct0)
+            self._cand_obs[combo] = {"rate": svc_rate,
+                                     "sig": self._placement_signature(combo)}
+            elapsed = time.time() - entered_at
+            print(f"[Executor] QoS-validate combo={combo} elapsed={elapsed:.1f}s "
+                  f"V_postswap={'None' if v is None else f'{v:.3f}'} "
+                  f"V_cumulative={'None' if v_report is None else f'{v_report:.3f}'} "
+                  f"eps={eps} backlog_slope={slope_str}/s "
+                  f"tail_drops={{{_drops_str}}} "
+                  f"service_rate={'None' if svc_rate is None else f'{svc_rate:.1f}fps'} "
+                  f"(post-T_v)")
+            # Is this the last candidate in the search? If a validated candidate
+            # fails AND there is nothing after it, the budget is exhausted:
+            # revert to the best observed placement instead of default-committing
+            # to this (last-ranked) one.
+            is_last_cand = (self._index >= len(self._combinations) - 1)
+            # Trend-based feasibility test. A high V(t) alone does NOT mean the
+            # candidate is infeasible: it may just be draining backlog inherited
+            # from earlier (rejected) candidates. We therefore commit when either
+            #   (a) V(t) <= eps  -> already drained / feasible, or
+            #   (b) backlog is draining (slope < -slope_th) -> mu* > lambda, the
+            #       candidate is feasible and will reach V<=eps given time.
+            # Otherwise (slope >= -slope_th: rising or flat, i.e. mu~lambda which
+            # the fluid model shows diverges) we advance -- conservative.
+            #
+            # (0) Saturation guard FIRST. Ongoing drops mean the queue is clipped
+            # at cap: the slope no longer estimates lambda-mu (growth is truncated
+            # to slope~0 + noise), AND V(t) is survivorship-biased (dropped slow
+            # frames never complete, so ell_i averages only the fast survivors and
+            # can look low). Neither slope nor V is trustworthy -> advance.
+            if saturated_views:
+                reason = (
+                    f"saturated: views {saturated_views} still dropping in the "
+                    f"last {self.qos_tv/3.0:.1f}s (queue clipped at cap -> "
+                    f"arrival>service); slope/V unreliable, advancing in combo={combo}")
+                if is_last_cand:
+                    print(f"[Executor] QoS-triggered advance: {reason} "
+                          f"(last candidate -> revert-to-best)")
+                    self._revert_to_best(combo)
+                else:
+                    self._qos_advance(reason)
+            elif v is not None and v <= eps:
                 print(f"[Executor] QoS-trigger: combo={combo} validated "
                       f"(V(t)={v:.3f} <= eps={eps}); committing.")
-                self._qos_advance_fired = True
-                self._stop_qos_poll()
+                self._commit_and_stay(combo)
+            elif slope is not None and slope < -slope_th:
+                print(f"[Executor] QoS-trigger: combo={combo} validated "
+                      f"(backlog draining slope={slope:.2f}/s < -{slope_th}; "
+                      f"feasible, V(t)={'None' if v is None else f'{v:.3f}'} still "
+                      f"draining); committing.")
+                self._commit_and_stay(combo)
+            else:
+                reason = (
+                    f"backlog not draining (slope={slope_str}/s >= -{slope_th}) "
+                    f"and V(t)={'None' if v is None else f'{v:.3f}'} > eps={eps} "
+                    f"after T_v={self.qos_tv}s in combo={combo}")
+                if is_last_cand:
+                    print(f"[Executor] QoS-triggered advance: {reason} "
+                          f"(last candidate -> revert-to-best)")
+                    self._revert_to_best(combo)
+                else:
+                    self._qos_advance(reason)
 
         if policy == "v-above":
             check_fn = check_v_above
@@ -948,6 +1472,10 @@ def main():
     parser.add_argument('--stop-after', type=str, default=None,
                         help='Stop the executor after this combo completes '
                              '(combos after it in the yaml are skipped).')
+    parser.add_argument('--qos-slope-threshold', type=float, default=0.5,
+                        help='Trend validation: commit a candidate whose backlog '
+                             'drains faster than this (frames/s) even if V(t)>eps. '
+                             'Flat/rising backlog advances. Default 0.5.')
     parser.add_argument('--background', action='store_true',
                         help='Run generative (llm/vlm) combo entries as isolated '
                              'background processes creating accelerator contention '
@@ -1051,6 +1579,7 @@ def main():
                                         qos_epsilon=args.qos_trigger_epsilon,
                                         qos_tv=args.qos_trigger_tv,
                                         qos_window_T=args.qos_window_t,
+                                        qos_slope_threshold=args.qos_slope_threshold,
                                         background=_bg_on,
                                         background_max_new_tokens=args.background_max_new_tokens)
         except ValueError as e:
@@ -1100,6 +1629,7 @@ def main():
                                     qos_epsilon=args.qos_trigger_epsilon,
                                     qos_tv=args.qos_trigger_tv,
                                     qos_window_T=args.qos_window_t,
+                                    qos_slope_threshold=args.qos_slope_threshold,
                                     background=_bg_on,
                                     background_max_new_tokens=args.background_max_new_tokens)
         # Truncate combos to stop after a specified name, if requested.

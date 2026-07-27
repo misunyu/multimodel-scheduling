@@ -5,6 +5,7 @@ import os
 import threading
 import queue
 import time
+from collections import deque
 
 # C3: when FSRR_RATE_REPLICATE=1, feeders replicate frames to hit the target
 # arrival rate lambda (= infps) even above the source/loop rate, so lambda is
@@ -29,12 +30,13 @@ def _perframe_log(view, model, infer_ms, wait_ms, deadline_ms):
     try:
         e2e = float(infer_ms) + float(wait_ms or 0.0)
         late = 1 if (deadline_ms and e2e > float(deadline_ms)) else 0
+        ts = time.time()  # epoch seconds, for offline Delta-window recomputation
         global _perframe_fh
         with _perframe_lock:
             if _perframe_fh is None:
                 _perframe_fh = open(_PERFRAME_PATH, "a", buffering=1)
-                _perframe_fh.write("view,model,infer_ms,wait_ms,e2e_ms,deadline_ms,late\n")
-            _perframe_fh.write(f"{view},{model},{float(infer_ms):.2f},{float(wait_ms or 0.0):.2f},"
+                _perframe_fh.write("ts,view,model,infer_ms,wait_ms,e2e_ms,deadline_ms,late\n")
+            _perframe_fh.write(f"{ts:.4f},{view},{model},{float(infer_ms):.2f},{float(wait_ms or 0.0):.2f},"
                                f"{e2e:.2f},{float(deadline_ms or 0.0):.2f},{late}\n")
     except Exception:
         pass
@@ -98,7 +100,14 @@ class ViewHandler:
         self.total_wait_ms = 0.0
         self.wait_count = 0
         self.avg_wait_ms = 0.0
-        
+
+        # Sliding Delta-window of recent per-frame end-to-end latencies
+        # (monotonic_ts, e2e_ms). This is the paper's ell_i(t): the mean e2e over
+        # [t-Delta, t]. The lifetime avg_infer/avg_wait above are kept for
+        # throughput reporting but MUST NOT be used for v(t) (they never reset on
+        # hot-swap and contaminate V(t) with the previous phase).
+        self._lat_win = deque()
+
         # Get the signal method for this view
         signal_method_name = f"update_{view_name}_display"
         self.update_signal = getattr(model_signals, signal_method_name)
@@ -117,6 +126,29 @@ class ViewHandler:
         """Display frames from the result queue. To be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement display_frames")
         
+    def record_latency(self, e2e_ms):
+        """Append one completed frame's end-to-end latency to the Delta window."""
+        try:
+            self._lat_win.append((time.monotonic(), float(e2e_ms)))
+        except Exception:
+            pass
+
+    def windowed_latency(self, delta_s):
+        """Mean end-to-end latency over the last `delta_s` seconds (paper ell_i).
+        Returns None if no frame landed in the window (caller skips the view so
+        it is not diluted toward zero)."""
+        try:
+            now = time.monotonic()
+            cutoff = now - float(delta_s)
+            w = self._lat_win
+            while w and w[0][0] < cutoff:
+                w.popleft()
+            if not w:
+                return None
+            return sum(e for _, e in w) / len(w)
+        except Exception:
+            return None
+
     def reset_stats(self):
         """Reset all collected statistics (used to start measurement after warmup)."""
         self.total_infer_time = 0.0
@@ -125,6 +157,10 @@ class ViewHandler:
         self.avg_fps = 0.0
         self.total_wait_ms = 0.0
         self.wait_count = 0
+        try:
+            self._lat_win.clear()
+        except Exception:
+            pass
         self.avg_wait_ms = 0.0
         
     def update_stats(self, model_name, infer_time, log_enabled=0):
@@ -192,6 +228,9 @@ class YoloViewHandler(ViewHandler):
                     self.update_stats(self.model_type, infer_time)
                     _perframe_log(self.view_name, self.model_type, infer_time, wait_ms,
                                   _deadline_ms(self.model_settings, self.view_name))
+                    # Record per-frame end-to-end latency into the Delta window
+                    # (paper ell_i). Lifetime avg_wait/avg_infer stay for reporting.
+                    self.record_latency(float(infer_time) + float(wait_ms or 0.0))
                     # Update wait statistics if available
                     if wait_ms is not None:
                         self.total_wait_ms += float(wait_ms)
@@ -250,6 +289,9 @@ class ResNetViewHandler(ViewHandler):
                     self.update_stats(self.model_type, infer_time)
                     _perframe_log(self.view_name, self.model_type, infer_time, wait_ms,
                                   _deadline_ms(self.model_settings, self.view_name))
+                    # Record per-frame end-to-end latency into the Delta window
+                    # (paper ell_i). Lifetime avg_wait/avg_infer stay for reporting.
+                    self.record_latency(float(infer_time) + float(wait_ms or 0.0))
                     # Update wait statistics if available
                     if wait_ms is not None:
                         self.total_wait_ms += float(wait_ms)
@@ -282,6 +324,10 @@ class VideoFeeder:
         self.model_settings = model_settings or {}
         # Track dropped frames per view due to full queue
         self.drop_counts = {v: 0 for v in view_frame_queues.keys()}
+        # Track successfully enqueued frames per view (for the transition
+        # frame-accounting audit: enqueued == completed + dropped + residual).
+        # Pure counter, no behavior change.
+        self.enqueue_counts = {v: 0 for v in view_frame_queues.keys()}
         # Compute per-view enqueue intervals from infps
         self.view_intervals = {}
         for v in self.yolo_views:
@@ -385,6 +431,10 @@ class VideoFeeder:
                     for _ in range(n_copies):
                         try:
                             frame_q.put_nowait((frame.copy(), now))
+                            try:
+                                self.enqueue_counts[view_name] += 1
+                            except Exception:
+                                pass
                         except queue.Full:
                             try:
                                 self.drop_counts[view_name] += 1
@@ -423,8 +473,10 @@ class ResnetImageFeeder:
         # Track dropped frames per view due to full queue (for CNN/ResNet)
         try:
             self.drop_counts = {v: 0 for v in (view_frame_queues or {}).keys()}
+            self.enqueue_counts = {v: 0 for v in (view_frame_queues or {}).keys()}
         except Exception:
             self.drop_counts = {}
+            self.enqueue_counts = {}
         # Compute per-view interval from infps
         self.view_intervals = {}
         for v in self.resnet_views:
@@ -537,6 +589,10 @@ class ResnetImageFeeder:
                             break
                         try:
                             q.put_nowait((img, now))
+                            try:
+                                self.enqueue_counts[view_name] = int(self.enqueue_counts.get(view_name, 0)) + 1
+                            except Exception:
+                                pass
                         except queue.Full:
                             try:
                                 self.drop_counts[view_name] = int(self.drop_counts.get(view_name, 0)) + 1

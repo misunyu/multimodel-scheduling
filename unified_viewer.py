@@ -6,7 +6,26 @@ import json
 import signal
 import yaml
 import queue
+from collections import deque as _deque
 from datetime import datetime
+
+# ell_i(t) sampling interval Delta and monitoring window T for the reported
+# V(t) = (1/M) sum_{tau=t-T..t} v(tau), v(tau) using ell_i over [tau-Delta, tau].
+# Delta=0.2s decided offline (see docs/vt_definition_fix_report.md); T=3s (=T_v).
+_ELL_DELTA = float(os.environ.get("FSRR_ELL_DELTA", "0.2"))
+_V_T_WINDOW = float(os.environ.get("FSRR_V_WINDOW", "3.0"))
+
+
+def _frame_buffer():
+    """Per-view input-queue depth (the fluid model's buffer B). Single source of
+    truth for every path that creates an input frame queue -- this module and
+    adaptive_deploy._frame_buffer must agree, otherwise a view's depth depends on
+    whether it was ever hot-swapped. Default 2 = prior behavior (drop-on-full)."""
+    try:
+        fb = int(os.environ.get("FSRR_FRAME_BUFFER", "2"))
+        return fb if fb >= 1 else 1
+    except Exception:
+        return 2
 from PyQt5.QtWidgets import QMainWindow, QLabel, QWidget, QVBoxLayout, QFileDialog
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import uic
@@ -440,7 +459,11 @@ class UnifiedViewer(QMainWindow):
                             "model": mval,
                             "model_path": _resolve_model_path(mval),
                             "execution": model_config.get("execution", "cpu"),
-                            "infps": model_config.get("infps", None)
+                            "infps": model_config.get("infps", None),
+                            # Per-model L_SLO from the schedule (Table I). Without this,
+                            # _deadline_ms falls back to 1000/infps -- named views (view1-4)
+                            # previously dropped slo_ms while the headless branch kept it.
+                            "slo_ms": model_config.get("slo_ms", None),
                         }
             
             # Assign model configurations to views
@@ -564,12 +587,7 @@ class UnifiedViewer(QMainWindow):
         # drop-on-full). A larger B lets backlog Q(k) accumulate and drain instead
         # of dropping instantly, which is what T_stable = Q/(mu*-lambda) predicts.
         # Output queues stay at 1 (they gate display, not arrival buffering).
-        try:
-            _fb = int(os.environ.get("FSRR_FRAME_BUFFER", "2"))
-            if _fb < 1:
-                _fb = 1
-        except Exception:
-            _fb = 2
+        _fb = _frame_buffer()
         if not hasattr(self, 'video_frame_queue') or self.video_frame_queue is None:
             self.video_frame_queue = Queue(maxsize=_fb)
         self.video_shutdown_event = Event()
@@ -633,7 +651,7 @@ class UnifiedViewer(QMainWindow):
         for hid in list(getattr(self, 'headless_ids', []) or []):
             # Prepare queues/events for this headless id
             if hid not in self.headless_frame_queues:
-                self.headless_frame_queues[hid] = Queue(maxsize=2)
+                self.headless_frame_queues[hid] = Queue(maxsize=_frame_buffer())
             if hid not in self.headless_output_queues:
                 # YOLO uses output_queue; ResNet uses result_queue name-wise, but both are simple queues
                 self.headless_output_queues[hid] = Queue(maxsize=1)
@@ -1814,11 +1832,12 @@ class UnifiedViewer(QMainWindow):
                 for _vn in sched:
                     _h = getattr(self, f"{_vn}_handler", None)
                     if _h:
-                        _infer = float(getattr(_h, 'avg_infer_time', 0.0) or 0.0)
-                        _wait = float(getattr(_h, 'avg_wait_ms', 0.0) or 0.0)
-                        _li = _infer + _wait
-                        if _li <= 0:
-                            # View has no measurement yet (cold-starting worker).
+                        # ell_i(t) = mean e2e over the last Delta seconds (paper
+                        # definition). NOT lifetime avg_infer+avg_wait (contaminated
+                        # across hot-swaps).
+                        _li = _h.windowed_latency(_ELL_DELTA) if hasattr(_h, 'windowed_latency') else None
+                        if _li is None or _li <= 0:
+                            # No frame in the Delta window yet (cold-start / swap).
                             # Skip so it doesn't dilute v(t) toward zero.
                             continue
                         _msettings = (_h.model_settings or {}).get(_vn, {}) if hasattr(_h, 'model_settings') else {}
@@ -1830,7 +1849,18 @@ class UnifiedViewer(QMainWindow):
                             _lslo = 1000.0 / _infps if _infps > 0 else 100.0
                         _v_sum += max(0.0, (_li / _lslo) - 1.0)
                         _n_act += 1
-                _v_t = (_v_sum / _n_act) if _n_act > 0 else 0.0
+                _v_inst = (_v_sum / _n_act) if _n_act > 0 else 0.0
+                # Reported V(t) = mean of the per-tick v(tau) over the last T
+                # seconds (paper monitoring window). Previously the CSV logged the
+                # bare per-tick value (no T-window), so add the T-window here.
+                import time as _tw
+                if not hasattr(self, '_vt_window'):
+                    self._vt_window = _deque()
+                _nowv = _tw.monotonic()
+                self._vt_window.append((_nowv, _v_inst))
+                while self._vt_window and self._vt_window[0][0] < _nowv - _V_T_WINDOW:
+                    self._vt_window.popleft()
+                _v_t = sum(x for _, x in self._vt_window) / len(self._vt_window)
                 # Drop rate
                 import time as _t2
                 _active = set(list(getattr(self, 'yolo_views', set()) or set())) | set(list(getattr(self, 'resnet_views', set()) or set()))

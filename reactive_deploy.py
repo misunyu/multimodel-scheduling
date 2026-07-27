@@ -13,6 +13,12 @@ This module is ONLY invoked when adaptive_mode == 2.
 import copy
 import os
 import subprocess
+
+# ell_i(t) sampling interval Delta (paper: ell_i = mean e2e over [t-Delta, t]).
+# Delta=0.2s chosen offline (shortest Delta with 0 feasible false-positives and
+# violation-detection lag <= T/3 = 1s; see docs/vt_definition_fix_report.md).
+# Constraint Delta < T = 3s (paper L265). Env-overridable for the offline sweep.
+_ELL_DELTA = float(os.environ.get("FSRR_ELL_DELTA", "0.2"))
 import time
 import yaml
 from threading import Thread, Event
@@ -96,12 +102,13 @@ def _collect_vscore(viewer, window_T: int = 5) -> float:
         handler = getattr(viewer, f"{vname}_handler", None)
         if handler is None:
             continue
-        infer_ms = float(getattr(handler, 'avg_infer_time', 0.0) or 0.0)
-        wait_ms = float(getattr(handler, 'avg_wait_ms', 0.0) or 0.0)
-        li = infer_ms + wait_ms  # end-to-end response time
-        if li <= 0:
-            # Cold-starting view (no measurement yet) — skip so v(t) is not
-            # diluted toward zero by views that have not produced data.
+        # ell_i(t) = mean end-to-end latency over the last Delta seconds (paper
+        # definition), NOT the lifetime avg_infer+avg_wait (those never reset on
+        # hot-swap and leak the previous phase into v(t)).
+        li = handler.windowed_latency(_ELL_DELTA) if hasattr(handler, 'windowed_latency') else None
+        if li is None or li <= 0:
+            # No frame in the Delta window yet (cold-starting / just swapped) —
+            # skip so v(t) is not diluted toward zero by views without data.
             continue
         ms = getattr(handler, 'model_settings', None) or {}
         infps = float((ms.get(vname) or {}).get('infps', 10.0) or 10.0)

@@ -23,6 +23,23 @@ from model_processors import (
 )
 
 
+def _frame_buffer():
+    """Per-view input-queue depth (the fluid model's buffer B), same source of
+    truth as UnifiedViewer: FSRR_FRAME_BUFFER, default 2 = prior behavior.
+
+    Hot-swapped views used to get a hard-coded maxsize=2 regardless of the
+    configured depth, so any view that was ever hot-swapped silently ran with a
+    150x shallower queue than the views that were not. That is a measurement
+    bias, not a policy: a shallower queue converts backlog into drops and cuts
+    wait time, which lowers ell_i (and hence V(t)) for reasons unrelated to the
+    placement being evaluated. Output queues stay at 1 (they gate display)."""
+    try:
+        fb = int(os.environ.get("FSRR_FRAME_BUFFER", "2"))
+        return fb if fb >= 1 else 1
+    except Exception:
+        return 2
+
+
 def _output_queue_attr(view_name):
     """Return the attribute name used on UnifiedViewer for the output queue of a view."""
     if view_name in ("view1", "view2"):
@@ -111,6 +128,7 @@ class AdaptiveDeployManager:
                         "model": model_config.get("model", ""),
                         "execution": model_config.get("execution", "cpu"),
                         "infps": model_config.get("infps", None),
+                        "slo_ms": model_config.get("slo_ms", None),
                     }
                     continue
 
@@ -119,6 +137,9 @@ class AdaptiveDeployManager:
                         "model": model_config.get("model", ""),
                         "execution": model_config.get("execution", "cpu"),
                         "infps": model_config.get("infps", None),
+                        # Carry L_SLO through the hot-swap path too, otherwise a
+                        # swapped view reverts to the 1000/infps fallback deadline.
+                        "slo_ms": model_config.get("slo_ms", None),
                     }
 
         for vn in ("view1", "view2", "view3", "view4"):
@@ -244,6 +265,8 @@ class AdaptiveDeployManager:
     def _hot_swap_view(self, vname, old_cfg, new_cfg):
         """Start new worker in background; once ready, switch queues and stop old worker."""
         v = self.viewer
+        import time as _t
+        _swap_t0 = _t.time()  # transition start (for delta measurement, work 2)
 
         # References to old resources
         old_shutdown = getattr(v, f"{vname}_shutdown_event", None)
@@ -252,7 +275,7 @@ class AdaptiveDeployManager:
         old_output_q = getattr(v, _output_queue_attr(vname), None)
 
         # Create new resources
-        new_frame_q = Queue(maxsize=2)
+        new_frame_q = Queue(maxsize=_frame_buffer())
         new_output_q = Queue(maxsize=1)
         new_shutdown = Event()
         ready_event = Event()
@@ -270,23 +293,34 @@ class AdaptiveDeployManager:
             ready_event.wait()  # blocks until model loaded
             print(f"[AdaptiveDeploy] {vname}: new worker ready, switching queues")
 
-            # 1. Swap feeder input queue (thread-safe via lock)
+            # 1. Hand the inherited input backlog to the new worker BEFORE the
+            #    feeder is repointed: new_frame_q is still empty at this point,
+            #    so FIFO order is preserved and everything fits (same depth).
+            moved, lost = self._transfer(old_frame_q, new_frame_q)
+
+            # 2. Swap feeder input queue (thread-safe via lock)
             self._swap_feeder_queue(vname, new_cfg, new_frame_q)
 
-            # 2. Swap handler output queue (atomic under GIL)
+            # 3. Swap handler output queue (atomic under GIL)
             handler = getattr(v, f"{vname}_handler", None)
             if handler is not None:
                 handler.result_queue = new_output_q
 
-            # 3. Stop old worker
+            # 4. Stop old worker
             if old_shutdown is not None:
                 old_shutdown.set()
             if old_process is not None and old_process.is_alive():
                 old_process.join(timeout=3.0)
 
-            # 4. Drain old queues
-            for q in (old_frame_q, old_output_q):
-                self._drain(q)
+            # 5. Sweep stragglers the feeder pushed to the old queue during the
+            #    swap, then drain the OUTPUT queue only -- matching mode 0, which
+            #    drains output queues but deliberately preserves input backlog.
+            m2, l2 = self._transfer(old_frame_q, new_frame_q)
+            moved += m2
+            lost += l2
+            self._drain(old_output_q)
+            print(f"[AdaptiveDeploy] {vname}: backlog preserved across hot-swap "
+                  f"(moved={moved} dropped={lost})")
 
             # 5. Install new resources on the viewer
             setattr(v, f"{vname}_frame_queue", new_frame_q)
@@ -294,7 +328,12 @@ class AdaptiveDeployManager:
             setattr(v, f"{vname}_shutdown_event", new_shutdown)
             setattr(v, f"{vname}_process", new_process)
 
-            print(f"[AdaptiveDeploy] {vname}: hot-swap complete")
+            import time as _t2
+            _delta = _t2.time() - _swap_t0
+            # delta = transition start (worker launch) -> queues switched + old
+            # worker stopped (service on this view resumes on the new worker).
+            print(f"[AdaptiveDeploy] {vname}: hot-swap complete "
+                  f"(delta={_delta*1000:.0f}ms)")
 
         watcher = Thread(target=_watcher, name=f"adaptive_watcher_{vname}", daemon=True)
         watcher.start()
@@ -320,7 +359,13 @@ class AdaptiveDeployManager:
     # ------------------------------------------------------------------
     def _start_fresh_view(self, vname, cfg):
         v = self.viewer
-        frame_q = Queue(maxsize=2)
+        # Reuse the view's existing input queue when there is one, exactly as
+        # UnifiedViewer.initialize_processes does (create-once, then reuse), so
+        # any backlog the view already carries survives the transition. Only
+        # allocate when the view has never been set up.
+        frame_q = getattr(v, f"{vname}_frame_queue", None)
+        if frame_q is None:
+            frame_q = Queue(maxsize=_frame_buffer())
         output_q = Queue(maxsize=1)
         shutdown_ev = Event()
 
@@ -374,7 +419,7 @@ class AdaptiveDeployManager:
         # We only call the headless portion; named views are already handled above.
         for hid in list(getattr(v, 'headless_ids', []) or []):
             if hid not in v.headless_frame_queues:
-                v.headless_frame_queues[hid] = Queue(maxsize=2)
+                v.headless_frame_queues[hid] = Queue(maxsize=_frame_buffer())
             if hid not in v.headless_output_queues:
                 v.headless_output_queues[hid] = Queue(maxsize=1)
             if hid not in v.headless_shutdown_events:
@@ -454,3 +499,36 @@ class AdaptiveDeployManager:
                 q.get_nowait()
         except Exception:
             pass
+
+    @staticmethod
+    def _transfer(src, dst):
+        """Move pending input frames from *src* to *dst*, oldest first.
+
+        A hot-swap hands a view over to a new worker; the frames already queued
+        for that view are still valid work and the new worker can serve them.
+        Dropping them would (a) contradict the measurement principle stated in
+        UnifiedViewer._drain_and_close_all_queues -- input frame queues persist
+        across phase transitions so the next phase sees the backlog it inherited
+        -- and (b) hand mode 1/2 a free queue flush that mode 0/3/4 never gets,
+        which biases every adaptive-vs-non-adaptive comparison. It would also
+        make Q(k) identically zero at every transition, which is exactly the
+        quantity the fluid model T_stable = Q(k)/(mu* - lambda) is about.
+
+        Returns the number of frames moved. Frames that do not fit are dropped
+        (reported separately) -- dst has the same depth as src, so this only
+        happens if dst already refilled.
+        """
+        if src is None or dst is None:
+            return 0, 0
+        moved = lost = 0
+        while True:
+            try:
+                item = src.get_nowait()
+            except Exception:
+                break
+            try:
+                dst.put_nowait(item)
+                moved += 1
+            except Exception:
+                lost += 1
+        return moved, lost

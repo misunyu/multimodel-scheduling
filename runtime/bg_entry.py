@@ -53,9 +53,33 @@ def main() -> int:
     except Exception:
         pass
 
+    # A VLM (qwen2_vl) needs an image input; the mobilint NPU build errors on a
+    # None image. The background job only exists to generate continuously and
+    # create device contention, so a fixed dummy frame is sufficient (its output
+    # is never consumed). LLMs ignore this.
+    dummy_frame = None
+    if getattr(engine, "kind", "llm") == "vlm":
+        try:
+            import numpy as _np
+            dummy_frame = _np.zeros((448, 448, 3), dtype=_np.uint8)
+        except Exception:
+            dummy_frame = None
+        # qwen2_vl's conv3d patch-embed hits a cuDNN sublibrary version mismatch
+        # on this box. Disabling cuDNN in THIS process only (bg_entry is torch-
+        # isolated; the vision onnxruntime workers run in separate processes and
+        # are unaffected) falls back to the native conv path (~840 ms/64-token,
+        # fine for a contention-only background job).
+        if args.device == "gpu":
+            try:
+                import torch as _torch
+                _torch.backends.cudnn.enabled = False
+                print(f"{tag} cuDNN disabled for VLM (native conv fallback)", flush=True)
+            except Exception:
+                pass
+
     while not stop["flag"]:
         try:
-            engine.infer(max_new_tokens=args.max_new_tokens)
+            engine.infer(frame=dummy_frame, max_new_tokens=args.max_new_tokens)
         except Exception as e:
             print(f"{tag} infer error: {type(e).__name__}: {e}", flush=True)
             break
