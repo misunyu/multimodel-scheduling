@@ -1,0 +1,1025 @@
+{
+  "scenario": "Q5_npu_1gen",
+  "_provenance": {
+    "predictor_source": {
+      "repo": "fsrr-multimodel-scheduling (in-repo, committed)",
+      "training_origin": "../multimodel-scheduling-mobilint",
+      "bundle_prefix": "xgboost_model/artifacts/cpu_npu/deploy_cpu_npu",
+      "bundle_sha256": {
+        "deploy_cpu_npu_coverage.json": "1dd4af4fb129381b19d04d9a9fd195e8ee2856c3bb956ddf20a060d73c18bc6c",
+        "deploy_cpu_npu_features.json": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584",
+        "deploy_cpu_npu_y1.json": "953d477ade89727b98b9f22a658a5580dceb2f1e1a5b7e08e7a319995a0e4049",
+        "deploy_cpu_npu_y2.json": "02fcab1a63aeedd6c501e7528e7b6d1e373062eacd804286d6b38ccbc7721eb7",
+        "deploy_cpu_npu_y3.json": "b62d27c974a6dd70f7287b8b10c7f5bb2050f78d8b78f6ab7cce0fc2da821198"
+      }
+    },
+    "trained_on": [
+      "yolo11n",
+      "yolo11s",
+      "yolo11m",
+      "yolo11l",
+      "yolo11x",
+      "resnet50",
+      "mobilenet_v2",
+      "llama1b",
+      "qwen2_vl"
+    ],
+    "targets": {
+      "y1": "norm_throughput",
+      "y2": "deadline_miss_rate",
+      "y3": "norm_tokens",
+      "alpha": 0.3,
+      "beta": 0.5,
+      "score": "y1 + beta*y3 - alpha*y2 (y3 dropped for vision-only)"
+    },
+    "platform": "cpu-npu",
+    "workload": {
+      "foreground": [
+        "yolo11s",
+        "yolo11m",
+        "resnet50",
+        "mobilenet_v2"
+      ],
+      "working_set": [
+        "yolo11s",
+        "yolo11m",
+        "resnet50",
+        "mobilenet_v2",
+        "llama1b"
+      ],
+      "rates_representative": {
+        "yolo11s": 30,
+        "yolo11m": 20,
+        "resnet50": 60,
+        "mobilenet_v2": 90,
+        "llama1b": 2
+      },
+      "rates_note": "REPRESENTATIVE overload regime, NOT final scenario rates (those come from v21 task 85)."
+    },
+    "generated": "2026-07-27",
+    "vocabulary_validated": true,
+    "n_candidates_total": 32
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.931945,
+      "pred_deadline_miss_rate": 0.0,
+      "pred_norm_tokens": 0.915713,
+      "has_generative": true,
+      "pred_score": 1.389802
+    },
+    {
+      "rank": 2,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.899304,
+      "pred_deadline_miss_rate": 0.536959,
+      "pred_norm_tokens": 0.843543,
+      "has_generative": true,
+      "pred_score": 1.159988
+    },
+    {
+      "rank": 3,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.847864,
+      "pred_deadline_miss_rate": 0.412161,
+      "pred_norm_tokens": 0.838922,
+      "has_generative": true,
+      "pred_score": 1.143677
+    },
+    {
+      "rank": 4,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.870407,
+      "pred_deadline_miss_rate": 0.528027,
+      "pred_norm_tokens": 0.836276,
+      "has_generative": true,
+      "pred_score": 1.130138
+    },
+    {
+      "rank": 5,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.857824,
+      "pred_deadline_miss_rate": 0.545845,
+      "pred_norm_tokens": 0.841606,
+      "has_generative": true,
+      "pred_score": 1.114874
+    },
+    {
+      "rank": 6,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.847208,
+      "pred_deadline_miss_rate": 0.552093,
+      "pred_norm_tokens": 0.841411,
+      "has_generative": true,
+      "pred_score": 1.102285
+    },
+    {
+      "rank": 7,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.601043,
+      "pred_deadline_miss_rate": 0.570113,
+      "pred_norm_tokens": 0.785625,
+      "has_generative": true,
+      "pred_score": 0.822822
+    },
+    {
+      "rank": 8,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.601295,
+      "pred_deadline_miss_rate": 0.575302,
+      "pred_norm_tokens": 0.78434,
+      "has_generative": true,
+      "pred_score": 0.820874
+    },
+    {
+      "rank": 9,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.640778,
+      "pred_deadline_miss_rate": 0.783228,
+      "pred_norm_tokens": 0.821122,
+      "has_generative": true,
+      "pred_score": 0.816371
+    },
+    {
+      "rank": 10,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.534287,
+      "pred_deadline_miss_rate": 0.582173,
+      "pred_norm_tokens": 0.786558,
+      "has_generative": true,
+      "pred_score": 0.752914
+    },
+    {
+      "rank": 11,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.577437,
+      "pred_deadline_miss_rate": 0.829068,
+      "pred_norm_tokens": 0.818053,
+      "has_generative": true,
+      "pred_score": 0.737743
+    },
+    {
+      "rank": 12,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.521213,
+      "pred_deadline_miss_rate": 0.602088,
+      "pred_norm_tokens": 0.784592,
+      "has_generative": true,
+      "pred_score": 0.732883
+    },
+    {
+      "rank": 13,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.581174,
+      "pred_deadline_miss_rate": 0.865684,
+      "pred_norm_tokens": 0.819446,
+      "has_generative": true,
+      "pred_score": 0.731192
+    },
+    {
+      "rank": 14,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.53488,
+      "pred_deadline_miss_rate": 0.788087,
+      "pred_norm_tokens": 0.82339,
+      "has_generative": true,
+      "pred_score": 0.710149
+    },
+    {
+      "rank": 15,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.463288,
+      "pred_deadline_miss_rate": 0.590486,
+      "pred_norm_tokens": 0.788185,
+      "has_generative": true,
+      "pred_score": 0.680235
+    },
+    {
+      "rank": 16,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.45455,
+      "pred_deadline_miss_rate": 0.582402,
+      "pred_norm_tokens": 0.784037,
+      "has_generative": true,
+      "pred_score": 0.671848
+    },
+    {
+      "rank": 17,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.363227,
+      "pred_deadline_miss_rate": 0.66361,
+      "pred_norm_tokens": 0.768366,
+      "has_generative": true,
+      "pred_score": 0.548327
+    },
+    {
+      "rank": 18,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.395366,
+      "pred_deadline_miss_rate": 0.920448,
+      "pred_norm_tokens": 0.803432,
+      "has_generative": true,
+      "pred_score": 0.520947
+    },
+    {
+      "rank": 19,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.392064,
+      "pred_deadline_miss_rate": 0.928959,
+      "pred_norm_tokens": 0.806163,
+      "has_generative": true,
+      "pred_score": 0.516457
+    },
+    {
+      "rank": 20,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.384559,
+      "pred_deadline_miss_rate": 0.908518,
+      "pred_norm_tokens": 0.805326,
+      "has_generative": true,
+      "pred_score": 0.514667
+    },
+    {
+      "rank": 21,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.318586,
+      "pred_deadline_miss_rate": 0.646118,
+      "pred_norm_tokens": 0.773125,
+      "has_generative": true,
+      "pred_score": 0.511313
+    },
+    {
+      "rank": 22,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.319561,
+      "pred_deadline_miss_rate": 0.660007,
+      "pred_norm_tokens": 0.76784,
+      "has_generative": true,
+      "pred_score": 0.505479
+    },
+    {
+      "rank": 23,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.337901,
+      "pred_deadline_miss_rate": 0.877515,
+      "pred_norm_tokens": 0.810345,
+      "has_generative": true,
+      "pred_score": 0.479819
+    },
+    {
+      "rank": 24,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.345556,
+      "pred_deadline_miss_rate": 0.934229,
+      "pred_norm_tokens": 0.808713,
+      "has_generative": true,
+      "pred_score": 0.469643
+    },
+    {
+      "rank": 25,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.331561,
+      "pred_deadline_miss_rate": 0.931809,
+      "pred_norm_tokens": 0.805782,
+      "has_generative": true,
+      "pred_score": 0.45491
+    },
+    {
+      "rank": 26,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.26622,
+      "pred_deadline_miss_rate": 0.690279,
+      "pred_norm_tokens": 0.768239,
+      "has_generative": true,
+      "pred_score": 0.443256
+    },
+    {
+      "rank": 27,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "npu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.285101,
+      "pred_deadline_miss_rate": 0.956043,
+      "pred_norm_tokens": 0.766043,
+      "has_generative": true,
+      "pred_score": 0.381309
+    },
+    {
+      "rank": 28,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "npu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.241825,
+      "pred_deadline_miss_rate": 0.961191,
+      "pred_norm_tokens": 0.766343,
+      "has_generative": true,
+      "pred_score": 0.336639
+    },
+    {
+      "rank": 29,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "npu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.233549,
+      "pred_deadline_miss_rate": 0.94578,
+      "pred_norm_tokens": 0.770353,
+      "has_generative": true,
+      "pred_score": 0.334991
+    },
+    {
+      "rank": 30,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "npu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.169508,
+      "pred_deadline_miss_rate": 0.987665,
+      "pred_norm_tokens": 0.769754,
+      "has_generative": true,
+      "pred_score": 0.258085
+    },
+    {
+      "rank": 31,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "npu"
+        }
+      },
+      "pred_norm_throughput": 0.121189,
+      "pred_deadline_miss_rate": 0.712475,
+      "pred_norm_tokens": 0.696182,
+      "has_generative": true,
+      "pred_score": 0.255537
+    },
+    {
+      "rank": 32,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        }
+      },
+      "pred_norm_throughput": 0.104845,
+      "pred_deadline_miss_rate": 0.952856,
+      "pred_norm_tokens": 0.773155,
+      "has_generative": true,
+      "pred_score": 0.205566
+    }
+  ]
+}

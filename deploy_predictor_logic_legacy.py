@@ -18,6 +18,19 @@ from xgboost_model.deploy_selector_xgb_suite_legacy import (
 
 class DeployPredictor:
     def __init__(self, log_callback=None):
+        # Loud guard (v22 task 95): this is the pre-MLA100 predictor trained on the
+        # OLD working set (resnext50, vgg19, yolov4, ...). It exists ONLY to reproduce
+        # already-published legacy figures. New rankings MUST use
+        # deploy_predictor_logic.DeployPredictor (three targets, MLA100 bundle). Set
+        # FSRR_ALLOW_LEGACY_PREDICTOR=1 to acknowledge and silence this warning.
+        import os as _os, sys as _sys
+        if _os.environ.get("FSRR_ALLOW_LEGACY_PREDICTOR") != "1":
+            print(
+                "[LEGACY PREDICTOR] deploy_predictor_logic_legacy is pre-MLA100 "
+                "(old vocabulary). Do NOT use it for new rankings -- use "
+                "deploy_predictor_logic.DeployPredictor. See docs/ranking_regeneration_report.md. "
+                "Set FSRR_ALLOW_LEGACY_PREDICTOR=1 if this is an intentional legacy "
+                "reproduction.", file=_sys.stderr)
         self.log_callback = log_callback
 
     def log(self, msg):

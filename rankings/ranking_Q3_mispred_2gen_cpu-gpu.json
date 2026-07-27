@@ -1,0 +1,1155 @@
+{
+  "scenario": "Q3_mispred_2gen",
+  "_provenance": {
+    "predictor_source": {
+      "repo": "fsrr-multimodel-scheduling (in-repo, committed)",
+      "training_origin": "../multimodel-scheduling-mobilint",
+      "bundle_prefix": "xgboost_model/artifacts/cpu_gpu/deploy_cpu_gpu",
+      "bundle_sha256": {
+        "deploy_cpu_gpu_coverage.json": "9204ec68312f6c478f79a6d0c1bd35995ab1ec069b083348bf9644222151f564",
+        "deploy_cpu_gpu_features.json": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584",
+        "deploy_cpu_gpu_y1.json": "98471eab13d24a19ac123d7996c7860a4a6d56448eede284836972f19930c392",
+        "deploy_cpu_gpu_y2.json": "2c2ec55ad0895e3de27c13024874d6263a716561544129c94d98aa7a321a4e02",
+        "deploy_cpu_gpu_y3.json": "32a3055b2f0fc24dd0d0e8fd67ba4e14d8efb562b37d9e49ea4933742cf0c3a7"
+      }
+    },
+    "trained_on": [
+      "yolo11n",
+      "yolo11s",
+      "yolo11m",
+      "yolo11l",
+      "yolo11x",
+      "resnet50",
+      "mobilenet_v2",
+      "llama1b",
+      "qwen2_vl"
+    ],
+    "targets": {
+      "y1": "norm_throughput",
+      "y2": "deadline_miss_rate",
+      "y3": "norm_tokens",
+      "alpha": 0.3,
+      "beta": 0.5,
+      "score": "y1 + beta*y3 - alpha*y2 (y3 dropped for vision-only)"
+    },
+    "platform": "cpu-gpu",
+    "workload": {
+      "foreground": [
+        "yolo11s",
+        "yolo11m",
+        "resnet50",
+        "mobilenet_v2"
+      ],
+      "working_set": [
+        "yolo11s",
+        "yolo11m",
+        "resnet50",
+        "mobilenet_v2",
+        "llama1b",
+        "qwen2_vl"
+      ],
+      "rates_representative": {
+        "yolo11s": 30,
+        "yolo11m": 20,
+        "resnet50": 60,
+        "mobilenet_v2": 90,
+        "llama1b": 2,
+        "qwen2_vl": 1
+      },
+      "rates_note": "REPRESENTATIVE overload regime, NOT final scenario rates (those come from v21 task 85)."
+    },
+    "generated": "2026-07-27",
+    "vocabulary_validated": true,
+    "n_candidates_total": 32
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.996945,
+      "pred_deadline_miss_rate": 0.002335,
+      "pred_norm_tokens": 0.998061,
+      "has_generative": true,
+      "pred_score": 1.495275
+    },
+    {
+      "rank": 2,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.7367,
+      "pred_deadline_miss_rate": 0.229405,
+      "pred_norm_tokens": 0.844925,
+      "has_generative": true,
+      "pred_score": 1.090341
+    },
+    {
+      "rank": 3,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.683867,
+      "pred_deadline_miss_rate": 0.274551,
+      "pred_norm_tokens": 0.770583,
+      "has_generative": true,
+      "pred_score": 0.986793
+    },
+    {
+      "rank": 4,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.649761,
+      "pred_deadline_miss_rate": 0.268463,
+      "pred_norm_tokens": 0.80007,
+      "has_generative": true,
+      "pred_score": 0.969257
+    },
+    {
+      "rank": 5,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.692806,
+      "pred_deadline_miss_rate": 0.34467,
+      "pred_norm_tokens": 0.749753,
+      "has_generative": true,
+      "pred_score": 0.964281
+    },
+    {
+      "rank": 6,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.856488,
+      "pred_deadline_miss_rate": 0.331663,
+      "pred_norm_tokens": 0.403801,
+      "has_generative": true,
+      "pred_score": 0.958889
+    },
+    {
+      "rank": 7,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.449738,
+      "pred_deadline_miss_rate": 0.41248,
+      "pred_norm_tokens": 0.684419,
+      "has_generative": true,
+      "pred_score": 0.668204
+    },
+    {
+      "rank": 8,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.48714,
+      "pred_deadline_miss_rate": 0.495257,
+      "pred_norm_tokens": 0.655596,
+      "has_generative": true,
+      "pred_score": 0.666361
+    },
+    {
+      "rank": 9,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.416823,
+      "pred_deadline_miss_rate": 0.380492,
+      "pred_norm_tokens": 0.644274,
+      "has_generative": true,
+      "pred_score": 0.624812
+    },
+    {
+      "rank": 10,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.637286,
+      "pred_deadline_miss_rate": 0.54795,
+      "pred_norm_tokens": 0.255234,
+      "has_generative": true,
+      "pred_score": 0.600519
+    },
+    {
+      "rank": 11,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.475386,
+      "pred_deadline_miss_rate": 0.676791,
+      "pred_norm_tokens": 0.649427,
+      "has_generative": true,
+      "pred_score": 0.597062
+    },
+    {
+      "rank": 12,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.418445,
+      "pred_deadline_miss_rate": 0.524075,
+      "pred_norm_tokens": 0.652252,
+      "has_generative": true,
+      "pred_score": 0.587349
+    },
+    {
+      "rank": 13,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.354001,
+      "pred_deadline_miss_rate": 0.408169,
+      "pred_norm_tokens": 0.691818,
+      "has_generative": true,
+      "pred_score": 0.577459
+    },
+    {
+      "rank": 14,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.641679,
+      "pred_deadline_miss_rate": 0.671442,
+      "pred_norm_tokens": 0.262891,
+      "has_generative": true,
+      "pred_score": 0.571692
+    },
+    {
+      "rank": 15,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.62484,
+      "pred_deadline_miss_rate": 0.646889,
+      "pred_norm_tokens": 0.265983,
+      "has_generative": true,
+      "pred_score": 0.563765
+    },
+    {
+      "rank": 16,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.585386,
+      "pred_deadline_miss_rate": 0.626892,
+      "pred_norm_tokens": 0.258707,
+      "has_generative": true,
+      "pred_score": 0.526671
+    },
+    {
+      "rank": 17,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.337484,
+      "pred_deadline_miss_rate": 0.723343,
+      "pred_norm_tokens": 0.51008,
+      "has_generative": true,
+      "pred_score": 0.375521
+    },
+    {
+      "rank": 18,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.279345,
+      "pred_deadline_miss_rate": 0.612154,
+      "pred_norm_tokens": 0.510491,
+      "has_generative": true,
+      "pred_score": 0.350945
+    },
+    {
+      "rank": 19,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.284243,
+      "pred_deadline_miss_rate": 0.656698,
+      "pred_norm_tokens": 0.507315,
+      "has_generative": true,
+      "pred_score": 0.340891
+    },
+    {
+      "rank": 20,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.244678,
+      "pred_deadline_miss_rate": 0.742595,
+      "pred_norm_tokens": 0.527622,
+      "has_generative": true,
+      "pred_score": 0.28571
+    },
+    {
+      "rank": 21,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.427826,
+      "pred_deadline_miss_rate": 0.941636,
+      "pred_norm_tokens": 0.18777,
+      "has_generative": true,
+      "pred_score": 0.23922
+    },
+    {
+      "rank": 22,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.352696,
+      "pred_deadline_miss_rate": 0.76051,
+      "pred_norm_tokens": 0.193501,
+      "has_generative": true,
+      "pred_score": 0.221293
+    },
+    {
+      "rank": 23,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.376308,
+      "pred_deadline_miss_rate": 0.846532,
+      "pred_norm_tokens": 0.196408,
+      "has_generative": true,
+      "pred_score": 0.220553
+    },
+    {
+      "rank": 24,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.404149,
+      "pred_deadline_miss_rate": 0.975143,
+      "pred_norm_tokens": 0.188154,
+      "has_generative": true,
+      "pred_score": 0.205683
+    },
+    {
+      "rank": 25,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.359834,
+      "pred_deadline_miss_rate": 0.864351,
+      "pred_norm_tokens": 0.189621,
+      "has_generative": true,
+      "pred_score": 0.195339
+    },
+    {
+      "rank": 26,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.361809,
+      "pred_deadline_miss_rate": 0.966377,
+      "pred_norm_tokens": 0.191537,
+      "has_generative": true,
+      "pred_score": 0.167664
+    },
+    {
+      "rank": 27,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.152828,
+      "pred_deadline_miss_rate": 0.72561,
+      "pred_norm_tokens": 0.450298,
+      "has_generative": true,
+      "pred_score": 0.160294
+    },
+    {
+      "rank": 28,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "gpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.262296,
+      "pred_deadline_miss_rate": 0.996839,
+      "pred_norm_tokens": 0.155978,
+      "has_generative": true,
+      "pred_score": 0.041233
+    },
+    {
+      "rank": 29,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "gpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.183933,
+      "pred_deadline_miss_rate": 0.852544,
+      "pred_norm_tokens": 0.149049,
+      "has_generative": true,
+      "pred_score": 0.002694
+    },
+    {
+      "rank": 30,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "gpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.205601,
+      "pred_deadline_miss_rate": 0.971208,
+      "pred_norm_tokens": 0.144829,
+      "has_generative": true,
+      "pred_score": -0.013347
+    },
+    {
+      "rank": 31,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "gpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.209838,
+      "pred_deadline_miss_rate": 1.0,
+      "pred_norm_tokens": 0.151471,
+      "has_generative": true,
+      "pred_score": -0.014426
+    },
+    {
+      "rank": 32,
+      "placement": {
+        "view1": {
+          "model": "yolo11s",
+          "device": "cpu"
+        },
+        "view2": {
+          "model": "yolo11m",
+          "device": "cpu"
+        },
+        "view3": {
+          "model": "resnet50",
+          "device": "cpu"
+        },
+        "view4": {
+          "model": "mobilenet_v2",
+          "device": "cpu"
+        },
+        "bg1": {
+          "model": "llama1b",
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
+        }
+      },
+      "pred_norm_throughput": 0.088639,
+      "pred_deadline_miss_rate": 1.0,
+      "pred_norm_tokens": 0.127805,
+      "has_generative": true,
+      "pred_score": -0.147458
+    }
+  ]
+}
