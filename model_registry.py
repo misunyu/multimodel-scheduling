@@ -154,17 +154,50 @@ def is_llm_like(model_name: str) -> bool:
     return kind_of(model_name) in ("llm", "vlm")
 
 
+# Explicit spelling aliases ONLY. There is deliberately no substring matching
+# here. The old `_normalize` mapped any name containing "yolo" -> yolo11s and any
+# name containing "resnet" -> resnet50, which silently collapsed distinct models
+# (yolov4, yolov3_big, yolov3_small all became yolo11s) and let schedules that
+# named unimplemented models "partially succeed" instead of failing. That turned
+# a loud, first-run failure into silent phantom views (see docs/phantom_model_audit.md).
+# Add an entry ONLY for a genuine spelling variant of a model already in MODELS.
+_ALIASES = {
+    # e.g. "llama-1b": "llama1b",  # spelling variant only
+}
+
+
 def _normalize(name: str) -> str:
-    low = (name or "").lower()
-    if "yolo" in low:
-        return "yolo11s"
-    if "resnet" in low:
-        return "resnet50"
-    if "qwen" in low or "vl" in low:
-        return "qwen2_vl"
-    if "llama" in low or "llm" in low or "tiny" in low:
-        return "llama1b"
-    return name
+    return _ALIASES.get((name or "").strip().lower(), name)
+
+
+def resolution(model_name: str):
+    """Return (resolved_id, via_alias) for a name, or raise KeyError.
+
+    resolved_id is a key in MODELS; via_alias is True when an explicit spelling
+    alias was applied. Use this (not a bare get()) when you need to log what a
+    schedule name actually resolved to.
+    """
+    if model_name in MODELS:
+        return model_name, False
+    alias = _normalize(model_name)
+    if alias in MODELS:
+        return alias, True
+    raise KeyError(f"unknown model '{model_name}'. Known: {list(MODELS)}")
+
+
+def resolves(model_name: str) -> bool:
+    """True iff the name resolves to a known model (no exception)."""
+    try:
+        resolution(model_name)
+        return True
+    except KeyError:
+        return False
+
+
+def unresolved_models(names):
+    """Return the sorted, de-duplicated subset of *names* the registry cannot
+    resolve. Empty/falsy names are ignored (an unused view slot is not an error)."""
+    return sorted({n for n in names if n and not resolves(n)})
 
 
 def norm_device(dev: str) -> str:

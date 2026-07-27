@@ -48,6 +48,13 @@ from model_processors import (
     classify_view,
 )
 
+
+class ScheduleValidationError(RuntimeError):
+    """A schedule names a model the runtime cannot resolve. Fatal by design:
+    it must not be swallowed into a default fallback (that is what produced
+    silent phantom views -- see docs/phantom_model_audit.md)."""
+
+
 class InfoWindow(QWidget):
     """Main window for displaying system and model information."""
     
@@ -400,7 +407,39 @@ class UnifiedViewer(QMainWindow):
             # Load configuration from the specified schedule file
             with open(self.schedule_file, "r") as f:
                 config = yaml.safe_load(f) or {}
-                
+
+            # --- fail-fast model resolution (see docs/phantom_model_audit.md) ---
+            # Every model named by the schedule must resolve to a runnable model in
+            # the registry. Previously unresolved names were skipped silently, leaving
+            # "phantom" views that were fed frames but ran no worker. Validate the whole
+            # schedule up front and refuse to run if any name is unresolved.
+            import model_registry as _reg
+            _named = []
+            for _combo, _entries in (config or {}).items():
+                if not isinstance(_entries, dict):
+                    continue
+                for _mc in _entries.values():
+                    if isinstance(_mc, dict) and _mc.get("model"):
+                        _named.append((_combo, str(_mc.get("model"))))
+            print(f"[UnifiedViewer] model resolution self-check "
+                  f"[{os.path.basename(self.schedule_file)}]:")
+            for _combo, _m in _named:
+                try:
+                    _rid, _via = _reg.resolution(_m)
+                    print(f"    {_combo}: {_m} -> {_rid}"
+                          + (f"  (ALIAS)" if _via else ""))
+                except Exception:
+                    print(f"    {_combo}: {_m} -> UNRESOLVED")
+            _bad = _reg.unresolved_models([m for _, m in _named])
+            if _bad:
+                raise ScheduleValidationError(
+                    f"Schedule '{os.path.basename(self.schedule_file)}' names models the "
+                    f"runtime cannot resolve: {_bad}. They are not in "
+                    f"model_registry.MODELS and no explicit alias maps them. Refusing to "
+                    f"run so they do not become silent phantom views "
+                    f"(see docs/phantom_model_audit.md)."
+                )
+
             # Create a mapping from views to model configurations based on the display field
             view_to_model_map = {}
             
@@ -490,6 +529,10 @@ class UnifiedViewer(QMainWindow):
             # the old torch-presence remap to CPU was both obsolete and a cuDNN hazard.
 
             print(f"[UnifiedViewer] Loaded model settings from {self.schedule_file} for {self.current_combination}")
+        except ScheduleValidationError:
+            # Do NOT fall back to defaults -- an unresolved model must halt the run,
+            # not silently become a phantom view (docs/phantom_model_audit.md).
+            raise
         except Exception as e:
             print(f"[UnifiedViewer ERROR] Failed to load {self.schedule_file}: {e}")
             # Set default settings if file loading fails
@@ -669,9 +712,20 @@ class UnifiedViewer(QMainWindow):
             # Register into yolo/resnet sets so feeders can send inputs
             target, kind, device = worker_target(model, execution)
             if target is None:
-                print(f"[UnifiedViewer] Skipping headless {hid}: no vision worker for "
-                      f"model={model} execution={execution} (generative/deferred or unknown).")
-                continue
+                # worker_target returns None for (a) generative/deferred (llm/vlm,
+                # run elsewhere) and (b) unknown models. (b) is a schedule error and
+                # must be fatal -- the schedule-parse validation above already halts
+                # on unresolved names, so reaching here with an unresolved model is a
+                # defense-in-depth failure, not a silent skip.
+                if _reg.resolves(model) and _reg.is_llm_like(model):
+                    print(f"[UnifiedViewer] Headless {hid}: {model} is generative/deferred; "
+                          f"not started as a vision worker (runs via background manager).")
+                    continue
+                raise ScheduleValidationError(
+                    f"Headless {hid}: no vision worker for unresolved model={model} "
+                    f"execution={execution}. Refusing to run (phantom-view guard; "
+                    f"see docs/phantom_model_audit.md)."
+                )
             if kind == "yolo":
                 self.yolo_views.add(hid)
             else:
@@ -822,9 +876,20 @@ class UnifiedViewer(QMainWindow):
         # (llm/vlm) views are deferred and skipped rather than mis-routed.
         target, kind, device = worker_target(model, execution)
         if target is None:
-            print(f"[UnifiedViewer] Skipping {view_name}: no vision worker for model={model} "
-                  f"execution={execution} (generative/deferred or unknown).")
-            return
+            # Generative/deferred (llm/vlm) views run elsewhere and are legitimately
+            # skipped; an unresolved model is a schedule error and must be fatal. The
+            # schedule-parse validation already halts on unresolved names, so this is
+            # defense-in-depth against a phantom view (see docs/phantom_model_audit.md).
+            import model_registry as _reg
+            if _reg.resolves(model) and _reg.is_llm_like(model):
+                print(f"[UnifiedViewer] {view_name}: {model} is generative/deferred; "
+                      f"not started as a vision worker.")
+                return
+            raise ScheduleValidationError(
+                f"{view_name}: no vision worker for unresolved model={model} "
+                f"execution={execution}. Refusing to run (phantom-view guard; "
+                f"see docs/phantom_model_audit.md)."
+            )
         if kind == "yolo":
             self.yolo_views.add(view_name)
         else:

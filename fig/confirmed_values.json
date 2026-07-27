@@ -1,0 +1,504 @@
+{
+  "_meta": {
+    "status": "PROVISIONAL — superseded pending re-run (see docs/phantom_model_audit.md)",
+    "status_note": "phantom model 오염: 스케줄이 이전 세대 어휘를 써서 명명 4~7개 중 1~2개만 실행됐다. 런타임 실행에 의존하는 값은 전부 잠정이다. 예측/해석 유래 값(source_kind=analytic)은 영향 없음.",
+    "source": "c2_integrity_report_v7.md §25 확정표",
+    "date": "2026-07-26",
+    "note": "그림에 쓰이는 모든 수치의 단일 소스. 여기에 없는 값은 그림에 넣지 않는다. 값을 바꿀 때는 main.tex와 함께 바꾸고 check_figures.py를 다시 돌린다.",
+    "reference_anchors": {
+      "t0": "첫 V>ε 시각",
+      "burst": "부하 증가(과부하 주입) 시각",
+      "detection_onset": "감지가 시작되는 시각. stable이 깨끗하면 t0, stable이 이미 위반이면 컨트롤러가 활성화되는 burst"
+    },
+    "quantities": {
+      "search": "감지 원점 → 회복 후보가 적용된 시각",
+      "drain": "회복 후보 적용 → V≤ε",
+      "persist": "t0 → V≤ε (= search + drain)",
+      "cumV": "∫V dt (시간가중)",
+      "lastV": "관측 창 종료 직전 T창의 V",
+      "bound": "T + k(T_v + δ) 인스턴스화 값"
+    },
+    "field_semantics": {
+      "censored": "값이 관측 창에 잘렸는가. true면 실제 값은 더 클 수 있다(>=window). 시각 부호: 해칭 + 위쪽 화살표 + >=window.",
+      "recovered": "그 런이 회복했는가(V<=eps 도달). 값의 성격이 아니라 결과에 대한 진술. 시각 부호: 색/테두리. bound 등 측정이 아닌 항목은 null.",
+      "_note": "둘은 독립이다. Q4의 search=24s는 탐색이 예산을 소진하고 복귀까지 완료된 완결된 측정값이므로 censored=false이지만 recovered=false다. 해칭을 쓰면 '실제론 더 길 수도'로 읽혀 24=bound 24의 tight 주장이 흐려진다."
+    }
+  },
+  "values": [
+    {
+      "id": "q3_bg_persist",
+      "figure": [
+        "q3_misprediction"
+      ],
+      "value": 25.4,
+      "sd": 1.4,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 107,
+      "source": "b2rep_q3"
+    },
+    {
+      "id": "q3_bg_search",
+      "figure": [
+        "q3_misprediction",
+        "bounded_recovery_analysis"
+      ],
+      "value": 22.6,
+      "unit": "s",
+      "quantity": "search",
+      "reference": "t0",
+      "is_detection_onset": true,
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 107,
+      "source": "b2rep_q3",
+      "note": "Q3는 stable이 깨끗하므로 detection onset = t0 = burst+2s. burst 기준으로 재면 24.6±0.5(본문 부가설명 전용, 그림 사용 금지)."
+    },
+    {
+      "id": "q3_bg_drain",
+      "figure": [
+        "q3_misprediction",
+        "bounded_recovery_analysis"
+      ],
+      "value": 2.8,
+      "unit": "s",
+      "quantity": "drain",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 107,
+      "source": "b2rep_q3"
+    },
+    {
+      "id": "q3_bound",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "value": 26,
+      "unit": "s",
+      "quantity": "bound",
+      "reference": "detection_onset",
+      "n": null,
+      "censored": false,
+      "recovered": null,
+      "window_s": 107,
+      "source": "T+k(T_v+delta), delta=LLM 2.9s",
+      "note": "런별로 24–26s 범위. 그림에는 Q3 해당 인스턴스(26)만 그린다."
+    },
+    {
+      "id": "q3_search_observed_max",
+      "figure": [],
+      "value": 23,
+      "unit": "s",
+      "quantity": "search",
+      "reference": "t0",
+      "n": 35,
+      "censored": false,
+      "recovered": true,
+      "window_s": null,
+      "source": "b2rep_q3 5 + C2 fixed-window 30",
+      "note": "본문 전용. 그림에 넣으려면 별도 판단."
+    },
+    {
+      "id": "q3_baseline_lastV",
+      "figure": [
+        "q3_misprediction"
+      ],
+      "value": 2.8,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 107,
+      "source": "b2rep_q3",
+      "note": "Static 2.79±0.06 / Stop-restart 2.66±0.23 / Adaptive 2.87±0.04. 셋 다 0/5 회복."
+    },
+    {
+      "id": "q5_bg_search",
+      "figure": [
+        "q5_npu_generalization",
+        "bounded_recovery_analysis"
+      ],
+      "value": 14.2,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "search",
+      "reference": "burst",
+      "is_detection_onset": true,
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 107,
+      "source": "b2rep_q5",
+      "note": "Q5는 stable이 이미 위반(V≈7)이라 t0 < burst. 컨트롤러는 burst에서 활성이므로 detection onset = burst. t0 기준값(21.0)은 사용 금지."
+    },
+    {
+      "id": "q5_bg_drain",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "value": 0.0,
+      "unit": "s",
+      "quantity": "drain",
+      "reference": "burst",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 107,
+      "source": "b2rep_q5",
+      "note": "cand_2 즉시 회복. 적용 시각과 V≤ε 시각이 같은 사건."
+    },
+    {
+      "id": "q5_bound",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "value": 26,
+      "unit": "s",
+      "quantity": "bound",
+      "reference": "detection_onset",
+      "n": null,
+      "censored": false,
+      "recovered": null,
+      "window_s": 107,
+      "source": "T+k(T_v+delta), delta=LLM 2.9s"
+    },
+    {
+      "id": "q5_baseline_lastV",
+      "figure": [
+        "q5_npu_generalization"
+      ],
+      "value": 33,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "burst",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 107,
+      "source": "b2rep_q5",
+      "note": "Static 32.91±1.21 / Stop-restart 32.58±0.61 / Adaptive 34.09±1.85. 셋 다 0/5 회복."
+    },
+    {
+      "id": "q4_search",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "value": 24,
+      "unit": "s",
+      "quantity": "search",
+      "reference": "t0",
+      "is_detection_onset": true,
+      "n": 1,
+      "censored": false,
+      "recovered": false,
+      "window_s": 100,
+      "source": "q4_bsf_out (논문 런)",
+      "note": "첫 위반 → best-so-far 복귀. 같은 시나리오 C2 재현 5회는 22–23s."
+    },
+    {
+      "id": "q4_bound",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "value": 24,
+      "unit": "s",
+      "quantity": "bound",
+      "reference": "detection_onset",
+      "n": null,
+      "censored": false,
+      "recovered": null,
+      "window_s": 100,
+      "source": "T+N_cand(T_v+delta)+delta, delta=vision 1s",
+      "note": "search와 정확히 같아 tight. 이 시나리오는 background LLM이 없어 sample-gap 0."
+    },
+    {
+      "id": "q4_bg_lastV",
+      "figure": [],
+      "value": 54.84,
+      "sd": 0.21,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 100,
+      "source": "c2_final2"
+    },
+    {
+      "id": "q13_gpu_sr_persist",
+      "figure": [
+        "q13_failure_persistence"
+      ],
+      "value": 12.6,
+      "sd": 2.4,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 68.6,
+      "source": "b3rep gpu"
+    },
+    {
+      "id": "q13_gpu_adaptive_persist",
+      "figure": [
+        "q13_failure_persistence"
+      ],
+      "value": 11.0,
+      "sd": 0.6,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 67.2,
+      "source": "b3rep gpu"
+    },
+    {
+      "id": "q13_gpu_bg_persist",
+      "figure": [
+        "q13_failure_persistence"
+      ],
+      "value": 11.2,
+      "sd": 0.7,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 63.0,
+      "source": "b3rep gpu"
+    },
+    {
+      "id": "q13_npu_sr_persist",
+      "figure": [
+        "q13_failure_persistence"
+      ],
+      "value": 10.8,
+      "sd": 1.5,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 68.4,
+      "source": "b3rep npu"
+    },
+    {
+      "id": "q13_npu_adaptive_persist",
+      "figure": [
+        "q13_failure_persistence"
+      ],
+      "value": 11.8,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 66.0,
+      "source": "b3rep npu"
+    },
+    {
+      "id": "q13_npu_bg_persist",
+      "figure": [
+        "q13_failure_persistence"
+      ],
+      "value": 12.0,
+      "sd": 0.0,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 62.0,
+      "source": "b3rep npu"
+    },
+    {
+      "id": "q13_static_lastV",
+      "figure": [
+        "q13_failure_persistence"
+      ],
+      "value": 9.0,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 58.4,
+      "source": "b3rep (gpu 9.04±0.11 / npu 8.99±0.05)",
+      "note": "0/5 회복. 막대 높이를 값으로 쓰지 말 것 — censored 규약 적용."
+    },
+    {
+      "id": "q13_gpu_static_cumV",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 531,
+      "sd": 5,
+      "unit": "V*s",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 58.4,
+      "source": "b3rep gpu"
+    },
+    {
+      "id": "q13_gpu_sr_cumV",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 82,
+      "unit": "V*s",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 68.6,
+      "source": "b3rep gpu"
+    },
+    {
+      "id": "q13_gpu_adaptive_cumV",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 89,
+      "unit": "V*s",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 67.2,
+      "source": "b3rep gpu"
+    },
+    {
+      "id": "q13_gpu_bg_cumV",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 85,
+      "unit": "V*s",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 63.0,
+      "source": "b3rep gpu"
+    },
+    {
+      "id": "q13_npu_static_cumV",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 530,
+      "sd": 5,
+      "unit": "V*s",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 58.4,
+      "source": "b3rep npu"
+    },
+    {
+      "id": "q13_npu_sr_cumV",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 76,
+      "unit": "V*s",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 68.4,
+      "source": "b3rep npu"
+    },
+    {
+      "id": "q13_npu_adaptive_cumV",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 87,
+      "unit": "V*s",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 66.0,
+      "source": "b3rep npu"
+    },
+    {
+      "id": "q13_npu_bg_cumV",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 91,
+      "unit": "V*s",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 62.0,
+      "source": "b3rep npu"
+    },
+    {
+      "id": "q13_gpu_cumV_ratio",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 6.2,
+      "unit": "x",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 58.4,
+      "source": "531 / mean(82,89,85)",
+      "note": "Static 창(58.4s)이 회복 기법(63–69s)보다 짧으므로 이 비율은 격차의 하한."
+    },
+    {
+      "id": "q13_npu_cumV_ratio",
+      "figure": [
+        "q13_cumulative_violation"
+      ],
+      "value": 6.3,
+      "unit": "x",
+      "quantity": "cumV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 58.4,
+      "source": "530 / mean(76,87,91)",
+      "note": "동일. 창을 맞추면 비율은 커진다."
+    }
+  ]
+}
