@@ -46,7 +46,21 @@ FG = [
 GEN1 = [{"model": "llama1b",  "display": "bg1", "infps": 2, "slo_ms": 500}]
 GEN2 = GEN1 + [{"model": "qwen2_vl", "display": "bg2", "infps": 1, "slo_ms": 1000}]
 
+# Gate-B recovered working set: the one the paper's Q3/Q6/Q5 runs ACTUALLY executed --
+# llama1b (background) + THREE vision models (no yolo11m), uniform infps=80 (burst) and
+# uniform slo_ms=15. Recovered from the raw logs plus the surviving experiment reports
+# (docs/gate_b_schedule_provenance.md, docs/q3_q5_misprediction_report.md). 4 models ->
+# 16 candidates, which is the space the paper's "rank five" refers to.
+WS_PAPER_V3 = [
+    {"model": "yolo11s",      "display": "view1", "infps": 80, "slo_ms": 15},
+    {"model": "resnet50",     "display": "view2", "infps": 80, "slo_ms": 15},
+    {"model": "mobilenet_v2", "display": "view3", "infps": 80, "slo_ms": 15},
+    {"model": "llama1b",      "display": "view5", "infps": 80, "slo_ms": 15},
+]
+
 SCENARIOS = {
+    "Q3Q6_paper_v3": {"ws": WS_PAPER_V3, "platforms": ["cpu-gpu"]},
+    "Q5_paper_v3":   {"ws": WS_PAPER_V3, "platforms": ["cpu-npu"]},
     "Q1_3_steady":   {"ws": FG,          "platforms": ["cpu-gpu", "cpu-npu"]},
     "Q2_4b_load":    {"ws": FG,          "platforms": ["cpu-gpu", "cpu-npu"]},
     "Q3_mispred_1gen": {"ws": FG + GEN1, "platforms": ["cpu-gpu"]},
