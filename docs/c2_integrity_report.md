@@ -1,6 +1,11 @@
 # C2/Q6 데이터 무결성 — 지표 통일·대조·∑δ·정본화
 
 날짜: 2026-07-25 · 스냅샷 `backup/schedule_executor_main.pre_integrity.py` · main.tex 불변
+> **⚠ SUPERSEDED (2026-07-28) — 이 문서의 ablation 수치를 인용하지 말 것.**
+> 정정 전 라운드다. `c2_integrity_report_v2.md` §7이 **두 판정을 정정**했고(A §4b 1/5→**4/5**,
+> C Q3 1/5→**0/5**; 고정 100 s 윈도우로 런길이 아티팩트 제거), **정본은 `c2_integrity_report_v7.md`**
+> "Q6 완성표"다(v2~v6 판정 유지). 감사 이력으로 보존하며 삭제하지 않는다.
+> 상세: `docs/gate_e_ablation_numbers.md`, `docs/report_q_mapping.md`.
 관련: [metric_definitions.md](metric_definitions.md), [c2_reactive_baseline_report.md](c2_reactive_baseline_report.md)
 
 > **판정 요약** (작업 0~4):
