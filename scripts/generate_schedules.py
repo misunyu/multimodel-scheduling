@@ -35,6 +35,17 @@ SCENARIOS = {
     # an omitted one (v26 lost a whole sweep to that ambiguity).
     "q4b_control":      ("rankings/ranking_Q4b_control_v3_cpu-gpu.json", 25, 45),
     "q4_infeasible":    ("rankings/ranking_Q4_heavy4_cpu-gpu.json",      25, 90),
+    # v29: Q1.3 (failure persistence). Same vision-3 working set as the 4b control, no
+    # background. Its lambda was never recorded, so lam_burst below is a PLACEHOLDER that
+    # the v29 search replaces; the buffer is likewise unrecorded and the search uses the
+    # 4b value (2), documented for this same working set.
+    # v29 confirmed: the condition holds across the whole tested range (30..400 GPU,
+    # 30..250 NPU) because buffer=2 turns excess arrivals into drops rather than latency,
+    # so no upper bound exists and the midpoint rule is undefined. Fallback rule applied:
+    # lambda = 0.9*mu*, the project's documented target ratio (docs/b2_buffer_sweep_report.md
+    # "λ=0.9μ*(GPU 123 / NPU 93 fps)"). Reproduced 2/2 on both platforms.
+    "q13_persistence_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 25, 123),
+    "q13_persistence_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 25, 93),
 }
 N_CAND = 5
 
