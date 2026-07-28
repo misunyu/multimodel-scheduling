@@ -13,15 +13,26 @@ from xgboost_model.deploy_selector_xgb_suite import (
     _iter_combos_from_schedule,
 )
 
-# Runtime scoring weights. alpha matches deploy_selector_xgb_suite.DEFAULT_ALPHA.
+# Runtime scoring weights for S = y1 + beta*y3 - alpha*y2. alpha matches
+# deploy_selector_xgb_suite.DEFAULT_ALPHA.
 #
-# beta deliberately diverges from the suite's DEFAULT_BETA (1.0): the FSRR/BoundGuard
-# paper defines S = y1 + 0.5*y3 - 0.3*y2, so this repo scores at beta=0.5 while the
-# mobilint repo scores at 1.0. beta is a policy weight, not a learned parameter, so
-# the models are unaffected -- only the ranking of mixed (LM-bearing) working sets is.
-# Vision-only sets are identical under both, since the y3 term is dropped entirely.
+# beta CANONICAL = 1.0 -- LM token throughput (y3) weighted equally with vision
+# throughput (y1). This is the beta at which the predictor bundle's QUALITY was
+# evaluated (mobilint evaluate_model.py defaults --beta 1.0, computing BOTH the oracle
+# and predicted rankings with it), so deploying at 1.0 keeps the deployed ranker the
+# same one whose Spearman/top-k were reported. It also matches both repos'
+# suite DEFAULT_BETA=1.0.
+#
+# A prior value of 0.5 here (v22 and earlier) came from an MLA100-swap instruction that
+# cited a "paper formula S = y1 + 0.5*y3 - 0.3*y2"; the paper does not actually define
+# beta (its section IV beta_B is a buffer coefficient, unrelated). That was default/decision
+# drift, corrected in v23 -- see docs/beta_canonicalization_report.md.
+#
+# beta is a score-time policy weight, NOT a learned parameter: the models are unaffected,
+# only LM-bearing working-set rankings change, and vision-only sets are identical for any
+# beta (the y3 term is dropped entirely).
 DEFAULT_ALPHA: float = 0.3
-DEFAULT_BETA: float = 0.5
+DEFAULT_BETA: float = 1.0
 
 
 class DeployPredictor:

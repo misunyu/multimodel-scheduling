@@ -19,7 +19,15 @@ checked for rate-sensitivity in the report.
 import argparse, hashlib, itertools, json, os, sys, datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import model_registry as reg
-from deploy_predictor_logic import DeployPredictor, DEFAULT_ALPHA, DEFAULT_BETA
+from deploy_predictor_logic import DeployPredictor
+
+# Canonical scoring weights are stated HERE explicitly -- we do NOT inherit
+# deploy_predictor_logic.DEFAULT_* implicitly. Implicit inheritance is exactly how
+# beta drifted to 0.5 in v22 (docs/beta_canonicalization_report.md). beta=1.0 is the
+# value at which the predictor bundle's quality was evaluated (mobilint
+# evaluate_model.py --beta 1.0), so the deployed ranker matches the reported one.
+CANONICAL_ALPHA = 0.3
+CANONICAL_BETA = 1.0
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUNDLE = {
@@ -76,7 +84,7 @@ def device_of(blob, model):
     return None
 
 
-def generate(scenario, platform):
+def generate(scenario, platform, alpha, beta):
     spec = SCENARIOS[scenario]
     combos = enumerate_placements(spec["ws"], platform)
     names = {v["model"] for blob in combos.values() for v in blob.values()}
@@ -86,7 +94,7 @@ def generate(scenario, platform):
     dp = DeployPredictor(log_callback=lambda m: None)
     best, df = dp.predict_best_combination(
         schedule_data=combos, model_input_path=BUNDLE[platform],
-        alpha=DEFAULT_ALPHA, beta=DEFAULT_BETA)
+        alpha=alpha, beta=beta)
     df = df.sort_values("pred_score", ascending=False).reset_index(drop=True)
     ranked = []
     for rank_i, row in df.iterrows():
@@ -115,7 +123,7 @@ def generate(scenario, platform):
         "trained_on": ["yolo11n", "yolo11s", "yolo11m", "yolo11l", "yolo11x",
                        "resnet50", "mobilenet_v2", "llama1b", "qwen2_vl"],
         "targets": {"y1": "norm_throughput", "y2": "deadline_miss_rate",
-                    "y3": "norm_tokens", "alpha": DEFAULT_ALPHA, "beta": DEFAULT_BETA,
+                    "y3": "norm_tokens", "alpha": alpha, "beta": beta,
                     "score": "y1 + beta*y3 - alpha*y2 (y3 dropped for vision-only)"},
         "platform": platform,
         "workload": {"foreground": [w["model"] for w in FG],
@@ -133,11 +141,25 @@ def generate(scenario, platform):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--outdir", default=os.path.join(PROJECT, "rankings"))
+    ap.add_argument("--alpha", type=float, default=CANONICAL_ALPHA)
+    ap.add_argument("--beta", type=float, default=CANONICAL_BETA)
+    ap.add_argument("--allow-noncanonical", action="store_true",
+                    help="permit alpha/beta != canonical (experimental only)")
     args = ap.parse_args()
+    # task 97-3: refuse non-canonical weights unless explicitly acknowledged.
+    if (args.alpha != CANONICAL_ALPHA or args.beta != CANONICAL_BETA) and not args.allow_noncanonical:
+        raise SystemExit(
+            f"Refusing to generate rankings at non-canonical (alpha={args.alpha}, "
+            f"beta={args.beta}). Canonical is (alpha={CANONICAL_ALPHA}, beta={CANONICAL_BETA}); "
+            f"pass --allow-noncanonical for an intentional experiment "
+            f"(see docs/beta_canonicalization_report.md).")
+    print(f"[gen] scoring weights: alpha={args.alpha}, beta={args.beta}"
+          + ("" if (args.alpha, args.beta) == (CANONICAL_ALPHA, CANONICAL_BETA)
+             else "  [NON-CANONICAL]"))
     os.makedirs(args.outdir, exist_ok=True)
     for scenario, spec in SCENARIOS.items():
         for platform in spec["platforms"]:
-            art = generate(scenario, platform)
+            art = generate(scenario, platform, args.alpha, args.beta)
             out = os.path.join(args.outdir, f"ranking_{scenario}_{platform}.json")
             with open(out, "w") as f:
                 json.dump(art, f, indent=2)

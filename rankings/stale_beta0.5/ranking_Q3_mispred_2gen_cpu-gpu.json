@@ -1,16 +1,16 @@
 {
-  "scenario": "Q5_npu_1gen",
+  "scenario": "Q3_mispred_2gen",
   "_provenance": {
     "predictor_source": {
       "repo": "fsrr-multimodel-scheduling (in-repo, committed)",
       "training_origin": "../multimodel-scheduling-mobilint",
-      "bundle_prefix": "xgboost_model/artifacts/cpu_npu/deploy_cpu_npu",
+      "bundle_prefix": "xgboost_model/artifacts/cpu_gpu/deploy_cpu_gpu",
       "bundle_sha256": {
-        "deploy_cpu_npu_coverage.json": "1dd4af4fb129381b19d04d9a9fd195e8ee2856c3bb956ddf20a060d73c18bc6c",
-        "deploy_cpu_npu_features.json": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584",
-        "deploy_cpu_npu_y1.json": "953d477ade89727b98b9f22a658a5580dceb2f1e1a5b7e08e7a319995a0e4049",
-        "deploy_cpu_npu_y2.json": "02fcab1a63aeedd6c501e7528e7b6d1e373062eacd804286d6b38ccbc7721eb7",
-        "deploy_cpu_npu_y3.json": "b62d27c974a6dd70f7287b8b10c7f5bb2050f78d8b78f6ab7cce0fc2da821198"
+        "deploy_cpu_gpu_coverage.json": "9204ec68312f6c478f79a6d0c1bd35995ab1ec069b083348bf9644222151f564",
+        "deploy_cpu_gpu_features.json": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584",
+        "deploy_cpu_gpu_y1.json": "98471eab13d24a19ac123d7996c7860a4a6d56448eede284836972f19930c392",
+        "deploy_cpu_gpu_y2.json": "2c2ec55ad0895e3de27c13024874d6263a716561544129c94d98aa7a321a4e02",
+        "deploy_cpu_gpu_y3.json": "32a3055b2f0fc24dd0d0e8fd67ba4e14d8efb562b37d9e49ea4933742cf0c3a7"
       }
     },
     "trained_on": [
@@ -29,10 +29,10 @@
       "y2": "deadline_miss_rate",
       "y3": "norm_tokens",
       "alpha": 0.3,
-      "beta": 1.0,
+      "beta": 0.5,
       "score": "y1 + beta*y3 - alpha*y2 (y3 dropped for vision-only)"
     },
-    "platform": "cpu-npu",
+    "platform": "cpu-gpu",
     "workload": {
       "foreground": [
         "yolo11s",
@@ -45,18 +45,20 @@
         "yolo11m",
         "resnet50",
         "mobilenet_v2",
-        "llama1b"
+        "llama1b",
+        "qwen2_vl"
       ],
       "rates_representative": {
         "yolo11s": 30,
         "yolo11m": 20,
         "resnet50": 60,
         "mobilenet_v2": 90,
-        "llama1b": 2
+        "llama1b": 2,
+        "qwen2_vl": 1
       },
       "rates_note": "REPRESENTATIVE overload regime, NOT final scenario rates (those come from v21 task 85)."
     },
-    "generated": "2026-07-28",
+    "generated": "2026-07-27",
     "vocabulary_validated": true,
     "n_candidates_total": 32
   },
@@ -66,195 +68,219 @@
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.931945,
-      "pred_deadline_miss_rate": 0.0,
-      "pred_norm_tokens": 0.915713,
+      "pred_norm_throughput": 0.996945,
+      "pred_deadline_miss_rate": 0.002335,
+      "pred_norm_tokens": 0.998061,
       "has_generative": true,
-      "pred_score": 1.847658
+      "pred_score": 1.495275
     },
     {
       "rank": 2,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "cpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "cpu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.899304,
-      "pred_deadline_miss_rate": 0.536959,
-      "pred_norm_tokens": 0.843543,
+      "pred_norm_throughput": 0.7367,
+      "pred_deadline_miss_rate": 0.229405,
+      "pred_norm_tokens": 0.844925,
       "has_generative": true,
-      "pred_score": 1.581759
+      "pred_score": 1.090341
     },
     {
       "rank": 3,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "cpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.847864,
-      "pred_deadline_miss_rate": 0.412161,
-      "pred_norm_tokens": 0.838922,
+      "pred_norm_throughput": 0.683867,
+      "pred_deadline_miss_rate": 0.274551,
+      "pred_norm_tokens": 0.770583,
       "has_generative": true,
-      "pred_score": 1.563138
+      "pred_score": 0.986793
     },
     {
       "rank": 4,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "cpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "cpu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.870407,
-      "pred_deadline_miss_rate": 0.528027,
-      "pred_norm_tokens": 0.836276,
+      "pred_norm_throughput": 0.649761,
+      "pred_deadline_miss_rate": 0.268463,
+      "pred_norm_tokens": 0.80007,
       "has_generative": true,
-      "pred_score": 1.548276
+      "pred_score": 0.969257
     },
     {
       "rank": 5,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "cpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.857824,
-      "pred_deadline_miss_rate": 0.545845,
-      "pred_norm_tokens": 0.841606,
+      "pred_norm_throughput": 0.692806,
+      "pred_deadline_miss_rate": 0.34467,
+      "pred_norm_tokens": 0.749753,
       "has_generative": true,
-      "pred_score": 1.535677
+      "pred_score": 0.964281
     },
     {
       "rank": 6,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.847208,
-      "pred_deadline_miss_rate": 0.552093,
-      "pred_norm_tokens": 0.841411,
+      "pred_norm_throughput": 0.856488,
+      "pred_deadline_miss_rate": 0.331663,
+      "pred_norm_tokens": 0.403801,
       "has_generative": true,
-      "pred_score": 1.522991
+      "pred_score": 0.958889
     },
     {
       "rank": 7,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "cpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -262,29 +288,33 @@
         },
         "bg1": {
           "model": "llama1b",
-          "device": "cpu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.640778,
-      "pred_deadline_miss_rate": 0.783228,
-      "pred_norm_tokens": 0.821122,
+      "pred_norm_throughput": 0.449738,
+      "pred_deadline_miss_rate": 0.41248,
+      "pred_norm_tokens": 0.684419,
       "has_generative": true,
-      "pred_score": 1.226932
+      "pred_score": 0.668204
     },
     {
       "rank": 8,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "cpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -292,29 +322,33 @@
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.601043,
-      "pred_deadline_miss_rate": 0.570113,
-      "pred_norm_tokens": 0.785625,
+      "pred_norm_throughput": 0.48714,
+      "pred_deadline_miss_rate": 0.495257,
+      "pred_norm_tokens": 0.655596,
       "has_generative": true,
-      "pred_score": 1.215635
+      "pred_score": 0.666361
     },
     {
       "rank": 9,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "cpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -322,44 +356,52 @@
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.601295,
-      "pred_deadline_miss_rate": 0.575302,
-      "pred_norm_tokens": 0.78434,
+      "pred_norm_throughput": 0.416823,
+      "pred_deadline_miss_rate": 0.380492,
+      "pred_norm_tokens": 0.644274,
       "has_generative": true,
-      "pred_score": 1.213044
+      "pred_score": 0.624812
     },
     {
       "rank": 10,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "cpu"
         },
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.577437,
-      "pred_deadline_miss_rate": 0.829068,
-      "pred_norm_tokens": 0.818053,
+      "pred_norm_throughput": 0.637286,
+      "pred_deadline_miss_rate": 0.54795,
+      "pred_norm_tokens": 0.255234,
       "has_generative": true,
-      "pred_score": 1.14677
+      "pred_score": 0.600519
     },
     {
       "rank": 11,
@@ -374,29 +416,33 @@
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.534287,
-      "pred_deadline_miss_rate": 0.582173,
-      "pred_norm_tokens": 0.786558,
+      "pred_norm_throughput": 0.475386,
+      "pred_deadline_miss_rate": 0.676791,
+      "pred_norm_tokens": 0.649427,
       "has_generative": true,
-      "pred_score": 1.146193
+      "pred_score": 0.597062
     },
     {
       "rank": 12,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
@@ -404,33 +450,37 @@
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "cpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "cpu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.581174,
-      "pred_deadline_miss_rate": 0.865684,
-      "pred_norm_tokens": 0.819446,
+      "pred_norm_throughput": 0.418445,
+      "pred_deadline_miss_rate": 0.524075,
+      "pred_norm_tokens": 0.652252,
       "has_generative": true,
-      "pred_score": 1.140914
+      "pred_score": 0.587349
     },
     {
       "rank": 13,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "cpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
@@ -438,89 +488,101 @@
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "cpu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.521213,
-      "pred_deadline_miss_rate": 0.602088,
-      "pred_norm_tokens": 0.784592,
+      "pred_norm_throughput": 0.354001,
+      "pred_deadline_miss_rate": 0.408169,
+      "pred_norm_tokens": 0.691818,
       "has_generative": true,
-      "pred_score": 1.125179
+      "pred_score": 0.577459
     },
     {
       "rank": 14,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "cpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.53488,
-      "pred_deadline_miss_rate": 0.788087,
-      "pred_norm_tokens": 0.82339,
+      "pred_norm_throughput": 0.641679,
+      "pred_deadline_miss_rate": 0.671442,
+      "pred_norm_tokens": 0.262891,
       "has_generative": true,
-      "pred_score": 1.121844
+      "pred_score": 0.571692
     },
     {
       "rank": 15,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "cpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.463288,
-      "pred_deadline_miss_rate": 0.590486,
-      "pred_norm_tokens": 0.788185,
+      "pred_norm_throughput": 0.62484,
+      "pred_deadline_miss_rate": 0.646889,
+      "pred_norm_tokens": 0.265983,
       "has_generative": true,
-      "pred_score": 1.074327
+      "pred_score": 0.563765
     },
     {
       "rank": 16,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
@@ -528,18 +590,22 @@
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.45455,
-      "pred_deadline_miss_rate": 0.582402,
-      "pred_norm_tokens": 0.784037,
+      "pred_norm_throughput": 0.585386,
+      "pred_deadline_miss_rate": 0.626892,
+      "pred_norm_tokens": 0.258707,
       "has_generative": true,
-      "pred_score": 1.063867
+      "pred_score": 0.526671
     },
     {
       "rank": 17,
@@ -554,7 +620,7 @@
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -562,29 +628,33 @@
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.363227,
-      "pred_deadline_miss_rate": 0.66361,
-      "pred_norm_tokens": 0.768366,
+      "pred_norm_throughput": 0.337484,
+      "pred_deadline_miss_rate": 0.723343,
+      "pred_norm_tokens": 0.51008,
       "has_generative": true,
-      "pred_score": 0.93251
+      "pred_score": 0.375521
     },
     {
       "rank": 18,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "cpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "cpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -592,21 +662,25 @@
         },
         "bg1": {
           "model": "llama1b",
-          "device": "cpu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.395366,
-      "pred_deadline_miss_rate": 0.920448,
-      "pred_norm_tokens": 0.803432,
+      "pred_norm_throughput": 0.279345,
+      "pred_deadline_miss_rate": 0.612154,
+      "pred_norm_tokens": 0.510491,
       "has_generative": true,
-      "pred_score": 0.922663
+      "pred_score": 0.350945
     },
     {
       "rank": 19,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
@@ -614,22 +688,26 @@
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "cpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "cpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "cpu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.392064,
-      "pred_deadline_miss_rate": 0.928959,
-      "pred_norm_tokens": 0.806163,
+      "pred_norm_throughput": 0.284243,
+      "pred_deadline_miss_rate": 0.656698,
+      "pred_norm_tokens": 0.507315,
       "has_generative": true,
-      "pred_score": 0.919539
+      "pred_score": 0.340891
     },
     {
       "rank": 20,
@@ -640,41 +718,45 @@
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "cpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "cpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "cpu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "cpu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.384559,
-      "pred_deadline_miss_rate": 0.908518,
-      "pred_norm_tokens": 0.805326,
+      "pred_norm_throughput": 0.244678,
+      "pred_deadline_miss_rate": 0.742595,
+      "pred_norm_tokens": 0.527622,
       "has_generative": true,
-      "pred_score": 0.91733
+      "pred_score": 0.28571
     },
     {
       "rank": 21,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "cpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -682,25 +764,29 @@
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.318586,
-      "pred_deadline_miss_rate": 0.646118,
-      "pred_norm_tokens": 0.773125,
+      "pred_norm_throughput": 0.427826,
+      "pred_deadline_miss_rate": 0.941636,
+      "pred_norm_tokens": 0.18777,
       "has_generative": true,
-      "pred_score": 0.897875
+      "pred_score": 0.23922
     },
     {
       "rank": 22,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
@@ -712,29 +798,33 @@
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.319561,
-      "pred_deadline_miss_rate": 0.660007,
-      "pred_norm_tokens": 0.76784,
+      "pred_norm_throughput": 0.352696,
+      "pred_deadline_miss_rate": 0.76051,
+      "pred_norm_tokens": 0.193501,
       "has_generative": true,
-      "pred_score": 0.889399
+      "pred_score": 0.221293
     },
     {
       "rank": 23,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "cpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -743,20 +833,24 @@
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.337901,
-      "pred_deadline_miss_rate": 0.877515,
-      "pred_norm_tokens": 0.810345,
+      "pred_norm_throughput": 0.376308,
+      "pred_deadline_miss_rate": 0.846532,
+      "pred_norm_tokens": 0.196408,
       "has_generative": true,
-      "pred_score": 0.884991
+      "pred_score": 0.220553
     },
     {
       "rank": 24,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "cpu"
         },
         "view2": {
           "model": "yolo11m",
@@ -764,22 +858,26 @@
         },
         "view3": {
           "model": "resnet50",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.345556,
-      "pred_deadline_miss_rate": 0.934229,
-      "pred_norm_tokens": 0.808713,
+      "pred_norm_throughput": 0.404149,
+      "pred_deadline_miss_rate": 0.975143,
+      "pred_norm_tokens": 0.188154,
       "has_generative": true,
-      "pred_score": 0.874
+      "pred_score": 0.205683
     },
     {
       "rank": 25,
@@ -790,7 +888,7 @@
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
@@ -798,25 +896,29 @@
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.331561,
-      "pred_deadline_miss_rate": 0.931809,
-      "pred_norm_tokens": 0.805782,
+      "pred_norm_throughput": 0.359834,
+      "pred_deadline_miss_rate": 0.864351,
+      "pred_norm_tokens": 0.189621,
       "has_generative": true,
-      "pred_score": 0.857801
+      "pred_score": 0.195339
     },
     {
       "rank": 26,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
@@ -828,18 +930,22 @@
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.26622,
-      "pred_deadline_miss_rate": 0.690279,
-      "pred_norm_tokens": 0.768239,
+      "pred_norm_throughput": 0.361809,
+      "pred_deadline_miss_rate": 0.966377,
+      "pred_norm_tokens": 0.191537,
       "has_generative": true,
-      "pred_score": 0.827375
+      "pred_score": 0.167664
     },
     {
       "rank": 27,
@@ -854,7 +960,7 @@
         },
         "view3": {
           "model": "resnet50",
-          "device": "npu"
+          "device": "cpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -862,14 +968,18 @@
         },
         "bg1": {
           "model": "llama1b",
-          "device": "cpu"
+          "device": "gpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.285101,
-      "pred_deadline_miss_rate": 0.956043,
-      "pred_norm_tokens": 0.766043,
+      "pred_norm_throughput": 0.152828,
+      "pred_deadline_miss_rate": 0.72561,
+      "pred_norm_tokens": 0.450298,
       "has_generative": true,
-      "pred_score": 0.76433
+      "pred_score": 0.160294
     },
     {
       "rank": 28,
@@ -880,11 +990,11 @@
         },
         "view2": {
           "model": "yolo11m",
-          "device": "npu"
+          "device": "cpu"
         },
         "view3": {
           "model": "resnet50",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view4": {
           "model": "mobilenet_v2",
@@ -893,24 +1003,28 @@
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.233549,
-      "pred_deadline_miss_rate": 0.94578,
-      "pred_norm_tokens": 0.770353,
+      "pred_norm_throughput": 0.262296,
+      "pred_deadline_miss_rate": 0.996839,
+      "pred_norm_tokens": 0.155978,
       "has_generative": true,
-      "pred_score": 0.720168
+      "pred_score": 0.041233
     },
     {
       "rank": 29,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "npu"
+          "device": "cpu"
         },
         "view2": {
           "model": "yolo11m",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view3": {
           "model": "resnet50",
@@ -923,20 +1037,24 @@
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.241825,
-      "pred_deadline_miss_rate": 0.961191,
-      "pred_norm_tokens": 0.766343,
+      "pred_norm_throughput": 0.183933,
+      "pred_deadline_miss_rate": 0.852544,
+      "pred_norm_tokens": 0.149049,
       "has_generative": true,
-      "pred_score": 0.719811
+      "pred_score": 0.002694
     },
     {
       "rank": 30,
       "placement": {
         "view1": {
           "model": "yolo11s",
-          "device": "cpu"
+          "device": "gpu"
         },
         "view2": {
           "model": "yolo11m",
@@ -948,18 +1066,22 @@
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "npu"
+          "device": "cpu"
         },
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.169508,
-      "pred_deadline_miss_rate": 0.987665,
-      "pred_norm_tokens": 0.769754,
+      "pred_norm_throughput": 0.205601,
+      "pred_deadline_miss_rate": 0.971208,
+      "pred_norm_tokens": 0.144829,
       "has_generative": true,
-      "pred_score": 0.642962
+      "pred_score": -0.013347
     },
     {
       "rank": 31,
@@ -978,18 +1100,22 @@
         },
         "view4": {
           "model": "mobilenet_v2",
-          "device": "cpu"
+          "device": "gpu"
         },
         "bg1": {
           "model": "llama1b",
-          "device": "npu"
+          "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.121189,
-      "pred_deadline_miss_rate": 0.712475,
-      "pred_norm_tokens": 0.696182,
+      "pred_norm_throughput": 0.209838,
+      "pred_deadline_miss_rate": 1.0,
+      "pred_norm_tokens": 0.151471,
       "has_generative": true,
-      "pred_score": 0.603628
+      "pred_score": -0.014426
     },
     {
       "rank": 32,
@@ -1013,13 +1139,17 @@
         "bg1": {
           "model": "llama1b",
           "device": "cpu"
+        },
+        "bg2": {
+          "model": "qwen2_vl",
+          "device": "gpu"
         }
       },
-      "pred_norm_throughput": 0.104845,
-      "pred_deadline_miss_rate": 0.952856,
-      "pred_norm_tokens": 0.773155,
+      "pred_norm_throughput": 0.088639,
+      "pred_deadline_miss_rate": 1.0,
+      "pred_norm_tokens": 0.127805,
       "has_generative": true,
-      "pred_score": 0.592143
+      "pred_score": -0.147458
     }
   ]
 }
