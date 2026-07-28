@@ -31,6 +31,7 @@
 | §Q1.x 나머지 (Q1.1/Q1.3/Q1.4) | `runtime_overhead.pdf`, `c3_fluid_validation.pdf`, `detection_sensitivity.pdf` 등 | 논문 Q번호 ↔ 저장소 리포트 이름(b2/c3/d2…) 매핑 부재 |
 | §Q5 최종 4기법 실험 | `q5_npu_generalization.pdf` | 최종 λ **미상** (`q5_experiment_report.md`가 "NPU 전용 λ 튜닝 필요 → 게이트"로 남김) |
 | Q4 2-gen | `q3_misprediction_2gen.pdf`, `q5_npu_generalization_2gen.pdf` | deadline 규약 **미상** (`gate_d_config_attribution.md`) |
+| §Q1 바운드의 $T_{stable}$ | — | 값 **10 s의 원 측정 미상**. 실측 $T_{stable}$은 0–4 s(`repetition_report.md`: Q3 2.0±1.7·최대 4.0, Q5 0.0), 유체 스윕 고부하 drain은 ~90 s — 어느 쪽도 10이 아니다 (`gate_g_tstable.md`) |
 | §IV 수치 ↔ 그림 3자 대조 | — | `fig/confirmed_values.json`의 `source` 필드가 가리키는 원시 런(`b2rep_q3`, `b3rep`, `c2_final2` 등)이 **저장소에 없다**(스크래치 증발, `gate_b` §B-3) |
 
 ---
