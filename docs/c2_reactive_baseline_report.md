@@ -3,6 +3,15 @@
 날짜: 2026-07-25 · 스냅샷 `backup/schedule_executor_main.pre_c2.py` · main.tex 불변
 관련: §II/§III(A2) "기여는 mechanism이 아니라 property" 주장의 실험적 뒷받침
 
+> **⚠ SUPERSEDED (2026-07-28) — 이 문서의 ablation 수치를 인용하지 말 것.**
+> 여기의 회복 횟수·persist·lastV·hotswaps는 **가변 런길이**에서 집계된 정정 전 값이다.
+> 고정 100 s 윈도우로 재집계한 **정본**은 `c2_integrity_report_v2.md` §7 → `c2_integrity_report_v7.md`
+> "Q6 완성표"이며, 논문 현행 표와 일치한다. 갈리는 칸(A §4b 1/5→**4/5**, A Q3 3/5→**1/5**,
+> A lastV 9.9→**19.9±9.9**, BoundGuard Q4 lastV 65.3→**54.8**, hotswaps)은
+> `docs/gate_e_ablation_numbers.md` §2에 전부 나열돼 있다. 정성적 2×2 결론은 유지된다.
+> 감사 이력으로 보존하며 삭제하지 않는다.
+
+
 > ⚠️ **[2026-07-25 정정]** 이 리포트의 수치 일부는 무결성 감사에서 정정됐다 →
 > [c2_integrity_report.md](c2_integrity_report.md). 요지: (1) **§4b config 오류**(burst=all-accel로
 > 위반 없음)로 이전 §4b 수치 무효 → burst=all-CPU로 재실행(A 1/5·hs 13, 나머지 5/5). (2) **B(re-invoke)의
