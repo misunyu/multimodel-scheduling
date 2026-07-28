@@ -19,6 +19,11 @@ import sys
 # 사이드카 항목에 반드시 있어야 하는 필드. 없으면 통과가 아니라 실패다.
 REQUIRED = ("id", "value", "quantity", "reference", "unit", "n", "censored", "recovered")
 
+# 사이드카는 자신을 그린 스크립트를 가리켜야 한다. 재생성 스크립트가 세 번 소실됐고
+# (fig/plot_*_v8.py, sidecar_util.py, build_pipeline_doc.py) 그 결과 확정표에서 그림을
+# 다시 그릴 수단이 사라졌다. 필드가 없으면 통과가 아니라 실패다.
+GENERATOR_REQUIRED = ("path", "sha256")
+
 # censored 항목은 창 길이가 없으면 검증 불가능하므로 추가로 요구한다.
 REQUIRED_IF_CENSORED = ("window_s",)
 
@@ -44,6 +49,41 @@ def load_confirmed(path):
     return table
 
 
+def _git_tracked(path):
+    """git ls-files 로 추적 여부 확인. 추적되지 않는 생성기는 다음에 사라진다."""
+    import subprocess
+    try:
+        out = subprocess.check_output(["git", "ls-files", "--error-unmatch", path],
+                                      stderr=subprocess.DEVNULL)
+        return bool(out.strip())
+    except Exception:
+        return False
+
+
+def check_generator(item, where):
+    """generator 필드 4항목 검사: 존재 / 실재 / git 추적 / 해시 일치."""
+    problems = []
+    gen = item.get("generator")
+    if gen is None:
+        return [f"{where}: generator 필드 없음 — 이 값을 그린 스크립트를 특정할 수 없다"]
+    missing = [f for f in GENERATOR_REQUIRED if not gen.get(f)]
+    if missing:
+        return [f"{where}: generator.{missing} 누락"]
+    path = gen["path"]
+    if not pathlib.Path(path).is_file():
+        problems.append(f"{where}: generator.path 파일 없음 — {path}")
+        return problems
+    if not _git_tracked(path):
+        problems.append(f"{where}: generator.path 가 git에 추적되지 않음 — {path} "
+                        f"(추적되지 않으면 소실된다)")
+    import hashlib
+    h = hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+    if h != gen["sha256"]:
+        problems.append(f"{where}: generator.sha256 불일치 — 스크립트가 바뀌었는데 "
+                        f"그림을 다시 그리지 않았다 (파일 {h[:16]}… != 기록 {gen['sha256'][:16]}…)")
+    return problems
+
+
 def check_entry(item, confirmed, sidecar_name, tol):
     """한 사이드카 항목을 검사해 문제 문자열 리스트를 돌려준다."""
     problems = []
@@ -56,6 +96,8 @@ def check_entry(item, confirmed, sidecar_name, tol):
 
     ident = item["id"]
     where = f"{sidecar_name}[{ident}]"
+
+    problems += check_generator(item, where)
 
     if item["censored"]:
         missing = [f for f in REQUIRED_IF_CENSORED if item.get(f) is None]

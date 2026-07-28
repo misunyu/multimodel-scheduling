@@ -29,6 +29,12 @@ SCENARIOS = {
     "q3_misprediction": ("rankings/ranking_Q3Q6_paper_v3_cpu-gpu.json", 25, 80),
     "q6_ablation":      ("rankings/ranking_Q3Q6_paper_v3_cpu-gpu.json", 25, 80),
     "q5_misprediction": ("rankings/ranking_Q5_paper_v3_cpu-npu.json",   25, 80),
+    # v28: lambdas are the documented ones (docs/c2_reactive_baseline_report.md section 2,
+    # docs/q4_experiment_report.md). These working sets carry NO background generative --
+    # recorded explicitly as "none" below so a missing background is distinguishable from
+    # an omitted one (v26 lost a whole sweep to that ambiguity).
+    "q4b_control":      ("rankings/ranking_Q4b_control_v3_cpu-gpu.json", 25, 45),
+    "q4_infeasible":    ("rankings/ranking_Q4_heavy4_cpu-gpu.json",      25, 90),
 }
 N_CAND = 5
 

@@ -54,7 +54,13 @@ def load_placement(ranking_path, which):
             if v["model"] == model:
                 return v["device"]
 
-    if which == "top1":
+    if which == "allcpu":
+        # the failure state of the correct-prediction control: everything on the CPU
+        # (docs/c2_reactive_baseline_report.md -- "burst=all-CPU로 재실행")
+        return ({m: "cpu" for m in ws}, None, sha256(ranking_path), plat, ws)
+    if which.startswith("rank:"):
+        e = R[int(which.split(":")[1]) - 1]
+    elif which == "top1":
         e = R[0]
     else:
         e = next(x for x in R

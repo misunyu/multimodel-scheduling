@@ -69,6 +69,21 @@ SCENARIOS = {
     "Q6_ablation_1gen": {"ws": FG + GEN1, "platforms": ["cpu-gpu"]},
 }
 
+# v28: the remaining scenarios. Composition confirmed from logs/reports, not assumed --
+# Q1.3 (q13) and section-4b run vision-3 with NO background generative (gpu_/npu_Static
+# logs; c2_reactive_baseline_report contrasts "llama1b bg + vision3" for Q3 against plain
+# "vision3" for 4b), and Q4 uses the heavy-4 vision set with no background.
+WS_V3_ONLY = [w for w in WS_PAPER_V3 if w["model"] != "llama1b"]
+WS_HEAVY4 = [
+    {"model": "yolo11x",  "display": "view1", "infps": 90, "slo_ms": 70},
+    {"model": "yolo11l",  "display": "view2", "infps": 90, "slo_ms": 52},
+    {"model": "yolo11m",  "display": "view3", "infps": 90, "slo_ms": 44},
+    {"model": "resnet50", "display": "view4", "infps": 90, "slo_ms": 12},
+]
+SCENARIOS["Q4_heavy4"] = {"ws": WS_HEAVY4, "platforms": ["cpu-gpu"]}
+SCENARIOS["Q4b_control_v3"] = {"ws": WS_V3_ONLY, "platforms": ["cpu-gpu"]}
+SCENARIOS["Q1_3_persist_v3"] = {"ws": WS_V3_ONLY, "platforms": ["cpu-gpu", "cpu-npu"]}
+
 
 def _sha(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
