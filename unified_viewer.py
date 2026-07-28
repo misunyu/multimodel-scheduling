@@ -717,6 +717,7 @@ class UnifiedViewer(QMainWindow):
                 # must be fatal -- the schedule-parse validation above already halts
                 # on unresolved names, so reaching here with an unresolved model is a
                 # defense-in-depth failure, not a silent skip.
+                import model_registry as _reg
                 if _reg.resolves(model) and _reg.is_llm_like(model):
                     print(f"[UnifiedViewer] Headless {hid}: {model} is generative/deferred; "
                           f"not started as a vision worker (runs via background manager).")
