@@ -61,11 +61,14 @@ def _sha(path):
 
 
 def enumerate_placements(ws, platform):
+    # Enumerate every {cpu, accelerator} placement for every model -- this MATCHES the
+    # runtime, which does not enforce model_registry.DEVICE_CONSTRAINTS anywhere in the
+    # placement path (it is a generator-only annotation). Applying that constraint here
+    # (v22/v23 did, via allowed_devices) wrongly excluded qwen2_vl-on-CPU and made the
+    # paper's 2-gen recovery placement (both generatives on CPU, measured V(t)=0, "rank
+    # twelve") unrepresentable. See docs/gate_a_device_constraints.md (Gate A, branch 2).
     devs = ["cpu", ACCEL[platform]]
-    per = []
-    for w in ws:
-        allowed = reg.allowed_devices(w["model"], accelerators=[ACCEL[platform]])
-        per.append([d for d in devs if d in allowed])
+    per = [list(devs) for _ in ws]
     combos = {}
     for i, assign in enumerate(itertools.product(*per)):
         blob = {}
