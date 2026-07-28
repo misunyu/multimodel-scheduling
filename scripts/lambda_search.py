@@ -122,6 +122,11 @@ def one_run(ranking_path, which, lam, duration, tag_extra=""):
     log = os.path.join(rd, "executor.log")
     cmd = [PYTHON, EXECUTOR, "--schedule", sched, "--duration", str(duration),
            "--adaptive-mode", "3", "--metrics-csv", metrics, "--auto_start_all"]
+    # The generative model only actually runs when --background is passed; without it the
+    # schedule's generative entry is parsed but never launched, so there is no LLM
+    # contention and the misprediction scenario cannot reproduce.
+    if any(m in ("llama1b", "qwen2_vl") for m in ws):
+        cmd += ["--background"]
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["FSRR_RATE_REPLICATE"] = "1"      # lambda = infps (documented load knob)
