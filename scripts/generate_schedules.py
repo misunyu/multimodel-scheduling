@@ -24,6 +24,16 @@ OUT_DIR = os.path.join(PROJECT, "schedules")
 # Documented configuration of the published (vision-3) runs -- docs/gate_d_config_attribution.md
 SLO_UNIFORM_MS = 15
 GEN_FPS = 2
+# failure phase per scenario:
+#   "top1"   -- the misprediction scenarios: the ranking's top choice IS the failure
+#               (generative kept on the accelerator).
+#   "allcpu" -- Q1.3 and the 4b control: the failure is everything on the CPU. Confirmed
+#               from the logs (gpu_/npu_Static run all-CPU) and from
+#               c2_reactive_baseline_report ("burst=all-CPU로 재실행"). Emitting top-1 here
+#               would emit the RECOVERED state as the failure and no violation would occur.
+FAILURE = {"q13_persistence_gpu": "allcpu", "q13_persistence_npu": "allcpu",
+           "q4b_control": "allcpu"}
+
 SCENARIOS = {
     # scenario   : (ranking file,                                   lam_stable, lam_burst)
     "q3_misprediction": ("rankings/ranking_Q3Q6_paper_v3_cpu-gpu.json", 25, 80),
@@ -44,8 +54,14 @@ SCENARIOS = {
     # so no upper bound exists and the midpoint rule is undefined. Fallback rule applied:
     # lambda = 0.9*mu*, the project's documented target ratio (docs/b2_buffer_sweep_report.md
     # "λ=0.9μ*(GPU 123 / NPU 93 fps)"). Reproduced 2/2 on both platforms.
-    "q13_persistence_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 25, 123),
-    "q13_persistence_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 25, 93),
+    # v32: lambda re-determined with the DROP condition added. The v29 values (123/93)
+    # applied 0.9*mu* PER VIEW although mu* is a shared pipeline rate, so demand was ~2.7x
+    # capacity; V stayed low only because buffer=2 turned the excess into drops, and the
+    # executor's saturation guard then fired on every candidate (25/25). Confirmed
+    # zero-drop intervals: GPU [30,55], NPU [30,52]; 45 lies in both and unifies with the
+    # 4b control on the identical vision-3 workload (v26 task 116 rule 3).
+    "q13_persistence_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 25, 45),
+    "q13_persistence_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 25, 45),
 }
 N_CAND = 5
 
@@ -107,6 +123,8 @@ def generate(scenario, ranking_rel, lam_stable, lam_burst):
         f"# lambda        : stable {lam_stable} fps/view, burst {lam_burst} fps/view "
         f"(generative {GEN_FPS} req/s); uniform L_SLO {SLO_UNIFORM_MS} ms",
         f"# active background: {gens if gens else 'none'}",
+        f"# failure phase : {FAILURE.get(scenario, 'top1')}"
+        f"{'  (combination_burst = all models on CPU)' if FAILURE.get(scenario)=='allcpu' else '  (combination_burst = ranking top-1)'}",
         "#",
         "# The Q6 ablation corners and the Adaptive baseline use THIS file unchanged and are",
         "# distinguished by executor mode/trigger flags only.",
@@ -116,13 +134,26 @@ def generate(scenario, ranking_rel, lam_stable, lam_burst):
     body = []
     all_accel = {m: acc for m in ws}
     body += emit_combo("combination_stable", all_accel, ws, lam_stable, gens) + [""]
-    body += emit_combo("combination_burst", placement_of(R[0], ws), ws, lam_burst, gens) + [""]
+    fail_mode = FAILURE.get(scenario, "top1")
+    burst_placement = ({m: "cpu" for m in ws} if fail_mode == "allcpu"
+                       else placement_of(R[0], ws))
+    body += emit_combo("combination_burst", burst_placement, ws, lam_burst, gens) + [""]
     for i in range(min(N_CAND, len(R))):
         body += emit_combo(f"cand_{i+1}", placement_of(R[i], ws), ws, lam_burst, gens) + [""]
 
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, f"{scenario}_{plat}.yaml")
     open(out, "w").write("\n".join(head + body))
+
+    # Static never reconfigures (adaptive mode 3), so it must START in the failure
+    # placement. Give it a schedule containing ONLY that phase -- running the normal
+    # schedule left Static on the healthy stable placement and V(t) never rose
+    # (caught by the stage-1 gate, v31).
+    fo = os.path.join(OUT_DIR, f"{scenario}_{plat}_failure_only.yaml")
+    open(fo, "w").write("\n".join(
+        head[:-1]
+        + ["# STATIC-ONLY: only the failure phase; Static must start here.", ""]
+        + emit_combo("combination_burst", burst_placement, ws, lam_burst, gens) + [""]))
     return out, R[:N_CAND], ws, gens
 
 

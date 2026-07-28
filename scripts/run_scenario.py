@@ -71,6 +71,10 @@ def main():
     ap.add_argument("--combo-trigger", action="append", default=[])
     ap.add_argument("--background", action="store_true")
     ap.add_argument("--buffer", default=None)
+    ap.add_argument("--stop-after", default=None)
+    ap.add_argument("--select-combo", default=None,
+                    help="run ONLY this combination (Static must START in the failure "
+                         "placement: mode 3 never reconfigures, so a later phase is never applied)")
     ap.add_argument("--rep", type=int, default=0)
     a = ap.parse_args()
 
@@ -88,6 +92,10 @@ def main():
         cmd += ["--combo-duration", c]
     for c in a.combo_trigger:
         cmd += ["--combo-trigger", c]
+    if a.stop_after:
+        cmd += ["--stop-after", a.stop_after]
+    if a.select_combo:
+        cmd += ["--schedule_name", a.select_combo]
     if a.background:
         cmd += ["--background"]
 
@@ -105,9 +113,12 @@ def main():
     wall = time.time() - t0
     # the executor writes its aggregate to results/; bring it INTO the run directory so
     # the run is self-contained (the aggregate is the per-view liveness evidence).
+    # stop-restart writes one results file per phase, so copy EVERY file this run created
+    # (taking only the last one grabbed an intermediate phase and misreported the placement).
     new = sorted(set(glob.glob(os.path.join(PROJECT, "results", "performance_*.json"))) - before)
-    if new:
-        shutil.copy2(new[-1], os.path.join(rd, "aggregate.json"))
+    for i, src in enumerate(new):
+        dst = "aggregate.json" if len(new) == 1 else f"aggregate_{i:02d}.json"
+        shutil.copy2(src, os.path.join(rd, dst))
 
     try:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=PROJECT,
@@ -122,6 +133,7 @@ def main():
         "schedule_source": os.path.relpath(a.schedule, PROJECT),
         "adaptive_mode": a.mode,
         "combo_durations": a.combo_duration, "combo_triggers": a.combo_trigger,
+        "stop_after": a.stop_after, "select_combo": a.select_combo,
         "background_enabled": bool(a.background),
         "ranking_file": rk,
         "ranking_sha256": sha256(os.path.join(PROJECT, rk)) if rk and os.path.isfile(os.path.join(PROJECT, rk)) else None,
