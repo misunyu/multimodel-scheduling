@@ -154,6 +154,23 @@ def generate(scenario, ranking_rel, lam_stable, lam_burst):
         head[:-1]
         + ["# STATIC-ONLY: only the failure phase; Static must start here.", ""]
         + emit_combo("combination_burst", burst_placement, ws, lam_burst, gens) + [""]))
+
+    # v33-C: variant C (dwell kept, progress REMOVED) needs the candidate list to be the
+    # SAME placement five times -- "progress 제거 = top-1 재적용" (c2_reactive_baseline
+    # §2). Giving C the normal ranked list let it descend to cand_5 and behave exactly
+    # like BoundGuard. The placement is READ FROM THE RANKING (rank 1), never hardcoded.
+    ra = os.path.join(OUT_DIR, f"{scenario}_{plat}_reapply_top1.yaml")
+    top1 = placement_of(R[0], ws)
+    ra_body = emit_combo("combination_stable", all_accel, ws, lam_stable, gens) + [""]
+    ra_body += emit_combo("combination_burst", burst_placement, ws, lam_burst, gens) + [""]
+    for i in range(N_CAND):
+        ra_body += emit_combo(f"cand_{i+1}", top1, ws, lam_burst, gens) + [""]
+    open(ra, "w").write("\n".join(
+        head[:-1]
+        + ["# RE-APPLY-TOP1: cand_1..cand_5 are all the ranking's rank-1 placement.",
+           "# For variant C (dwell without progress). Same ranking/lambda/buffer as the",
+           "# normal schedule; only the candidate list differs.", ""]
+        + ra_body))
     return out, R[:N_CAND], ws, gens
 
 

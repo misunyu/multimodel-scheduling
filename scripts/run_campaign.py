@@ -73,6 +73,13 @@ def main():
         mode, trig, extra, dur, stop_after = method_args(method)
         for rep in range(a.reps):
             sched = a.schedule
+            if method == "C":
+                # dwell without progress: candidates must all be the ranking's top-1
+                # ("progress 제거 = top-1 재적용"). With the normal ranked list C descended
+                # to cand_5 and was indistinguishable from BoundGuard (v33-B finding).
+                ra = a.schedule.replace(".yaml", "_reapply_top1.yaml")
+                if os.path.isfile(os.path.join(PROJECT, ra)):
+                    sched = ra
             if method == "Static":
                 fo = a.schedule.replace(".yaml", "_failure_only.yaml")
                 if os.path.isfile(os.path.join(PROJECT, fo)):
