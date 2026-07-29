@@ -226,13 +226,16 @@ def _lazy_xgb():
 
 
 def cv_select_params(Xv: np.ndarray, yv: np.ndarray, inner_groups: pd.Series,
-                     rounds: int = 300, seed: int = SEED) -> Tuple[Dict, float]:
+                     rounds: int = 300, seed: int = SEED,
+                     feature_names: List[str] = None) -> Tuple[Dict, float]:
     """Grid search (the suite's 4-combo grid) by GROUP-aware inner 3-fold CV, MAE.
 
     Unlike the suite's modulo-fold _cv_select_params, inner folds are also assigned
     by (models, rate) group so hyperparameter selection sees no within-group leakage.
+    feature_names defaults to the 37-feature window schema; P6 passes its own.
     """
     xgb = _lazy_xgb()
+    feat = feature_names or FEATURE_ORDER
     inner_fold = assign_group_folds(inner_groups.reset_index(drop=True),
                                     n_folds=3, seed=seed).values
     best, best_mae = None, float("inf")
@@ -243,9 +246,9 @@ def cv_select_params(Xv: np.ndarray, yv: np.ndarray, inner_groups: pd.Series,
             tr, te = inner_fold != k, inner_fold == k
             if te.sum() == 0 or tr.sum() == 0:
                 continue
-            d = xgb.DMatrix(Xv[tr], label=yv[tr], feature_names=FEATURE_ORDER)
+            d = xgb.DMatrix(Xv[tr], label=yv[tr], feature_names=feat)
             bst = xgb.train(params, d, num_boost_round=rounds)
-            pred = bst.predict(xgb.DMatrix(Xv[te], feature_names=FEATURE_ORDER))
+            pred = bst.predict(xgb.DMatrix(Xv[te], feature_names=feat))
             maes.append(float(np.mean(np.abs(pred - yv[te]))))
         mae = float(np.mean(maes)) if maes else float("inf")
         if mae < best_mae:
@@ -253,15 +256,17 @@ def cv_select_params(Xv: np.ndarray, yv: np.ndarray, inner_groups: pd.Series,
     return best or dict(_PARAMS), best_mae
 
 
-def train_booster(Xv: np.ndarray, yv: np.ndarray, params: Dict, rounds: int = 300):
+def train_booster(Xv: np.ndarray, yv: np.ndarray, params: Dict, rounds: int = 300,
+                  feature_names: List[str] = None):
     xgb = _lazy_xgb()
-    d = xgb.DMatrix(Xv, label=yv, feature_names=FEATURE_ORDER)
+    d = xgb.DMatrix(Xv, label=yv, feature_names=feature_names or FEATURE_ORDER)
     return xgb.train(params, d, num_boost_round=rounds)
 
 
-def predict_booster(bst, Xv: np.ndarray, clip=True) -> np.ndarray:
+def predict_booster(bst, Xv: np.ndarray, clip=True,
+                    feature_names: List[str] = None) -> np.ndarray:
     xgb = _lazy_xgb()
-    p = bst.predict(xgb.DMatrix(Xv, feature_names=FEATURE_ORDER))
+    p = bst.predict(xgb.DMatrix(Xv, feature_names=feature_names or FEATURE_ORDER))
     return np.clip(p, 0.0, 1.0) if clip else p
 
 
