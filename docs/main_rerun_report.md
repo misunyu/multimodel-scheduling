@@ -272,4 +272,10 @@ checked 73 values across 7 sidecars
 
 ## 8. 커밋
 
-`git ls-files runs/ fig/ | wc -l` = (아래 커밋 로그 참조). 푸시하지 않았다.
+`git ls-files runs/ fig/ | wc -l` = **1297**. **푸시하지 않았다.**
+
+| 커밋 | 내용 |
+|---|---|
+| `789d3c7` | 확정표 `PROVISIONAL` 제거 · 그림 7종 재생성 · `scripts/compute_bound.py` 신설 · 본 보고서 |
+
+미푸시 커밋은 `git log origin/ubuntu_gpu_fsrr..HEAD`로 확인한다.
