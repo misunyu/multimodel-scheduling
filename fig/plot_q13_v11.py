@@ -71,6 +71,14 @@ def fig_persistence(C):
     ax[0].set_xticks(range(len(labels)))
     ax[0].set_xticklabels(labels, fontsize=5, rotation=45, ha="right")
     ax[0].set_title("recovery outcome", fontsize=8)
+    # Static's zero-height bars say "never recovered" but not "how bad it stayed". Label the
+    # censored terminal V on them so the reader is not left to infer a magnitude from a gap.
+    sl = C["q13_static_lastV"]
+    for i, b in enumerate(b0):
+        if b.get_height() == 0:
+            ax[0].annotate(f"terminal $V$ {sl['value']:.1f}\n(censored)",
+                           (b.get_x() + b.get_width() / 2, 0.15), ha="center", fontsize=4.6,
+                           color="0.3")
 
     # right: persistence, recovering methods only (Static excluded by construction)
     ids, heights, errs, xl, cols = [], [], [], [], []
@@ -91,7 +99,8 @@ def fig_persistence(C):
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"q13_failure_persistence.{ext}"), bbox_inches="tight")
     # sidecar FROM THE CANVAS
-    sidecar([(i, r.get_height()) for i, r in zip(ids, b1)],
+    sidecar([(i, r.get_height()) for i, r in zip(ids, b1)]
+            + [("q13_static_lastV", sl["value"])],
             "q13_failure_persistence.values.json")
     plt.close(fig)
 

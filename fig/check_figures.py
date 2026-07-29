@@ -35,8 +35,13 @@ REQUIRED_IF_CENSORED = ("window_s",)
 # 값 외에 정확히 일치해야 하는 필드 (오차 허용 없음).
 EXACT_MATCH = ("quantity", "reference", "unit", "censored", "recovered", "window_s")
 
-VALID_QUANTITY = {"search", "drain", "persist", "cumV", "lastV", "bound"}
-VALID_REFERENCE = {"t0", "burst", "detection_onset"}
+VALID_QUANTITY = {"search", "drain", "persist", "cumV", "lastV", "bound", "lead"}
+# 'commit' (v33): drain is measured from the moment the recovering candidate is committed,
+# which is neither t0 nor burst. It had been mislabelled 't0', which silently implied
+# drain and search shared an origin -- they do not, they are consecutive.
+# 'lead' (v33): detection onset -> first candidate applied. Kept as its own quantity because
+# it is the envelope's first term, and the published form substitutes T for it.
+VALID_REFERENCE = {"t0", "burst", "detection_onset", "commit"}
 
 
 def load_confirmed(path):

@@ -100,6 +100,25 @@ runs/<UTC타임스탬프>_<태그>_r<반복>/
 ---
 
 
+
+### 변형 검증은 **배치 수준**으로 한다 (v33 신설)
+
+`run_manifest.json`의 `applied_sequence`는 **라벨**(cand_1..cand_5)만 담는다. 라벨이 같아도 배치가
+다를 수 있고, 배치가 같아도 라벨이 다를 수 있다 — **라벨 비교로는 변형이 구분되지 않는다.**
+
+실제로 이 때문에 변형 C(dwell 유지·progress 제거)가 BoundGuard와 동일하게 동작하는 것을 놓칠 뻔했다.
+`applied`가 양쪽 다 `[stable, burst, cand_1..cand_5]`로 같았고, 수치까지 겹쳤다(5/5, 33.0 vs 30.2).
+
+**규약**: 변형을 구분할 때는 각 런의 `schedule_snapshot.yaml`에서 후보별 **device 배정**을 읽어
+비교한다.
+
+```
+BoundGuard  cand 배치 ['aaaa','aaca','acaa','caaa','aaac']  서로 다른 배치 5 → 순위 하강(progress 유지)
+C           cand 배치 ['aaaa','aaaa','aaaa','aaaa','aaaa']  서로 다른 배치 1 → top-1 재적용(progress 제거)
+```
+
+(표기: `a`=가속기, `c`=CPU, 순서는 워킹셋 순.) **재실행 전에 이 대조를 수행한다.**
+
 ### 무효 표시 (`INVALID.md`) — v32 신설
 
 측정이 **설정 결함으로 성립하지 않은** 런은 지우지 않고 디렉터리에 `INVALID.md`를 넣는다.

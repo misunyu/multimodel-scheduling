@@ -1,7 +1,5 @@
 {
   "_meta": {
-    "status": "PROVISIONAL — superseded pending re-run (see docs/phantom_model_audit.md)",
-    "status_note": "phantom model 오염: 스케줄이 이전 세대 어휘를 써서 명명 4~7개 중 1~2개만 실행됐다. 런타임 실행에 의존하는 값은 전부 잠정이다. 예측/해석 유래 값(source_kind=analytic)은 영향 없음.",
     "source": "c2_integrity_report_v7.md §25 확정표",
     "date": "2026-07-26",
     "note": "그림에 쓰이는 모든 수치의 단일 소스. 여기에 없는 값은 그림에 넣지 않는다. 값을 바꿀 때는 main.tex와 함께 바꾸고 check_figures.py를 다시 돌린다.",
@@ -22,24 +20,28 @@
       "censored": "값이 관측 창에 잘렸는가. true면 실제 값은 더 클 수 있다(>=window). 시각 부호: 해칭 + 위쪽 화살표 + >=window.",
       "recovered": "그 런이 회복했는가(V<=eps 도달). 값의 성격이 아니라 결과에 대한 진술. 시각 부호: 색/테두리. bound 등 측정이 아닌 항목은 null.",
       "_note": "둘은 독립이다. Q4의 search=24s는 탐색이 예산을 소진하고 복귀까지 완료된 완결된 측정값이므로 censored=false이지만 recovered=false다. 해칭을 쓰면 '실제론 더 길 수도'로 읽혀 24=bound 24의 tight 주장이 흐려진다."
-    }
+    },
+    "confirmed": "2026-07-29 (v33 main re-run; source fields point at runs/ directories)",
+    "window_note": "cumV/lastV computed over a FIXED 94 s window; run lengths differ by method."
   },
   "values": [
     {
       "id": "q3_bg_persist",
       "figure": [
-        "q3_misprediction"
+        "q3_misprediction",
+        "bounded_recovery_analysis"
       ],
-      "value": 25.4,
-      "sd": 1.4,
+      "value": 30.4,
+      "sd": 0.5,
       "unit": "s",
       "quantity": "persist",
       "reference": "t0",
       "n": 5,
       "censored": false,
       "recovered": true,
-      "window_s": 107,
-      "source": "b2rep_q3"
+      "window_s": 94,
+      "source": "runs/ (v33 q3, 21 runs) e.g. 20260728T075259Z_q3_boundguard_r0",
+      "source_kind": "hardware"
     },
     {
       "id": "q3_bg_search",
@@ -47,7 +49,7 @@
         "q3_misprediction",
         "bounded_recovery_analysis"
       ],
-      "value": 22.6,
+      "value": 26.6,
       "unit": "s",
       "quantity": "search",
       "reference": "t0",
@@ -55,71 +57,80 @@
       "n": 5,
       "censored": false,
       "recovered": true,
-      "window_s": 107,
-      "source": "b2rep_q3",
-      "note": "Q3는 stable이 깨끗하므로 detection onset = t0 = burst+2s. burst 기준으로 재면 24.6±0.5(본문 부가설명 전용, 그림 사용 금지)."
+      "window_s": 94,
+      "source": "runs/20260729T013710Z_q3_BoundGuard_r0",
+      "note": null,
+      "sd": 1.0,
+      "source_kind": "hardware"
     },
     {
       "id": "q3_bg_drain",
       "figure": [
-        "q3_misprediction",
         "bounded_recovery_analysis"
       ],
-      "value": 2.8,
+      "value": 3.8,
       "unit": "s",
       "quantity": "drain",
-      "reference": "t0",
+      "reference": "commit",
       "n": 5,
       "censored": false,
       "recovered": true,
-      "window_s": 107,
-      "source": "b2rep_q3"
+      "window_s": 94,
+      "source": "runs/20260729T013710Z_q3_BoundGuard_r0",
+      "sd": 0.7,
+      "source_kind": "hardware",
+      "note": null
     },
     {
       "id": "q3_bound",
       "figure": [
         "bounded_recovery_analysis"
       ],
-      "value": 26,
+      "value": 58.0,
       "unit": "s",
       "quantity": "bound",
-      "reference": "detection_onset",
-      "n": null,
+      "reference": "t0",
+      "n": 5,
       "censored": false,
       "recovered": null,
-      "window_s": 107,
-      "source": "T+k(T_v+delta), delta=LLM 2.9s",
-      "note": "런별로 24–26s 범위. 그림에는 Q3 해당 인스턴스(26)만 그린다."
+      "window_s": 94,
+      "source": "runs/20260729T013710Z_q3_BoundGuard_r0",
+      "note": "lead+k(T_v+delta), lead=9.0s k=[5] delta=6.8s (scripts/compute_bound.py). Published form T+k(T_v+delta)=52.0s holds in 5/5 runs; measured form 5/5.",
+      "sd": 4.3,
+      "source_kind": "analytic"
     },
     {
       "id": "q3_search_observed_max",
       "figure": [],
-      "value": 23,
+      "value": 28.0,
       "unit": "s",
       "quantity": "search",
       "reference": "t0",
-      "n": 35,
+      "n": 5,
       "censored": false,
       "recovered": true,
       "window_s": null,
-      "source": "b2rep_q3 5 + C2 fixed-window 30",
-      "note": "본문 전용. 그림에 넣으려면 별도 판단."
+      "source": "runs/20260729T013710Z_q3_BoundGuard_r0",
+      "note": "v33 재실행 5런의 최대 search. 옛 값은 증발한 b2rep_q3를 가리켰다.",
+      "source_kind": "hardware"
     },
     {
       "id": "q3_baseline_lastV",
       "figure": [
         "q3_misprediction"
       ],
-      "value": 2.8,
+      "value": 3.5,
       "unit": "V",
       "quantity": "lastV",
       "reference": "t0",
       "n": 5,
       "censored": true,
       "recovered": false,
-      "window_s": 107,
-      "source": "b2rep_q3",
-      "note": "Static 2.79±0.06 / Stop-restart 2.66±0.23 / Adaptive 2.87±0.04. 셋 다 0/5 회복."
+      "window_s": 94,
+      "source": "runs/ (v33 q3, 21 runs) e.g. 20260728T075259Z_q3_boundguard_r0",
+      "note": "Static 2.79±0.06 / Stop-restart 2.66±0.23 / Adaptive 2.87±0.04. 셋 다 0/5 회복.",
+      "sd": 0.1,
+      "source_kind": "hardware"
     },
     {
       "id": "q5_bg_search",
@@ -127,18 +138,19 @@
         "q5_npu_generalization",
         "bounded_recovery_analysis"
       ],
-      "value": 14.2,
+      "value": 27.2,
       "sd": 0.4,
       "unit": "s",
       "quantity": "search",
-      "reference": "burst",
+      "reference": "t0",
       "is_detection_onset": true,
       "n": 5,
       "censored": false,
       "recovered": true,
-      "window_s": 107,
-      "source": "b2rep_q5",
-      "note": "Q5는 stable이 이미 위반(V≈7)이라 t0 < burst. 컨트롤러는 burst에서 활성이므로 detection onset = burst. t0 기준값(21.0)은 사용 금지."
+      "window_s": 94,
+      "source": "runs/20260729T060516Z_q5_BoundGuard_r0",
+      "note": null,
+      "source_kind": "hardware"
     },
     {
       "id": "q5_bg_drain",
@@ -148,98 +160,112 @@
       "value": 0.0,
       "unit": "s",
       "quantity": "drain",
-      "reference": "burst",
+      "reference": "commit",
       "n": 5,
       "censored": false,
       "recovered": true,
-      "window_s": 107,
-      "source": "b2rep_q5",
-      "note": "cand_2 즉시 회복. 적용 시각과 V≤ε 시각이 같은 사건."
+      "window_s": 94,
+      "source": "runs/20260729T060516Z_q5_BoundGuard_r0",
+      "note": null,
+      "sd": 0.0,
+      "source_kind": "hardware"
     },
     {
       "id": "q5_bound",
       "figure": [
         "bounded_recovery_analysis"
       ],
-      "value": 26,
+      "value": 34.4,
       "unit": "s",
       "quantity": "bound",
-      "reference": "detection_onset",
-      "n": null,
+      "reference": "t0",
+      "n": 5,
       "censored": false,
       "recovered": null,
-      "window_s": 107,
-      "source": "T+k(T_v+delta), delta=LLM 2.9s"
+      "window_s": 94,
+      "source": "runs/20260729T060516Z_q5_BoundGuard_r0",
+      "sd": 1.2,
+      "source_kind": "analytic",
+      "note": "lead+k(T_v+delta), lead=22.4s k=[2] delta=3.0s (scripts/compute_bound.py). Published form T+k(T_v+delta)=15.0s holds in 0/5 runs; measured form 5/5."
     },
     {
       "id": "q5_baseline_lastV",
       "figure": [
         "q5_npu_generalization"
       ],
-      "value": 33,
+      "value": 26.7,
       "unit": "V",
       "quantity": "lastV",
-      "reference": "burst",
+      "reference": "t0",
       "n": 5,
       "censored": true,
       "recovered": false,
-      "window_s": 107,
-      "source": "b2rep_q5",
-      "note": "Static 32.91±1.21 / Stop-restart 32.58±0.61 / Adaptive 34.09±1.85. 셋 다 0/5 회복."
+      "window_s": 94,
+      "source": "runs/ (v33 q5, 20 runs) e.g. 20260729T053813Z_q5_Static_r0",
+      "note": "Static 32.91±1.21 / Stop-restart 32.58±0.61 / Adaptive 34.09±1.85. 셋 다 0/5 회복. reference 정정(v33): 값은 t0 기준으로 계산됐다. Q5는 stable이 이미 위반이라 t0가 burst보다 9.6s 앞서며, 그 구간은 컨트롤러 비활성이다(q5_lead 참조).",
+      "sd": 0.6,
+      "source_kind": "hardware"
     },
     {
       "id": "q4_search",
       "figure": [
         "bounded_recovery_analysis"
       ],
-      "value": 24,
+      "value": 0,
       "unit": "s",
       "quantity": "search",
       "reference": "t0",
       "is_detection_onset": true,
-      "n": 1,
-      "censored": false,
+      "n": 5,
+      "censored": true,
       "recovered": false,
-      "window_s": 100,
-      "source": "q4_bsf_out (논문 런)",
-      "note": "첫 위반 → best-so-far 복귀. 같은 시나리오 C2 재현 5회는 22–23s."
+      "window_s": 94,
+      "source": "runs/20260729T070951Z_q4_BoundGuard_r0",
+      "note": "CENSORED: no candidate recovers in any of the 5 runs, so no recovering candidate is ever committed and search is undefined. Drawn as censored, not as 0.",
+      "source_kind": "hardware"
     },
     {
       "id": "q4_bound",
       "figure": [
-        "bounded_recovery_analysis"
+        "bounded_recovery_analysis",
+        "q4_bounded_envelope"
       ],
-      "value": 24,
+      "value": 30.8,
       "unit": "s",
       "quantity": "bound",
-      "reference": "detection_onset",
-      "n": null,
+      "reference": "t0",
+      "n": 5,
       "censored": false,
       "recovered": null,
-      "window_s": 100,
-      "source": "T+N_cand(T_v+delta)+delta, delta=vision 1s",
-      "note": "search와 정확히 같아 tight. 이 시나리오는 background LLM이 없어 sample-gap 0."
+      "window_s": 94,
+      "source": "runs/20260729T070951Z_q4_BoundGuard_r0",
+      "note": "lead+N_cand(T_v+delta)+delta, lead=9.8s delta=1.0s. No candidate recovers, so there is no search to compare against.",
+      "sd": 0.4,
+      "source_kind": "analytic"
     },
     {
       "id": "q4_bg_lastV",
-      "figure": [],
-      "value": 54.84,
-      "sd": 0.21,
+      "figure": [
+        "q4_bounded_envelope"
+      ],
+      "value": 362.5,
+      "sd": 112.2,
       "unit": "V",
       "quantity": "lastV",
       "reference": "t0",
       "n": 5,
       "censored": true,
       "recovered": false,
-      "window_s": 100,
-      "source": "c2_final2"
+      "window_s": 94,
+      "source": "runs/ (v33 q4, 25 runs) e.g. 20260729T070951Z_q4_BoundGuard_r0",
+      "source_kind": "hardware"
     },
     {
       "id": "q13_gpu_sr_persist",
       "figure": [
         "q13_failure_persistence"
       ],
-      "value": 13.2,
+      "value": 15.2,
       "sd": 0.4,
       "unit": "s",
       "quantity": "persist",
@@ -256,7 +282,7 @@
       "figure": [
         "q13_failure_persistence"
       ],
-      "value": 14,
+      "value": 14.0,
       "sd": 0.0,
       "unit": "s",
       "quantity": "persist",
@@ -290,8 +316,8 @@
       "figure": [
         "q13_failure_persistence"
       ],
-      "value": 13,
-      "sd": 0.6,
+      "value": 13.8,
+      "sd": 0.4,
       "unit": "s",
       "quantity": "persist",
       "reference": "t0",
@@ -341,17 +367,17 @@
       "figure": [
         "q13_failure_persistence"
       ],
-      "value": 13.61,
+      "value": 13.75,
       "unit": "V",
       "quantity": "lastV",
       "reference": "t0",
-      "n": 5,
+      "n": 10,
       "censored": true,
       "recovered": false,
       "window_s": 94,
       "source": "runs/ (v33 q13gpuV2/q13npuV2 Static) gpu 13.61 / npu 13.93",
       "note": "0/5 회복. 막대 높이를 값으로 쓰지 말 것 — censored 규약 적용.",
-      "sd": 0.1,
+      "sd": 0.2,
       "source_kind": "hardware"
     },
     {
@@ -523,6 +549,670 @@
       "source": "runs/ (v33 q13npuV2, 5 runs) e.g. 20260728T110703Z_q13npuV2_Static_r0",
       "note": "동일. 창을 맞추면 비율은 커진다.",
       "source_kind": "hardware"
+    },
+    {
+      "id": "q5_bg_persist",
+      "value": 27.2,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q5, 20 runs) e.g. 20260729T053813Z_q5_Static_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "q5_npu_generalization",
+        "bounded_recovery_analysis"
+      ],
+      "note": "reference 정정(v33): 값은 t0 기준으로 계산됐다. Q5는 stable이 이미 위반이라 t0가 burst보다 9.6s 앞서며, 그 구간은 컨트롤러 비활성이다(q5_lead 참조)."
+    },
+    {
+      "id": "q6_bg_lastV",
+      "value": 0.0,
+      "sd": 0.0,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_bg_recoveries",
+      "value": 5,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_bg_hotswaps",
+      "value": 6,
+      "unit": "swaps",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_a_lastV",
+      "value": 51.7,
+      "sd": 0.2,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_a_recoveries",
+      "value": 0,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": false,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_a_hotswaps",
+      "value": 7,
+      "unit": "swaps",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_b_lastV",
+      "value": 3.2,
+      "sd": 0.1,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_b_recoveries",
+      "value": 0,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": false,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_b_hotswaps",
+      "value": 0,
+      "unit": "swaps",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_c_lastV",
+      "value": 3.4,
+      "sd": 0.1,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_c_recoveries",
+      "value": 0,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": false,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_c_hotswaps",
+      "value": 0,
+      "unit": "swaps",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_adaptive_lastV",
+      "value": 3.2,
+      "sd": 0.1,
+      "unit": "V",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": true,
+      "recovered": false,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_adaptive_recoveries",
+      "value": 0,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": false,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q6_adaptive_hotswaps",
+      "value": 0,
+      "unit": "swaps",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 94,
+      "source": "runs/ (v33 q6, 25 runs) e.g. 20260729T045546Z_q6_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_bg_persist",
+      "value": 13.4,
+      "sd": 0.8,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_bg_recoveries",
+      "value": 5,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_a_recoveries",
+      "value": 2,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_b_persist",
+      "value": 13.2,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_b_recoveries",
+      "value": 5,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_c_persist",
+      "value": 13.8,
+      "sd": 1.2,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_c_recoveries",
+      "value": 5,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_adaptive_persist",
+      "value": 13.0,
+      "sd": 0.6,
+      "unit": "s",
+      "quantity": "persist",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q4b_adaptive_recoveries",
+      "value": 5,
+      "unit": "of5",
+      "quantity": "lastV",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/ (v33 q4b, 25 runs) e.g. 20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "c2_reactive_comparison"
+      ]
+    },
+    {
+      "id": "q3_lead",
+      "value": 9.0,
+      "sd": 0.6,
+      "unit": "s",
+      "quantity": "lead",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260729T013710Z_q3_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": "detection onset -> first candidate applied. pre-activation part 0.0s. The envelope's first term is this, NOT T=3s: combination_burst has a fixed 10s dwell."
+    },
+    {
+      "id": "q5_lead",
+      "value": 22.4,
+      "sd": 3.8,
+      "unit": "s",
+      "quantity": "lead",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260729T060516Z_q5_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": "detection onset -> first candidate applied. pre-activation part 9.6s. The envelope's first term is this, NOT T=3s: combination_burst has a fixed 10s dwell."
+    },
+    {
+      "id": "q13_gpu_lead",
+      "value": 10.8,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "lead",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260728T105501Z_q13gpuV2_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": "detection onset -> first candidate applied. pre-activation 0.0s. combination_burst has a fixed 10s dwell, so this is not T=3s."
+    },
+    {
+      "id": "q4b_lead",
+      "value": 10.2,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "lead",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": "detection onset -> first candidate applied. pre-activation 0.0s. combination_burst has a fixed 10s dwell, so this is not T=3s."
+    },
+    {
+      "id": "q13_gpu_bg_search",
+      "value": 10.8,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "search",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260728T105501Z_q13gpuV2_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": null
+    },
+    {
+      "id": "q13_gpu_bg_drain",
+      "value": 2.4,
+      "sd": 0.5,
+      "unit": "s",
+      "quantity": "drain",
+      "reference": "commit",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260728T105501Z_q13gpuV2_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": null
+    },
+    {
+      "id": "q13_gpu_bound",
+      "value": 13.8,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "bound",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 94,
+      "source": "runs/20260728T105501Z_q13gpuV2_BoundGuard_r0",
+      "source_kind": "analytic",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": "lead+k(T_v+delta), lead=10.8s k=[1] delta=0.0s (scripts/compute_bound.py). Published form T+k(T_v+delta)=6.0s holds in 0/5 runs; measured form 5/5."
+    },
+    {
+      "id": "q13_npu_lead",
+      "value": 10.8,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "lead",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260728T113257Z_q13npuV2_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": "detection onset -> first candidate applied. pre-activation 0.0s. combination_burst has a fixed 10s dwell, so this is not T=3s."
+    },
+    {
+      "id": "q13_npu_bg_search",
+      "value": 10.8,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "search",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260728T113257Z_q13npuV2_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": null
+    },
+    {
+      "id": "q13_npu_bg_drain",
+      "value": 2.6,
+      "sd": 0.5,
+      "unit": "s",
+      "quantity": "drain",
+      "reference": "commit",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260728T113257Z_q13npuV2_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": null
+    },
+    {
+      "id": "q13_npu_bound",
+      "value": 13.8,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "bound",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 94,
+      "source": "runs/20260728T113257Z_q13npuV2_BoundGuard_r0",
+      "source_kind": "analytic",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": "lead+k(T_v+delta), lead=10.8s k=[1] delta=0.0s (scripts/compute_bound.py). Published form T+k(T_v+delta)=6.0s holds in 0/5 runs; measured form 5/5."
+    },
+    {
+      "id": "q4b_bg_search",
+      "value": 10.2,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "search",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": null
+    },
+    {
+      "id": "q4b_bg_drain",
+      "value": 3.2,
+      "sd": 0.7,
+      "unit": "s",
+      "quantity": "drain",
+      "reference": "commit",
+      "n": 5,
+      "censored": false,
+      "recovered": true,
+      "window_s": 94,
+      "source": "runs/20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "hardware",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": null
+    },
+    {
+      "id": "q4b_bound",
+      "value": 13.2,
+      "sd": 0.4,
+      "unit": "s",
+      "quantity": "bound",
+      "reference": "t0",
+      "n": 5,
+      "censored": false,
+      "recovered": null,
+      "window_s": 94,
+      "source": "runs/20260729T061851Z_q4b_BoundGuard_r0",
+      "source_kind": "analytic",
+      "figure": [
+        "bounded_recovery_analysis"
+      ],
+      "note": "lead+k(T_v+delta), lead=10.2s k=[1] delta=0.0s (scripts/compute_bound.py). Published form T+k(T_v+delta)=6.0s holds in 0/5 runs; measured form 5/5."
     }
   ]
 }
