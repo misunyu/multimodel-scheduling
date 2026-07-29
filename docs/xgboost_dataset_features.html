@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>배치 예측기 데이터셋·피쳐 레퍼런스 — deploy_cpu_npu / deploy_cpu_gpu</title>
+<style>
+  :root{
+    --bg:#f5f7f8; --panel:#ffffff; --panel-2:#eef1f3; --ink:#131a1f; --ink-2:#4a5761;
+    --line:#d9e0e4; --line-2:#e7ecef;
+    --accent:#0d7d73; --accent-ink:#0a5f57;
+    --npu:#0f8f80; --npu-bg:#dff2ef;
+    --gpu:#5f9a1f; --gpu-bg:#e8f2d9;
+    --cpu:#a5702f; --cpu-bg:#f3e8d6;
+    --warn:#b3541e; --good:#1f8a5b;
+    --mono:ui-monospace,"SF Mono","SFMono-Regular","Cascadia Code",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --disp:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0e1519; --panel:#161f25; --panel-2:#1b262d; --ink:#e7eef2; --ink-2:#9fb0ba;
+      --line:#25333c; --line-2:#1f2b32;
+      --accent:#3fbfb0; --accent-ink:#57cdbf;
+      --npu:#31b7a6; --npu-bg:#123029;
+      --gpu:#8bc34a; --gpu-bg:#1d2a12;
+      --cpu:#cf9a54; --cpu-bg:#2c2213;
+      --warn:#e08a4f; --good:#4cc088;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f5f7f8; --panel:#ffffff; --panel-2:#eef1f3; --ink:#131a1f; --ink-2:#4a5761;
+    --line:#d9e0e4; --line-2:#e7ecef; --accent:#0d7d73; --accent-ink:#0a5f57;
+    --npu:#0f8f80; --npu-bg:#dff2ef; --gpu:#5f9a1f; --gpu-bg:#e8f2d9;
+    --cpu:#a5702f; --cpu-bg:#f3e8d6; --warn:#b3541e; --good:#1f8a5b;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0e1519; --panel:#161f25; --panel-2:#1b262d; --ink:#e7eef2; --ink-2:#9fb0ba;
+    --line:#25333c; --line-2:#1f2b32; --accent:#3fbfb0; --accent-ink:#57cdbf;
+    --npu:#31b7a6; --npu-bg:#123029; --gpu:#8bc34a; --gpu-bg:#1d2a12;
+    --cpu:#cf9a54; --cpu-bg:#2c2213; --warn:#e08a4f; --good:#4cc088;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;font-size:16px;
+    background-image:radial-gradient(circle at 100% -10%,color-mix(in srgb,var(--accent) 7%,transparent),transparent 45%);
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:clamp(20px,4vw,56px) clamp(16px,4vw,40px) 80px}
+  a{color:var(--accent-ink);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono);font-variant-ligatures:none}
+  .num{font-variant-numeric:tabular-nums}
+
+  header.top{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:40px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--accent-ink);margin:0 0 14px}
+  h1{font-family:var(--disp);font-weight:700;letter-spacing:-.02em;text-wrap:balance;
+    font-size:clamp(26px,4.2vw,40px);line-height:1.12;margin:0 0 12px}
+  .lede{color:var(--ink-2);font-size:clamp(15px,1.6vw,17px);max-width:64ch;margin:0}
+  .meta-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+
+  section{margin:0 0 48px;scroll-margin-top:20px}
+  h2{font-family:var(--disp);font-weight:680;letter-spacing:-.01em;font-size:clamp(19px,2.4vw,24px);
+    margin:0 0 6px;display:flex;align-items:baseline;gap:12px}
+  h2 .idx{font-family:var(--mono);font-size:13px;color:var(--accent-ink);font-weight:600;
+    border:1px solid var(--line);border-radius:6px;padding:2px 8px;letter-spacing:.05em}
+  .sub{color:var(--ink-2);margin:0 0 20px;max-width:70ch}
+  h3{font-family:var(--disp);font-size:15px;font-weight:660;margin:26px 0 10px;letter-spacing:-.01em}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 24px}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:720px){.grid-2{grid-template-columns:1fr}}
+
+  .chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;
+    font-weight:600;padding:3px 9px;border-radius:999px;border:1px solid var(--line);
+    background:var(--panel-2);color:var(--ink-2);letter-spacing:.02em;white-space:nowrap}
+  .chip.npu{background:var(--npu-bg);color:var(--npu);border-color:color-mix(in srgb,var(--npu) 35%,transparent)}
+  .chip.gpu{background:var(--gpu-bg);color:var(--gpu);border-color:color-mix(in srgb,var(--gpu) 35%,transparent)}
+  .chip.cpu{background:var(--cpu-bg);color:var(--cpu);border-color:color-mix(in srgb,var(--cpu) 35%,transparent)}
+  .chip .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+
+  .modelcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .modelcard .hd{padding:16px 20px;border-bottom:1px solid var(--line-2);display:flex;
+    align-items:center;justify-content:space-between;gap:10px}
+  .modelcard.npu .hd{background:linear-gradient(90deg,var(--npu-bg),transparent)}
+  .modelcard.gpu .hd{background:linear-gradient(90deg,var(--gpu-bg),transparent)}
+  .modelcard .hd b{font-family:var(--mono);font-size:15px;letter-spacing:-.01em}
+  .modelcard dl{margin:0;padding:8px 20px 18px;display:grid;grid-template-columns:auto 1fr;gap:2px 16px}
+  .modelcard dt{color:var(--ink-2);font-size:13px;padding:7px 0;border-bottom:1px solid var(--line-2)}
+  .modelcard dd{margin:0;text-align:right;font-family:var(--mono);font-size:13px;padding:7px 0;
+    border-bottom:1px solid var(--line-2);font-variant-numeric:tabular-nums}
+  .modelcard dd.hl{color:var(--good);font-weight:600}
+
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  .scroll table{min-width:520px}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line-2);vertical-align:top}
+  thead th{background:var(--panel-2);font-family:var(--mono);font-size:11.5px;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--ink-2);font-weight:600;position:sticky;top:0}
+  tbody tr:last-child td{border-bottom:none}
+  td.mono,th.r{font-family:var(--mono)}
+  td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+  tbody tr:hover{background:color-mix(in srgb,var(--accent) 5%,transparent)}
+
+  .fcat{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .fmatrix{overflow-x:auto}
+  .fmatrix table{min-width:640px}
+  .fmatrix td:first-child{font-family:var(--mono);font-size:12.5px}
+  .agg{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:700;padding:1px 7px;
+    border-radius:5px;background:var(--panel-2);border:1px solid var(--line)}
+  .tick{color:var(--accent);font-weight:700}
+  .dashx{color:var(--ink-2);opacity:.4}
+
+  .callout{border-left:3px solid var(--accent);background:var(--panel-2);border-radius:0 10px 10px 0;
+    padding:14px 18px;margin:16px 0;font-size:14px;color:var(--ink)}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout b{color:var(--accent-ink)}
+  .callout.warn b{color:var(--warn)}
+
+  ol.flow{list-style:none;counter-reset:step;margin:0;padding:0;display:grid;gap:10px}
+  ol.flow li{counter-increment:step;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 18px 14px 56px;position:relative}
+  ol.flow li::before{content:counter(step);position:absolute;left:14px;top:13px;width:28px;height:28px;
+    display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:14px;
+    color:#fff;background:var(--accent);border-radius:8px}
+  ol.flow b{font-family:var(--mono);font-size:14px}
+  ol.flow .d{color:var(--ink-2);font-size:13.5px;display:block;margin-top:2px}
+  ol.flow code{font-size:12.5px;background:var(--panel-2);padding:1px 6px;border-radius:5px;border:1px solid var(--line-2)}
+
+  pre.tree{font-family:var(--mono);font-size:12.5px;line-height:1.7;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;padding:18px 20px;overflow-x:auto;margin:0}
+  pre.tree .c{color:var(--ink-2)}
+  pre.tree .a{color:var(--accent-ink);font-weight:600}
+
+  .kbd{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);
+    border-bottom-width:2px;border-radius:6px;padding:1px 7px}
+  .cmd{font-family:var(--mono);font-size:12.5px;background:#0d1418;color:#cfe6e2;border-radius:10px;
+    padding:14px 16px;overflow-x:auto;display:block;white-space:pre;border:1px solid var(--line)}
+  @media (prefers-color-scheme:light){.cmd{background:#101a1e;color:#d6ece8}}
+
+  footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:var(--ink-2);font-size:13px}
+  .toc{display:flex;flex-wrap:wrap;gap:6px 10px;margin-top:18px;font-family:var(--mono);font-size:12.5px}
+  .toc a{color:var(--ink-2);border:1px solid var(--line);border-radius:7px;padding:4px 10px}
+  .toc a:hover{color:var(--accent-ink);border-color:var(--accent);text-decoration:none}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-2);margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <p class="eyebrow">XGBoost 배치 예측기 · 데이터셋 &amp; 피쳐 레퍼런스</p>
+    <h1>deploy_cpu_npu &amp; deploy_cpu_gpu — 학습·검증 데이터셋과 피쳐 명세</h1>
+    <p class="lede">멀티모델 스케줄링(Mobilint NPU + NVIDIA GPU + CPU)에서 “어떤 모델을 어느 디바이스에 올릴지”
+      순위를 매기는 두 개의 3-타깃 XGBoost 예측기. 각 예측기의 데이터셋 구성, 37개 피쳐의 유래, 학습/검증
+      파이프라인, 관련 프로그램과 폴더를 한 곳에 정리한다.</p>
+    <div class="meta-row">
+      <span class="chip"><span class="dot"></span>540 rows / model</span>
+      <span class="chip">37 features</span>
+      <span class="chip">3 targets · y1/y2/y3</span>
+      <span class="chip npu"><span class="dot"></span>CPU + NPU</span>
+      <span class="chip gpu"><span class="dot"></span>CPU + GPU</span>
+    </div>
+    <nav class="toc" aria-label="목차">
+      <a href="#models">① 두 예측기</a>
+      <a href="#dataset">② 데이터셋 구성</a>
+      <a href="#targets">③ 타깃 3종</a>
+      <a href="#features">④ 37 피쳐</a>
+      <a href="#pipeline">⑤ 파이프라인</a>
+      <a href="#programs">⑥ 프로그램·사용법</a>
+      <a href="#folders">⑦ 폴더 구조</a>
+    </nav>
+  </header>
+
+  <!-- ① MODELS -->
+  <section id="models">
+    <h2><span class="idx">01</span>두 예측기</h2>
+    <p class="sub">동일한 레시피(같은 37 피쳐, 같은 타깃 정의, 같은 정규화·마스킹·검증)로 학습된 두 모델.
+      차이는 배치 대상 디바이스 쌍 하나뿐이다. 두 스케줄은 <b>배치 정렬</b>(같은 자유배치 조합)로 생성되어
+      플랫폼 간 공정 비교가 가능하다.</p>
+    <div class="grid-2">
+      <div class="modelcard npu">
+        <div class="hd"><b>deploy_cpu_npu</b><span class="chip npu"><span class="dot"></span>CPU · NPU</span></div>
+        <dl>
+          <dt>학습 행 수</dt><dd>540</dd>
+          <dt>피쳐 수</dt><dd>37</dd>
+          <dt>디바이스</dt><dd>cpu, npu</dd>
+          <dt>워킹셋</dt><dd>15</dd>
+          <dt>모델(뷰) 수</dt><dd>2 – 8</dd>
+          <dt>y3 유효 행</dt><dd>372 / 540</dd>
+          <dt>out-of-fold Spearman</dt><dd class="hl">+0.954</dd>
+          <dt>S8 (8모델)</dt><dd class="hl">+0.991</dd>
+        </dl>
+      </div>
+      <div class="modelcard gpu">
+        <div class="hd"><b>deploy_cpu_gpu</b><span class="chip gpu"><span class="dot"></span>CPU · GPU</span></div>
+        <dl>
+          <dt>학습 행 수</dt><dd>540</dd>
+          <dt>피쳐 수</dt><dd>37</dd>
+          <dt>디바이스</dt><dd>cpu, gpu</dd>
+          <dt>워킹셋</dt><dd>15</dd>
+          <dt>모델(뷰) 수</dt><dd>2 – 8</dd>
+          <dt>y3 유효 행</dt><dd>372 / 540</dd>
+          <dt>out-of-fold Spearman</dt><dd class="hl">+0.970</dd>
+          <dt>S8 (8모델)</dt><dd class="hl">+0.987</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="callout"><b>플랫폼 분리 근거.</b> 실측 최적 배치를 비교하면 45개 (세트×rate) 그룹 중 <b>30개</b>에서
+      NPU와 GPU가 서로 다른 배치를 고른다. 패턴은 일관적이다 — <b>GPU는 llama1b(LLM)를 가속기에 올리고,
+      NPU는 CPU에 남긴다.</b> LLM이 없는 vision-only 세트(S1·S2·S9·S10)는 15개 그룹 전부 동일. 하드웨어 특성차가
+      실제 배치를 갈라놓으므로 예측기를 둘로 유지한다.</div>
+  </section>
+
+  <!-- ② DATASET -->
+  <section id="dataset">
+    <h2><span class="idx">02</span>데이터셋 구성</h2>
+    <p class="sub">한 행 = 한 <b>측정창(performance window)</b>. 하나의 워킹셋을 특정 배치·입력레이트로 실행해
+      워밍업 20초 후 180초 동안 측정한 결과다. 각 모델당 540행 = 15 워킹셋 × (층화 또는 전수 배치) × rate 3단계.</p>
+
+    <div class="scroll" role="region" aria-label="워킹셋별 행 구성">
+      <table>
+        <thead><tr>
+          <th>워킹셋</th><th class="r">모델수</th><th class="r">자유배치</th><th>수집 방식</th>
+          <th class="r">행/플랫폼</th><th>rate 배수</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>base1–5</td><td class="r">4</td><td class="r">3</td><td>전수 (8배치)</td><td class="r">8×5=40</td><td class="mono">1 / 2 / 3×</td></tr>
+          <tr><td>S1</td><td class="r">2</td><td class="r">2</td><td>전수</td><td class="r">4</td><td class="mono">2 / 3 / 4×</td></tr>
+          <tr><td>S2 · S3</td><td class="r">3</td><td class="r">3</td><td>전수</td><td class="r">8+8</td><td class="mono">1 / 2 / 3×</td></tr>
+          <tr><td>S4</td><td class="r">3</td><td class="r">2</td><td>전수</td><td class="r">4</td><td class="mono">1 / 2 / 3×</td></tr>
+          <tr><td>S5</td><td class="r">5</td><td class="r">4</td><td>전수</td><td class="r">16</td><td class="mono">1 / 2 / 3×</td></tr>
+          <tr><td>S6</td><td class="r">6</td><td class="r">5</td><td>층화 16</td><td class="r">16</td><td class="mono">1 / 1.5 / 2×</td></tr>
+          <tr><td>S7</td><td class="r">7</td><td class="r">6</td><td>층화 20</td><td class="r">20</td><td class="mono">1 / 1.5 / 2×</td></tr>
+          <tr><td>S8</td><td class="r">8</td><td class="r">7</td><td>층화 24</td><td class="r">24</td><td class="mono">1 / 1.5 / 2×</td></tr>
+          <tr><td>S9</td><td class="r">5</td><td class="r">5</td><td>층화 16</td><td class="r">16</td><td class="mono">1 / 2 / 3×</td></tr>
+          <tr><td>S10</td><td class="r">7</td><td class="r">7</td><td>층화 24</td><td class="r">24</td><td class="mono">1 / 1.5 / 2×</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin-top:14px">층화 축 = “가속기에 배치된 모델 수”. 자유배치가 5개 이상인 5개 세트
+      (S6·S7·S8·S9·S10)는 전 층(0…f)을 커버하되 극단층을 포함하고 중간층을 ≥2로 층화한다.
+      <b>qwen2_vl</b>은 디바이스 제약({gpu, npu})으로 항상 가속기에 고정되어 자유배치에서 제외된다.</p>
+
+    <h3>홀드아웃 검증 (테스트셋 대신 out-of-fold)</h3>
+    <p class="sub">별도 테스트셋을 떼지 않고 <b>3-fold out-of-fold</b>로 검증한다. 각 행을 그 행이 학습에 쓰이지
+      않은 fold의 모델로 예측해, 예측점수와 실측점수의 (세트,rate)별 Spearman 순위상관을 낸다.
+      과적합 없이 “배치 순위를 맞히는가”를 정직하게 측정하는 방식이다.</p>
+    <div class="legend">
+      <span class="chip"><span class="dot"></span>정규화: (models, workload, rate) 그룹 내 [0,1]</span>
+      <span class="chip">rate factors: 1.0 / 1.5 / 2.0 / 3.0 / 4.0</span>
+    </div>
+  </section>
+
+  <!-- ③ TARGETS -->
+  <section id="targets">
+    <h2><span class="idx">03</span>타깃 3종 (y1 · y2 · y3)</h2>
+    <p class="sub">한 XGBoost 예측기는 세 개의 부스터(<code>_y1.json</code> / <code>_y2.json</code> /
+      <code>_y3.json</code>)로 구성된다. 배치 점수는 <code>S = y1 − α·y2 (+ β·y3)</code>로 계산하며,
+      토큰 항(β·y3)은 생성 모델(LLM/VLM)이 실제로 가속기에 있을 때만 더한다. (α=0.3, β=0.5 기본값.)</p>
+    <div class="scroll" role="region" aria-label="타깃 정의">
+      <table>
+        <thead><tr><th>타깃</th><th>의미</th><th>원자료</th><th>가공</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="mono"><b>y1</b></td>
+            <td>총 처리량 (vision fps 합)</td>
+            <td class="mono">Σ throughput_fps</td>
+            <td>(models,workload,rate) 그룹 내 Fmax로 나눠 [0,1] 정규화</td>
+          </tr>
+          <tr>
+            <td class="mono"><b>y2</b></td>
+            <td>데드라인 미스율</td>
+            <td class="mono">deadline_miss_rate</td>
+            <td>이미 [0,1] — clip만 적용</td>
+          </tr>
+          <tr>
+            <td class="mono"><b>y3</b></td>
+            <td>생성 토큰 처리량 (tokens/s)</td>
+            <td class="mono">Σ tokens_per_s</td>
+            <td>정규화 + <b>조합단위 마스킹</b> (아래)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>y3 조합단위 마스킹 — 168/540 행 제외.</b> CPU에서 llama1b는 1회 생성에 ~198초가
+      걸려 180초 측정창에 0–1건만 완료된다 → 토큰 처리량이 순수 노이즈. 따라서 y3는 <b>LLM/VLM 뷰가 실제로
+      가속기(npu/gpu)에 배치된 조합</b>에서만 유효 라벨로 쓴다(<code>y3_valid</code>). vision-only 세트와
+      CPU-LLM 조합은 제외되어, y3는 <b>372행</b>으로만 학습된다. 이 마스킹이 없으면 LLM이 없는 세트에도
+      모델이 ~0.89 tokens를 뱉는 오류가 생긴다.</div>
+    <div class="callout"><b>정규화 그룹 키에 <code>models</code> 포함.</b> yolo11s는 15개 세트 중 9개에서 대표
+      워크로드라, (workload, rate)만으로 묶으면 2모델 세트의 처리량을 8모델 세트의 Fmax로 나누는 <b>세트크기
+      혼입</b>이 생긴다. 그룹 키를 (models, workload, rate)로 두어 T = “세트 내 최적 배치 대비 비율”이 되게 한다.</div>
+  </section>
+
+  <!-- ④ FEATURES -->
+  <section id="features">
+    <h2><span class="idx">04</span>37개 피쳐의 유래</h2>
+    <p class="sub">피쳐는 <b>뷰(view)별 정적 프로파일 + 스케줄 정보</b>에서만 만든다. 측정된 동적 값(실측 fps 등)은
+      <b>피쳐가 아니다</b> — 예측 시점에 알 수 없고 타깃을 누설하기 때문이다. 각 뷰에서 12개의 base 피쳐를 만든 뒤
+      창 단위로 <b>sum · mean · max</b> 3가지로 집계(12×3=36)하고, 여기에 뷰 개수(<code>views.count.views</code>)
+      1개를 더해 <b>총 37개</b>.</p>
+
+    <h3>Base 피쳐 12종 (뷰 단위)</h3>
+    <div class="scroll" role="region" aria-label="base 피쳐">
+      <table>
+        <thead><tr><th>base 피쳐</th><th>유형</th><th>설명</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">view.infps</td><td>스케줄</td><td>이 뷰에 배정된 목표 입력 fps</td></tr>
+          <tr><td class="mono">view.exec_cpu</td><td>배치(one-hot)</td><td>이 뷰가 CPU면 1</td></tr>
+          <tr><td class="mono">view.exec_gpu</td><td>배치(one-hot)</td><td>이 뷰가 GPU면 1</td></tr>
+          <tr><td class="mono">view.exec_npu</td><td>배치(one-hot)</td><td>이 뷰가 NPU면 1</td></tr>
+          <tr><td class="mono">view.is_vision</td><td>모델종류</td><td>vision 모델이면 1</td></tr>
+          <tr><td class="mono">view.is_llm</td><td>모델종류</td><td>LLM/VLM이면 1</td></tr>
+          <tr><td class="mono">view.static_infer_sel</td><td>정적 프로파일</td><td>선택 디바이스의 추론 지연(ms)</td></tr>
+          <tr><td class="mono">view.static_load_sel</td><td>정적 프로파일</td><td>선택 디바이스의 로드 시간(ms)</td></tr>
+          <tr><td class="mono">view.static_tokens_sel</td><td>정적 프로파일</td><td>선택 디바이스의 tokens/s (생성모델)</td></tr>
+          <tr><td class="mono">view.capacity_fps</td><td>파생</td><td>1000 / infer_ms — 무경합 처리량 상한</td></tr>
+          <tr><td class="mono">view.load_factor</td><td>파생</td><td>infps / capacity — 입력이 상한을 얼마나 미는지</td></tr>
+          <tr><td class="mono">x.infps__static_infer_sel</td><td>교차항</td><td>infps × infer_ms</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>집계 매트릭스 — 12 base × 3 집계 + 1 = 37</h3>
+    <div class="fmatrix scroll" role="region" aria-label="집계 매트릭스">
+      <table>
+        <thead><tr>
+          <th>base 피쳐</th>
+          <th class="r">views.sum</th><th class="r">views.mean</th><th class="r">views.max</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>view.infps</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.exec_cpu</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.exec_gpu</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.exec_npu</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.is_vision</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.is_llm</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.static_infer_sel</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.static_load_sel</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.static_tokens_sel</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.capacity_fps</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>view.load_factor</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td>x.infps__static_infer_sel</td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td><td class="r"><span class="tick">✓</span></td></tr>
+          <tr><td><b>views.count.views</b> (뷰 개수)</td><td class="r" colspan="3" style="text-align:center;color:var(--ink-2)">집계 무관 · 단일 피쳐 ×1</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin-top:14px">두 예측기의 피쳐 리스트는 <b>완전히 동일</b>하다(<code>exec_gpu</code>·<code>exec_npu</code>
+      one-hot이 둘 다 존재). 정적 프로파일은 <code>sample_profiling_data.json</code>의 <code>total_data</code>에서
+      모델×디바이스별 (load, infer, tokens_per_s)로 로드된다.</p>
+  </section>
+
+  <!-- ⑤ PIPELINE -->
+  <section id="pipeline">
+    <h2><span class="idx">05</span>수집 → 학습 → 검증 파이프라인</h2>
+    <p class="sub">한 플랫폼(예: CPU-GPU)의 전체 흐름. 순서가 곧 의존성이다.</p>
+    <ol class="flow">
+      <li><b>스케줄 생성</b><span class="d"><code>gen_collection_schedules.py</code> → <code>collect_cpu_{npu,gpu}.yaml</code> + <code>.meta.json</code> (540 조합, 시드 고정, 양 플랫폼 배치 정렬).</span></li>
+      <li><b>수집 실행</b><span class="d"><code>collect_run.py</code>가 조합을 랜덤 순서로 실행(<code>schedule_executor_main.py</code> 호출), 워밍업 20s·측정 180s, 20회마다 anchor 재측정, JSONL 증분 저장.</span></li>
+      <li><b>윈도우 복원</b><span class="d"><code>jsonl_to_windows.py {npu|gpu}</code>가 JSONL을 <code>performance_*.json</code> 측정창으로 변환.</span></li>
+      <li><b>데이터셋 빌드</b><span class="d"><code>build_dataset()</code> — featurize(37 피쳐) + 타깃 정규화 + y3 마스킹.</span></li>
+      <li><b>최종 학습</b><span class="d"><code>train_targets()</code> — 타깃별 3-fold CV로 하이퍼파라미터 선택 후 <code>deploy_cpu_{npu,gpu}_{y1,y2,y3}.json</code> 저장.</span></li>
+      <li><b>정직한 검증</b><span class="d"><code>out_of_fold_predictions()</code> → (세트,rate)별 Spearman. 최종 아티팩트에 손대지 않음.</span></li>
+    </ol>
+    <h3>하이퍼파라미터</h3>
+    <div class="legend">
+      <span class="chip">objective: reg:squarederror</span>
+      <span class="chip">num_boost_round: 300</span>
+      <span class="chip">CV grid: max_depth ∈ {3,4,5,6}, eta ∈ {0.05,0.1}</span>
+      <span class="chip">subsample 0.8 · colsample 0.8 · min_child_weight 3</span>
+      <span class="chip">seed 42 · 3-fold MAE 선택</span>
+    </div>
+  </section>
+
+  <!-- ⑥ PROGRAMS -->
+  <section id="programs">
+    <h2><span class="idx">06</span>프로그램과 사용법</h2>
+    <p class="sub">핵심 재사용 코드는 리포지토리에, 이번 재수집(Phase A/B) 실행 스크립트는 세션 스크래치패드에 있다.</p>
+    <div class="scroll" role="region" aria-label="프로그램 목록">
+      <table>
+        <thead><tr><th>프로그램</th><th>위치</th><th>역할</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">deploy_selector_xgb_suite.py</td><td class="mono">xgboost_model/</td><td>featurize · build_dataset · train · predict · out-of-fold. 학습/추론의 단일 소스.</td></tr>
+          <tr><td class="mono">gen_collection_schedules.py</td><td class="mono">xgboost_model/</td><td>540 조합 수집 스케줄 + meta 생성 (양 플랫폼 배치 정렬).</td></tr>
+          <tr><td class="mono">schedule_executor_main.py</td><td class="mono">(리포 루트)</td><td>한 조합을 실제 실행해 측정창을 남기는 실행기.</td></tr>
+          <tr><td class="mono">working_sets.yaml</td><td class="mono">(리포 루트)</td><td>정본 15 워킹셋·rate·층화 정의.</td></tr>
+          <tr><td class="mono">collect_run.py</td><td class="mono">scratchpad/</td><td>플랫폼별 순차 수집(anchor·JSONL·크래시복구).</td></tr>
+          <tr><td class="mono">jsonl_to_windows.py</td><td class="mono">scratchpad/</td><td>JSONL → performance 측정창 복원.</td></tr>
+          <tr><td class="mono">train_gpu.py / train_npu.py</td><td class="mono">scratchpad/</td><td>최종 아티팩트 학습 + out-of-fold 저장.</td></tr>
+          <tr><td class="mono">validate_gpu.py / validate_npu.py</td><td class="mono">scratchpad/</td><td>세트별 out-of-fold Spearman 검증.</td></tr>
+          <tr><td class="mono">checkpoint_gpu.py</td><td class="mono">scratchpad/</td><td>중간 체크포인트에서 S8 대칭성 확인(아티팩트 비파괴).</td></tr>
+          <tr><td class="mono">compare_platforms.py</td><td class="mono">scratchpad/</td><td>NPU vs GPU 실측 최적 배치 비교.</td></tr>
+          <tr><td class="mono">gpu_verify.py</td><td class="mono">scratchpad/</td><td>GPU 실제 실행(EP·GPU메모리) 검증, CPU 폴백 배제.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>학습 (CLI)</h3>
+    <code class="cmd">python xgboost_model/deploy_selector_xgb_suite.py train \
+  --perf_dir   &lt;windows_gpu 디렉터리&gt; \
+  --schedule_dir xgboost_model/schedules/collection \
+  --static_json xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json \
+  --model_out  xgboost_model/artifacts/deploy_cpu_gpu</code>
+
+    <h3>추론 / 배치 순위 (CLI)</h3>
+    <code class="cmd">python xgboost_model/deploy_selector_xgb_suite.py predict \
+  --schedule_yaml &lt;후보 배치 스케줄.yaml&gt; \
+  --static_json   xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json \
+  --model_in      xgboost_model/artifacts/deploy_cpu_gpu \
+  --alpha 0.3 --beta 0.5 --topk 5</code>
+    <p class="sub" style="margin-top:12px"><code>alpha</code>=데드라인 미스 페널티, <code>beta</code>=토큰 처리량 보상.
+      <code>topk</code>로 상위 배치를 뽑는다. NPU 예측기는 <code>deploy_cpu_npu</code>로 <code>--model_in</code>만 바꾼다.</p>
+  </section>
+
+  <!-- ⑦ FOLDERS -->
+  <section id="folders">
+    <h2><span class="idx">07</span>폴더 구조</h2>
+    <pre class="tree"><span class="c"># 리포지토리: multimodel-scheduling-mobilint/</span>
+xgboost_model/
+├── <span class="a">deploy_selector_xgb_suite.py</span>   <span class="c"># 학습·추론 단일 소스</span>
+├── <span class="a">gen_collection_schedules.py</span>    <span class="c"># 수집 스케줄 생성기</span>
+├── artifacts/
+│   ├── deploy_cpu_npu_{y1,y2,y3}.json       <span class="c"># NPU 부스터 3종</span>
+│   ├── deploy_cpu_npu_{features,coverage}.json
+│   ├── deploy_cpu_gpu_{y1,y2,y3}.json       <span class="c"># GPU 부스터 3종</span>
+│   ├── deploy_cpu_gpu_{features,coverage}.json
+│   └── pre_recollect_backup/    <span class="c"># 재수집 전 구 아티팩트 백업</span>
+├── schedules/collection/
+│   ├── collect_cpu_npu.yaml (+ .meta.json)
+│   └── collect_cpu_gpu.yaml (+ .meta.json)
+└── performance_data/
+    ├── sample_profiling_data/   <span class="c"># 정적 프로파일(피쳐 소스)</span>
+    ├── cpu_npu/ · cpu_gpu/      <span class="c"># 측정창(측정 원자료)</span>
+    ├── concurrency_cpu_gpu/
+    └── train/                   <span class="c"># rate-sweep 등 학습 로그</span>
+
+<span class="c"># 세션 스크래치패드 (Phase A/B 실행 스크립트·수집물)</span>
+scratchpad/
+├── collect_run.py · jsonl_to_windows.py
+├── train_{npu,gpu}.py · validate_{npu,gpu}.py
+├── checkpoint_gpu.py · compare_platforms.py · gpu_verify.py
+├── phaseB_ckpt.sh · phaseB_rest.sh
+└── collect/
+    ├── collect_{npu,gpu}_results.jsonl   <span class="c"># 원 수집 JSONL(각 540행)</span>
+    └── windows_{npu,gpu}/                <span class="c"># 복원된 측정창</span></pre>
+    <div class="callout"><b>산출물 요약.</b> 예측기 한 개 = 부스터 3개(<code>_y1/_y2/_y3.json</code>) +
+      피쳐 리스트(<code>_features.json</code>) + 커버리지(<code>_coverage.json</code>). 커버리지는 학습이 실제로 본
+      워킹셋·모델·뷰수·rate를 기록해 GUI가 미학습(out-of-distribution) 배치를 경고하는 데 쓰인다.</div>
+  </section>
+
+  <footer>
+    XGBoost 3-타깃 배치 예측기 · deploy_cpu_npu / deploy_cpu_gpu · 각 540행 · 37 피쳐 · out-of-fold 검증.
+    상세 수집·검증 근거는 <code>FULL_COLLECTION_NPU_REPORT.md</code> / <code>FULL_COLLECTION_GPU_REPORT.md</code> 참조.
+  </footer>
+
+</div>
+</body>
+</html>
