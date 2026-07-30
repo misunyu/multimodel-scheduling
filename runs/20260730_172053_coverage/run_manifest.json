@@ -1,0 +1,195 @@
+{
+  "run_id": "20260730_172053_coverage",
+  "purpose": "MLForSys appendix sampling-coverage table + verifications A-E; read-only over already-collected artifacts (no re-collection)",
+  "executed_at": "2026-07-30T17:30:50+09:00",
+  "git_commit": "9917c317d40be18b78a1ac8675b20df2300736d7",
+  "git_branch": "ubuntu_gpu_mobilint",
+  "git_commit_note": "HEAD at execution time (outputs committed on top of it)",
+  "scripts": [
+    {
+      "file": "build_coverage.py",
+      "sha256": "ed24854d0cc368b54bc39d16ff4130ac9654388ba094f7d6f5e89e7035eebb18",
+      "role": "computes appendix_coverage.csv + coverage_facts.json (A-E)"
+    },
+    {
+      "file": "make_manifest.py",
+      "sha256": "df190a5d914401e597e97029e06d08cc51db22e1df7b932ac1d2f8b9edf9e2ad",
+      "role": "this manifest"
+    }
+  ],
+  "outputs": [
+    {
+      "file": "appendix_coverage.csv",
+      "role": "artifact 1 -- 15 rows, one per working set"
+    },
+    {
+      "file": "coverage_report.md",
+      "role": "artifact 2 -- verifications A-E"
+    },
+    {
+      "file": "coverage_facts.json",
+      "role": "machine-readable form of every reported number"
+    }
+  ],
+  "input_artifacts": [
+    {
+      "path": "working_sets.yaml",
+      "sha256": "42a15580c58efc0074f837f7a5688e690e7beb3c0319e4746a83d0e2f40f4611",
+      "bytes": 2685
+    },
+    {
+      "path": "model_registry.py",
+      "sha256": "d66c50f684c80ef152a9ac333d30bf228524605e9997b85f0cd4f02a53e15fb5",
+      "bytes": 5983
+    },
+    {
+      "path": "xgboost_model/gen_collection_schedules.py",
+      "sha256": "a5b2d32b59d667956b58ca7e8bfe0a221a15fbe20d8eef16d48d0d742651b6c7",
+      "bytes": 5073
+    },
+    {
+      "path": "xgboost_model/deploy_selector_xgb_suite.py",
+      "sha256": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532",
+      "bytes": 35110
+    },
+    {
+      "path": "xgboost_model/schedules/collection/collect_cpu_gpu.yaml",
+      "sha256": "db65e8ee56f1708a14957879336e9bf57b19ec762357e73e64871244d4a92d57",
+      "bytes": 280752
+    },
+    {
+      "path": "xgboost_model/schedules/collection/collect_cpu_gpu.yaml.meta.json",
+      "sha256": "46409329c110fa3d66fa1cd975484415263bdd3cf01098c61a365d4ffc319231",
+      "bytes": 71786
+    },
+    {
+      "path": "xgboost_model/schedules/collection/collect_cpu_npu.yaml",
+      "sha256": "bd6c9c2f72a4e7699ca716424db4fbb5ccd1fc07d5b7d3678430b8aed5001d6d",
+      "bytes": 280752
+    },
+    {
+      "path": "xgboost_model/schedules/collection/collect_cpu_npu.yaml.meta.json",
+      "sha256": "46409329c110fa3d66fa1cd975484415263bdd3cf01098c61a365d4ffc319231",
+      "bytes": 71786
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_gpu/performance_gpu_full540.json",
+      "sha256": "813c915250bc924308223211770639e1ffc89b78665cfbb7c916acd837ed6a9d",
+      "bytes": 666231
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_npu/performance_npu_full540.json",
+      "sha256": "0fbf775ae5b59cf8a4b778115226334922a158e2db4a1179780e7480073e83d8",
+      "bytes": 665394
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/analysis_common.py",
+      "sha256": "cb5c9772e0d5e7b1664e530880733440ab87ae943ee96a5991f5fb5ffe71fa10",
+      "bytes": 11004
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/platform_divergence.md",
+      "sha256": "a46444169e13744cd55050bb933859200a75cd0bed7b50c1a15fddf8b709f1e5",
+      "bytes": 1079
+    }
+  ],
+  "consulted_not_used": {
+    "xgboost_model/performance_data/cpu_gpu/performance.json": "160-window pilot (2026-07-09/10), not the data the shipped predictors were trained on",
+    "xgboost_model/performance_data/cpu_npu/performance.json": "160-window pilot, same reason",
+    "xgboost_model/artifacts/deploy_cpu_gpu_coverage.json": "summary only (rows/model_sets/rate_factors); no per-set n_measured -- used for §D cross-check only",
+    "xgboost_model/artifacts/deploy_cpu_npu_coverage.json": "same as above",
+    "xgboost_model/full_collection_540/cpu_gpu/collect_gpu_results.jsonl": "duplicate of the windows file; read for cross-check only",
+    "xgboost_model/full_collection_540/cpu_npu/collect_npu_results.jsonl": "same as above"
+  },
+  "parameters": {
+    "alpha": 0.3,
+    "betas": [
+      1.0,
+      0.5
+    ],
+    "tie_eps": 1e-09,
+    "score_fn": "xgboost_model/deploy_selector_xgb_suite.py:score_combo",
+    "tie_rule": "tie-aware argmax: measured-best = all placements within 1e-09 of the group max; a group AGREES iff the two platforms' optimum sets intersect"
+  },
+  "headline_results": {
+    "A_symdiff_all_zero": true,
+    "A_measured_equals_scheduled": {
+      "gpu": true,
+      "npu": true
+    },
+    "B_qwen2_vl_cpu_rows": {
+      "gpu": 0,
+      "npu": 0
+    },
+    "B_pow2_holds_for_all_sets": false,
+    "B_pow2_holds_iff_set_has_vlm": true,
+    "B3_rate_levels_share_placement_set": true,
+    "artifact1_granularity": "set (15 rows)",
+    "C_exhaustive": {
+      "1.0": {
+        "n_groups": 30,
+        "n_disagree": 22,
+        "gen": {
+          "n": 24,
+          "d": 22
+        },
+        "vision": {
+          "n": 6,
+          "d": 0
+        }
+      },
+      "0.5": {
+        "n_groups": 30,
+        "n_disagree": 22,
+        "gen": {
+          "n": 24,
+          "d": 22
+        },
+        "vision": {
+          "n": 6,
+          "d": 0
+        }
+      }
+    },
+    "C_all45_crosscheck": {
+      "1.0": {
+        "n_groups": 45,
+        "n_disagree": 29
+      },
+      "0.5": {
+        "n_groups": 45,
+        "n_disagree": 30
+      }
+    },
+    "C_all45_matches_published_divergence_md": true,
+    "D": {
+      "gpu": {
+        "placements_ok": true,
+        "windows_ok": true,
+        "groups_ok": true
+      },
+      "npu": {
+        "placements_ok": true,
+        "windows_ok": true,
+        "groups_ok": true
+      }
+    },
+    "E": {
+      "S9": {
+        "mode": "sampled",
+        "n_feasible": 32,
+        "n_measured": 16
+      },
+      "S10": {
+        "mode": "sampled",
+        "n_feasible": 128,
+        "n_measured": 24
+      }
+    }
+  },
+  "unknowns": [],
+  "caveats": [
+    "No manuscript .tex exists in this repository (find . -name '*.tex' -> 0 hits), so the tie-aware argmax rule was taken from analysis_common.ranking_metrics (1e-9 tie set) and validated by reproducing the published 29/45 and 30/45 divergence figures.",
+    "The paths named in the task (xgboost_model/artifacts/cpu_gpu, .../cpu_npu) do not exist; artifacts/ is flat-named. Real per-placement data lives in full_collection_540/cpu_{gpu,npu}/."
+  ]
+}
