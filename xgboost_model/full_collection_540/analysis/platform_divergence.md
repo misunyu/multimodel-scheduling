@@ -9,6 +9,8 @@
   tie_rule: 1e-9 tie set; intersecting tie sets count as agreement
   predictor_involved: no (measured windows only)
   input_data: full_collection_540/{cpu_gpu,cpu_npu}/performance_{gpu,npu}_full540.json
+  generator: scripts/compare_platforms_v2.py --basis declared_normalized
+  score_definitions_from: runs/20260730_190154_score_basis_audit/build_basis_audit.py
   recomputation_run: runs/20260730_190154_score_basis_audit
   source_rows: runs/20260730_190154_score_basis_audit/divergence_by_group.csv
     (basis == declared_normalized)
@@ -32,7 +34,7 @@ v1은 같은 데이터에 **원시 측정 창 총계**를 그대로 넣어 점�
 간 실제 배치 선호 차이가 아니라 y3 단위 스케일의 반영이었다. 기저 감사·재계산 전체 근거는
 `runs/20260730_190154_score_basis_audit/basis_audit.md` (파트 1 기저 감사표, 파트 2a/2b).
 
-v1 산출물은 `platform_divergence_raw_v1.{md,csv}`로 보존되어 있다.
+v1 산출물은 `platform_divergence_raw_v1.{md,csv}`로 보존되어 있다 (`--basis raw`로 재생성).
 
 ## 요약
 
@@ -47,8 +49,7 @@ tie가 발생한 그룹은 양 β에서 0이므로 tie 규칙은 결과에 영�
 
 ## β=1.0 불일치 11그룹
 
-`S10@2.0`, `S5@3.0`, `S7@2.0`, `S8@2.0`, `base3@1.0`, `base3@3.0`, `base4@1.0`,
-`base4@3.0`, `base5@1.0`, `base5@2.0`, `base5@3.0`
+`S10@2.0`, `S5@3.0`, `S7@2.0`, `S8@2.0`, `base3@1.0`, `base3@3.0`, `base4@1.0`, `base4@3.0`, `base5@1.0`, `base5@2.0`, `base5@3.0`
 
 모델 수 N별 분해: N=2 0/3, N=3 0/9, **N=4 7/15**, N=5 1/6, N=6 0/3, N=7 2/6, N=8 1/3.
 
@@ -61,6 +62,7 @@ y1에 압도되어 vision 세트의 argmax가 양 플랫폼에서 항상 같았�
 ## β-민감 그룹
 
 **일치/불일치 판정이 뒤집히는 그룹 5개** (전부 β=1.0 일치 → β=0.5 불일치):
+
 `S5@2.0`, `base1@3.0`, `base2@3.0`, `base3@2.0`, `base4@2.0`
 
 참고로 **자기 optimum이 이동하는** 그룹(판정 뒤집힘과는 다른 양)은 GPU 1개(`S8@2.0`),
@@ -78,8 +80,7 @@ mode == exhaustive인 10세트 30그룹(`runs/20260730_172053_coverage` 기준) 
 | 1.0 | 22/30 (73.3%) | **8/30 (26.7%)** |
 | 0.5 | 22/30 | **13/30 (43.3%)** |
 
-선언 기저 β=1.0의 8그룹: `S5@3.0`, `base3@1.0`, `base3@3.0`, `base4@1.0`, `base4@3.0`,
-`base5@1.0`, `base5@2.0`, `base5@3.0`. vision-only는 0/6 (raw와 동일 — `S10@2.0`은 sampled
+선언 기저 β=1.0의 8그룹: `S5@3.0`, `base3@1.0`, `base3@3.0`, `base4@1.0`, `base4@3.0`, `base5@1.0`, `base5@2.0`, `base5@3.0`. vision-only는 0/6 (raw와 동일 — `S10@2.0`은 sampled
 세트라 이 30그룹에 포함되지 않는다).
 
 주의: raw 기저에서는 "exhaustive 한정 불일치율이 전체보다 높다"(73.3% vs 64.4%)고 쓸 수
