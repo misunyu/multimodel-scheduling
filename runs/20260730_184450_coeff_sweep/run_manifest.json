@@ -1,0 +1,173 @@
+{
+  "run_id": "20260730_184450_coeff_sweep",
+  "purpose": "MLForSys Appendix D coefficient sweep (alpha x beta) on measured scores + verification of the body's sensitivity-asymmetry claim",
+  "executed_at": "2026-07-30T18:49:54+09:00",
+  "git_commit": "37bbba2224c0f48dceb4eaadfeb5444d11fbc53d",
+  "git_branch": "ubuntu_gpu_mobilint",
+  "git_commit_note": "HEAD at execution time (outputs committed on top of it)",
+  "scripts": [
+    {
+      "file": "build_sweep.py",
+      "sha256": "f8eb39e8d7e6943e0078f86ea2b108cac1424045523b7a076121d7c6d77f0ab6"
+    },
+    {
+      "file": "make_manifest.py",
+      "sha256": "72370e021b94b2b069ececbedbde7b006eaa9132916a0daf6db81169e2a9d455"
+    }
+  ],
+  "outputs": [
+    {
+      "file": "sweep_setcounts.csv",
+      "role": "artifact 1 -- PRIMARY grid (pre-registered), 25 grid points"
+    },
+    {
+      "file": "sweep_setcounts_declared_grid.csv",
+      "role": "same columns on the task-declared grid, 35 points"
+    },
+    {
+      "file": "sweep_setcounts_normalized.csv",
+      "role": "secondary robustness variant on group-normalized measured targets"
+    },
+    {
+      "file": "sweep_report.md",
+      "role": "artifact 2 -- sections 0/A-F + UNKNOWNs"
+    },
+    {
+      "file": "sweep_facts.json",
+      "role": "artifact 3 -- machine-readable facts"
+    }
+  ],
+  "grid_provenance": {
+    "primary": {
+      "source": "SCORE_WEIGHTS_REVIEW.md section 2 (beta sweep table: 0/0.25/0.5/0.75/1.0; alpha sweep table: 0/0.15/0.3/0.45/0.6)",
+      "alphas": [
+        0.0,
+        0.15,
+        0.3,
+        0.45,
+        0.6
+      ],
+      "betas": [
+        0.0,
+        0.25,
+        0.5,
+        0.75,
+        1.0
+      ],
+      "n_points": 25
+    },
+    "declared": {
+      "source": "task prompt (used because its alpha list differs from the pre-registered one; reported alongside, not instead)",
+      "alphas": [
+        0.0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.6
+      ],
+      "betas": [
+        0.0,
+        0.25,
+        0.5,
+        0.75,
+        1.0
+      ],
+      "n_points": 35
+    }
+  },
+  "grid_note": "PRIMARY grid inherited from SCORE_WEIGHTS_REVIEW.md section 2 per the pre-registration principle; only the alpha/beta VALUE LISTS were inherited -- score basis (measured, not predicted), baseline (beta=1.0, not 0.5) and 2-D grid shape follow this task's definitions. No F3 artifact exists in the repository (see report section 0).",
+  "definitions": {
+    "baseline": {
+      "alpha": 0.3,
+      "beta": 1.0
+    },
+    "tie_eps": 1e-09,
+    "tie_rule": "optimum = all placements within 1e-9 of the group max; a group CHANGED iff its tie set does not intersect the baseline tie set",
+    "score_basis": "raw measured window totals (score_combo inputs); no predictor"
+  },
+  "input_artifacts": [
+    {
+      "path": "working_sets.yaml",
+      "sha256": "42a15580c58efc0074f837f7a5688e690e7beb3c0319e4746a83d0e2f40f4611",
+      "bytes": 2685
+    },
+    {
+      "path": "xgboost_model/deploy_selector_xgb_suite.py",
+      "sha256": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532",
+      "bytes": 35110
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_gpu/performance_gpu_full540.json",
+      "sha256": "813c915250bc924308223211770639e1ffc89b78665cfbb7c916acd837ed6a9d",
+      "bytes": 666231
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_npu/performance_npu_full540.json",
+      "sha256": "0fbf775ae5b59cf8a4b778115226334922a158e2db4a1179780e7480073e83d8",
+      "bytes": 665394
+    },
+    {
+      "path": "SCORE_WEIGHTS_REVIEW.md",
+      "sha256": "97c1eff5b6ae44908cf23820adef152f49f0907eb9b5d0606aeb32cae31d0cb3",
+      "bytes": 8026
+    },
+    {
+      "path": "BETA1_CPU_PLACEMENT.md",
+      "sha256": "fa202103b0817cc42dae0ec68960a685e9e3860bc4d064ffb75874a77288f08f",
+      "bytes": 5753
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/platform_divergence.md",
+      "sha256": "a46444169e13744cd55050bb933859200a75cd0bed7b50c1a15fddf8b709f1e5",
+      "bytes": 1079
+    }
+  ],
+  "headline_results": {
+    "body_claim": "GPU optimum unchanged across tested coefficients; NPU changes in up to 7 of 15 sets (alpha in [0,0.6], beta in [0,1])",
+    "verdict": "NOT REPRODUCED on measured scores; asymmetry direction is reversed",
+    "primary_grid": {
+      "n_grid_points": 25,
+      "gpu_max_changed_sets": 6,
+      "npu_max_changed_sets": 2,
+      "gpu_violating_points": 5
+    },
+    "declared_grid": {
+      "n_grid_points": 35,
+      "gpu_max_changed_sets": 6,
+      "npu_max_changed_sets": 2
+    },
+    "alpha_axis_has_no_effect_on_raw_scores": true,
+    "baseline_selfcheck_ok": true,
+    "C_beta_sensitive_group_counts": {
+      "gpu": 0,
+      "npu": 3
+    },
+    "E_divergence_matches_published": true,
+    "F_normalized_variant": {
+      "gpu_max_changed_sets": 9,
+      "npu_max_changed_sets": 11
+    },
+    "F_raw_scale": {
+      "gpu": {
+        "y1_min": 8.26,
+        "y1_max": 402.24,
+        "y2_min": 0.1522,
+        "y2_max": 1.0,
+        "y3_max": 180.78
+      },
+      "npu": {
+        "y1_min": 8.71,
+        "y1_max": 454.78,
+        "y2_min": 0.2872,
+        "y2_max": 1.0,
+        "y3_max": 22.6
+      }
+    }
+  },
+  "unknowns": [
+    "The manuscript .tex is not in this repository, so the body's exact wording, sweep range and the intended scale of 'measured-score' could not be checked against the source; the claim was compared against the text quoted in the task.",
+    "No 'F3' identifier exists anywhere in the repository, so the F3 rerun plan's intended grid/baseline/scale is unverifiable; the grid was inherited from the only real prior sweep (SCORE_WEIGHTS_REVIEW.md section 2)."
+  ]
+}
