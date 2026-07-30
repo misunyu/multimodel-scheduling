@@ -352,7 +352,8 @@ frames/s가 한 축에 섞인다.
 
 | 커밋 | 내용 |
 |---|---|
-| `<이 문서 커밋 시 채움>` | C3 재실행 24런 · 확정표 `c3_*` 82항목 · `fig/plot_c3_v11.py` + 사이드카 · 분석/생성 스크립트 2종 · 본 보고서 |
+| `45687e5` | `runs: store run artefacts verbatim` — `.gitattributes`에 `runs/** -text`. `core.autocrlf=input`이 `metrics.csv`를 체크인 시 정규화해 **커밋된 바이트가 `run_manifest.json`의 sha256과 달라지고 있었다**(작업 트리는 일치). 클론 후 `recompute_from_run.py`로 provenance를 확인할 수 없다는 뜻이며, 이는 `runs/README.md`의 수용 기준 그 자체다. 기존 380런의 줄바꿈이 복원됐고 **변경은 줄바꿈뿐**(HEAD와 CRLF→LF 후 바이트 동일 확인, 705파일 전부 매니페스트 해시 일치) |
+| `c380d7b` | C3 재실행 24런 · 확정표 `c3_*` 82항목 · `fig/plot_c3_v11.py` + 사이드카 45값 · 분석/생성 스크립트 2종 · 스케줄 18종 · `INCOMPLETE.md` 규약 · 본 보고서 |
 
 **푸시하지 않았다.** 미푸시 커밋은 `git log origin/ubuntu_gpu_fsrr..HEAD`로 확인한다.
 
