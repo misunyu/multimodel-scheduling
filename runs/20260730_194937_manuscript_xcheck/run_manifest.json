@@ -1,0 +1,189 @@
+{
+  "run_id": "20260730_194937_manuscript_xcheck",
+  "purpose": "Read-only cross-check of manuscript/mlforsys_main.tex against the repository artifacts, to close the UNKNOWNs carried by the four preceding runs",
+  "read_only": true,
+  "manuscript_modified": false,
+  "executed_at": "2026-07-30T19:53:22+09:00",
+  "git_commit": "88ab05123e4ceb3ffcf39cc0608ede2586db715f",
+  "git_branch": "ubuntu_gpu_mobilint",
+  "outputs": [
+    {
+      "file": "xcheck.md",
+      "role": "sections 1-6: mirror currency, basis, r1, tie, UNKNOWN closure table, manuscript-side findings"
+    },
+    {
+      "file": "r1_convention_recheck.json",
+      "role": "the required re-verification: disagreement SETS under both r1 conventions, both betas"
+    }
+  ],
+  "step1_mirror_currency": {
+    "marker_found": true,
+    "marker_line": 5,
+    "marker": "REVISION: 2026-07-30 r2 -- declared-basis numbers (11/45), Fig.1 removed, Appendix D/E added, 4-page body confirmed, fig_divergence v2 (sha256 3c13b1df...) embedded",
+    "aborted": false,
+    "embedded_figure_hash_check": {
+      "claimed_prefix": "3c13b1df",
+      "actual_sha256": "3c13b1dfe82814c0df6a7a4b7b715b35cd08912c316eaa215e0a575c098f1fd5",
+      "matches": true
+    },
+    "manuscript_sha256": "ae0a1ab4c67ec52a445566cb3c1391c083cf9ca37c65da9cb5dbc9cadf9d69a9",
+    "manuscript_lines": 353
+  },
+  "step2_basis": {
+    "verdict": "manuscript states the normalized (Eq. 1) basis explicitly",
+    "quote_line_99": "All measured-best placements and divergence counts below use this same normalized score; comparing raw measurements across platforms would instead let unit-scale differences dominate.",
+    "generators_agree": true,
+    "generators": [
+      "scripts/make_figures.py --fig f1 --basis declared_normalized",
+      "scripts/compare_platforms_v2.py --basis declared_normalized"
+    ],
+    "numeric_crosscheck": {
+      "appendix_D_cells_compared": 25,
+      "appendix_D_mismatches": 0,
+      "appendix_E_cells_compared": 75,
+      "appendix_E_mismatches": 0,
+      "headline_checks": 13,
+      "headline_failures": 0,
+      "raw_basis_figures_29_45_or_30_45_present_in_tex": false
+    }
+  },
+  "step3_r1_convention": {
+    "manuscript_r1": "aggregate vision throughput (line 91) = vision-view sum",
+    "generator_primary_r1": "total.total_throughput_fps = sum over ALL views",
+    "rows_differing": {
+      "gpu": 443,
+      "npu": 461
+    },
+    "recheck_both_betas_identical_sets": true,
+    "per_beta": {
+      "1.0": {
+        "identical": true,
+        "totals_only": [],
+        "vision_only": [],
+        "n": 11
+      },
+      "0.5": {
+        "identical": true,
+        "totals_only": [],
+        "vision_only": [],
+        "n": 16
+      }
+    },
+    "matches_audit_json": {
+      "1.0": true,
+      "0.5": true
+    },
+    "aborted": false,
+    "verdict": "no effect on any reported number; definitional mismatch flagged for the chat session to resolve (manuscript half-sentence or generator default), not changed here"
+  },
+  "step4_tie_rule": {
+    "manuscript_has_tie_statement": true,
+    "quotes": {
+      "line_121": "The oracle selects the candidate with the highest measured score S in each workload group and treats tied maxima as correct.",
+      "line_319": "whose group optimum leaves the baseline optimum set (alpha=0.3, beta=1.0; tie-aware)"
+    },
+    "numeric_tolerance_in_manuscript": false,
+    "code_convention": "1e-9 tie set (analysis_common.ranking_metrics, build_basis_audit.TIE_EPS)",
+    "semantics_match": true,
+    "groups_with_ties_declared_basis_both_betas": 0,
+    "note": "record as 'manuscript states tie-aware semantics; the 1e-9 tolerance is a code convention only'. Whether to add a half-sentence to the appendix is a chat-session decision."
+  },
+  "step5_unknown_closure": {
+    "closed": 5,
+    "partially_closed": 1,
+    "not_closed": 1,
+    "not_closed_items": [
+      "origin script for the 29/33 vs 0/12 gen/vision split (superseded by 10/33 vs 1/12; no split logic in the repo, not stated in the manuscript)",
+      "the 'F3' identifier itself (partially closed: Appendix D's table matches the pre-registered grid 25/25, but no 'F3' string exists in the manuscript)"
+    ]
+  },
+  "manuscript_side_findings_reported_not_changed": [
+    {
+      "line": 101,
+      "severity": "medium",
+      "issue": "'device memory determines placement feasibility' -- no memory constraint exists in the candidate generator; feasibility is the VLM pin alone, as Appendix E's 2^(N-#VLM) already states"
+    },
+    {
+      "lines": [
+        270,
+        315
+      ],
+      "severity": "low",
+      "issue": "appendix subsections are ordered A, B, C, E, D"
+    },
+    {
+      "lines": [
+        8,
+        21
+      ],
+      "severity": "low",
+      "issue": "neurips_2025.sty in use; comment marks the 2026 swap as PENDING"
+    },
+    {
+      "lines": [
+        15,
+        61
+      ],
+      "severity": "info",
+      "issue": "\\RES/\\TODO macros defined; zero uses in body or appendix (only a comment and a commented-out author line)"
+    }
+  ],
+  "input_artifacts": [
+    {
+      "path": "manuscript/mlforsys_main.tex",
+      "sha256": "ae0a1ab4c67ec52a445566cb3c1391c083cf9ca37c65da9cb5dbc9cadf9d69a9",
+      "bytes": 25926
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/figures/fig_divergence.pdf",
+      "sha256": "3c13b1dfe82814c0df6a7a4b7b715b35cd08912c316eaa215e0a575c098f1fd5",
+      "bytes": 13462
+    },
+    {
+      "path": "runs/20260730_190154_score_basis_audit/build_basis_audit.py",
+      "sha256": "4317e057c170c273750453a2c62f90a72c4faa09df824c70ef83cc379c83f895",
+      "bytes": 14568
+    },
+    {
+      "path": "runs/20260730_190154_score_basis_audit/basis_facts.json",
+      "sha256": "1d8bbc0449bb4374ebb46bad329dfe8b16c76ed7714bf0535ed99c86bece4a8f",
+      "bytes": 10165
+    },
+    {
+      "path": "runs/20260730_190154_score_basis_audit/sweep_declared_basis.csv",
+      "sha256": "2621bc85a7c29dceb27539f0bbf0f556271794ca768f10ceaa2b753ac80e4a6a",
+      "bytes": 1426
+    },
+    {
+      "path": "runs/20260730_172053_coverage/appendix_coverage.csv",
+      "sha256": "b02c1c71a49f2d5ccd7518ce6a50a6f208dc048030bac42f28aac54c62eedd75",
+      "bytes": 8266
+    },
+    {
+      "path": "runs/20260730_172053_coverage/coverage_facts.json",
+      "sha256": "e35c308f54e68012fb7844fae795b5ad3e1ede8911b861b454a722da776aca7e",
+      "bytes": 28761
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/groupkfold_gpu_metrics.json",
+      "sha256": "5f1b48849523ec171d8684cbc53d489fc89cb9d01e84e6801748ba3af9ff1998",
+      "bytes": 16365
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/groupkfold_npu_metrics.json",
+      "sha256": "0040264e8c84b99d269a41fd0dc7ec598d6ae5ae31633c830e08c53b9ef72199",
+      "bytes": 16585
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_gpu/performance_gpu_full540.json",
+      "sha256": "813c915250bc924308223211770639e1ffc89b78665cfbb7c916acd837ed6a9d",
+      "bytes": 666231
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_npu/performance_npu_full540.json",
+      "sha256": "0fbf775ae5b59cf8a4b778115226334922a158e2db4a1179780e7480073e83d8",
+      "bytes": 665394
+    }
+  ],
+  "unknowns": []
+}
