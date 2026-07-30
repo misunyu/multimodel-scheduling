@@ -1,0 +1,258 @@
+{
+  "run_id": "20260730_190154_score_basis_audit",
+  "purpose": "Audit the score basis of every headline number against the paper's declared Eq. (1) basis, and recompute on the declared basis",
+  "executed_at": "2026-07-30T19:06:20+09:00",
+  "git_commit": "9f2dbfb7792946471c254fae1279bf656a2c17b8",
+  "git_branch": "ubuntu_gpu_mobilint",
+  "git_commit_note": "HEAD at execution time (outputs committed on top of it)",
+  "scripts": [
+    {
+      "file": "build_basis_audit.py",
+      "sha256": "4317e057c170c273750453a2c62f90a72c4faa09df824c70ef83cc379c83f895"
+    },
+    {
+      "file": "make_manifest.py",
+      "sha256": "992e0efaa6457ee870e632228c407096d66e987d6d18917cc09dbd8608ed276c"
+    }
+  ],
+  "outputs": [
+    {
+      "file": "basis_audit.md",
+      "role": "part 1 basis-audit table + part 2 recomputation + changed-sentence list"
+    },
+    {
+      "file": "basis_facts.json",
+      "role": "machine-readable facts"
+    },
+    {
+      "file": "sweep_declared_basis.csv",
+      "role": "part 2c/2d sweep, 25 grid points"
+    },
+    {
+      "file": "divergence_by_group.csv",
+      "role": "per-group optima and agreement, both bases x both betas (180 rows)"
+    }
+  ],
+  "declared_basis": {
+    "group": "(set, rate)",
+    "y1": "r1 / max(r1) within group",
+    "y3": "r3 / max(r3) within group",
+    "y2": "(r2 - min r2) / (max r2 - min r2); 0 when max == min",
+    "score": "S = y1 - 0.3*y2 + beta*y3 (beta term only for generative sets)",
+    "betas": [
+      1.0,
+      0.5
+    ],
+    "tie_rule": "1e-9 tie set; intersecting tie sets count as agreement",
+    "y3_mask_convention": "_normalize_targets takes max(r3) over ALL rows of the group; y3_valid is used only to mask TRAINING rows, never the normalization denominator",
+    "y3_mask_empirical_effect": {
+      "gpu": {
+        "groups_where_denominator_differs": 0,
+        "n_groups": 45
+      },
+      "npu": {
+        "groups_where_denominator_differs": 0,
+        "n_groups": 45
+      }
+    },
+    "r1_source": "full540 measured window totals (total.total_throughput_fps)"
+  },
+  "input_artifacts": [
+    {
+      "path": "working_sets.yaml",
+      "sha256": "42a15580c58efc0074f837f7a5688e690e7beb3c0319e4746a83d0e2f40f4611",
+      "bytes": 2685
+    },
+    {
+      "path": "xgboost_model/deploy_selector_xgb_suite.py",
+      "sha256": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532",
+      "bytes": 35110
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_gpu/performance_gpu_full540.json",
+      "sha256": "813c915250bc924308223211770639e1ffc89b78665cfbb7c916acd837ed6a9d",
+      "bytes": 666231
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_npu/performance_npu_full540.json",
+      "sha256": "0fbf775ae5b59cf8a4b778115226334922a158e2db4a1179780e7480073e83d8",
+      "bytes": 665394
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/analysis_common.py",
+      "sha256": "cb5c9772e0d5e7b1664e530880733440ab87ae943ee96a5991f5fb5ffe71fa10",
+      "bytes": 11004
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/compare_platforms_v2.py",
+      "sha256": "8539adc5f8e6137b3c5f93423d7a215bf28bcd9e900cc4a17c535dbe530019e9",
+      "bytes": 5109
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/train_groupkfold.py",
+      "sha256": "a7e1f1058631c7bf1705a2b42aaefacf8bfe11c55309ef78525204ca64d89f6f",
+      "bytes": 10543
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/train_unified.py",
+      "sha256": "444587b05e5243e2645f9baa8fb6a14c89973c2bbd0fedaa43ba24fe29b56cab",
+      "bytes": 8399
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/cross_platform_transfer.py",
+      "sha256": "ebbc6653b91e7c4bea8dfb662a10700c555a84ab2e4fd0fcb1f4c61c8cacec40",
+      "bytes": 8141
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/train_decomposed.py",
+      "sha256": "d5608fb863c52468c3657ac8f934ad129dacfd837553645d2af5475935938769",
+      "bytes": 13888
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/greedy_baseline.py",
+      "sha256": "579b9ac471efde32023eac347c690cf82abac7d4eca789ad9b5c317fe4e2f239",
+      "bytes": 8859
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/jsonl_to_windows.py",
+      "sha256": "0a4a367cf83e0f02110fd2d91bd2bc557a5be3030d27bc07d84972c0f8805922",
+      "bytes": 3092
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/platform_divergence.csv",
+      "sha256": "7b7fd1f25588829035d6219e0252cba579594b4647d4d93f7ed8ebe513247959",
+      "bytes": 13436
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/groupkfold_gpu_metrics.json",
+      "sha256": "5f1b48849523ec171d8684cbc53d489fc89cb9d01e84e6801748ba3af9ff1998",
+      "bytes": 16365
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/groupkfold_npu_metrics.json",
+      "sha256": "0040264e8c84b99d269a41fd0dc7ec598d6ae5ae31633c830e08c53b9ef72199",
+      "bytes": 16585
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/greedy_summary.md",
+      "sha256": "cac45bf9f35e852e1708ea0e5e5ba16f2a61df4d9b36eb1ae6f483532db2350f",
+      "bytes": 2604
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/SUMMARY.md",
+      "sha256": "2c0d445e640061e31fc3b2f05138e630527e4f5d2948e772ab453a8dbe1c8529",
+      "bytes": 7303
+    }
+  ],
+  "prior_runs_referenced": {
+    "runs/20260730_172053_coverage": "sampling-coverage table; source of the raw-basis 22/30 exhaustive figure and the exhaustive set list",
+    "runs/20260730_184450_coeff_sweep": "alpha x beta sweep; its F_normalized_variant (GPU 9 / NPU 11) is cross-checked in part 2c"
+  },
+  "headline_results": {
+    "part1_basis_by_number": {
+      "divergence_29_45_and_30_45": "raw",
+      "gen_29_of_33_and_vision_0_of_12": "raw (derived from platform_divergence.csv)",
+      "spearman_top1_top5": "normalized",
+      "transfer_and_unified": "normalized",
+      "greedy_and_decomposed": "normalized",
+      "appendix_A_per_set_spearman": "normalized",
+      "exhaustive_22_of_30": "raw"
+    },
+    "part1_raw_basis_reproduced": {
+      "29_45_and_30_45": true,
+      "29_of_33_and_0_of_12": true
+    },
+    "part1_r1_convention_gap": {
+      "gpu": {
+        "n_rows_differing": 443,
+        "max_abs_diff_fps": 0.8600000000000136,
+        "note": "total.total_throughput_fps (all views) vs featurize_window's vision-only y1"
+      },
+      "npu": {
+        "n_rows_differing": 461,
+        "max_abs_diff_fps": 0.44999999999998863,
+        "note": "total.total_throughput_fps (all views) vs featurize_window's vision-only y1"
+      }
+    },
+    "part2a_declared_basis": {
+      "1.0": {
+        "n_disagree": 11,
+        "gen": {
+          "n": 33,
+          "d": 10
+        },
+        "vision": {
+          "n": 12,
+          "d": 1
+        }
+      },
+      "0.5": {
+        "n_disagree": 16,
+        "gen": {
+          "n": 33,
+          "d": 15
+        },
+        "vision": {
+          "n": 12,
+          "d": 1
+        }
+      }
+    },
+    "part2a_beta_sensitive": {
+      "own_optimum_moves": {
+        "gpu": [
+          "S8@2.0"
+        ],
+        "npu": [
+          "S5@2.0",
+          "S7@2.0",
+          "base1@3.0",
+          "base2@3.0",
+          "base3@2.0",
+          "base4@2.0"
+        ]
+      },
+      "agreement_verdict_flips": [
+        "S5@2.0",
+        "base1@3.0",
+        "base2@3.0",
+        "base3@2.0",
+        "base4@2.0"
+      ]
+    },
+    "part2b_exhaustive": {
+      "1.0": {
+        "declared": 8,
+        "raw": 22
+      },
+      "0.5": {
+        "declared": 13,
+        "raw": 22
+      }
+    },
+    "part2c_sweep": {
+      "gpu_max_changed_sets": 9,
+      "npu_max_changed_sets": 11,
+      "matches_prior_F_variant": true
+    },
+    "part2d_beta_split": {
+      "beta_zero_column": {
+        "n_points": 5,
+        "gpu_max": 9,
+        "npu_max": 11
+      },
+      "beta_positive_columns": {
+        "n_points": 20,
+        "gpu_max": 3,
+        "npu_max": 9
+      },
+      "note": "reported separately without a recommendation on the paper's range"
+    },
+    "part3": "NOT RUN -- its precondition (raw measured-best basis for c-f) is false; c-f are already computed on the declared normalized basis"
+  },
+  "unknowns": [
+    "Eq. (1)'s r1 definition (all-view sum vs vision-only sum) cannot be checked: no .tex in this repository. Divergence conclusions are identical under both conventions, so no reported number depends on it.",
+    "Whether the manuscript describes divergence as following Eq. (1) or explicitly as raw measured totals is unverifiable for the same reason.",
+    "The producing script for the 29/33 vs 0/12 gen/vision split was not found (no gen/vision split logic in any analysis script); the values were reproduced from platform_divergence.csv, but the original derivation path is unknown."
+  ]
+}
