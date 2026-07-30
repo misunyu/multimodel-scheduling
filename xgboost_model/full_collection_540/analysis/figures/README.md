@@ -5,9 +5,29 @@
 
 ## F1 — fig_divergence.{pdf,png}
 
-- 생성: 2026-07-30 10:59 KST, HEAD `1ee0f8e` (pre-commit), 인자 `--fig f1`
-- 입력: `analysis/platform_divergence.csv`의 **β=1.0 행 45개** (P2, commit 154f114)
+- **generator**: `scripts/make_figures.py --fig f1 --basis declared_normalized`
+  (`--basis`가 기본값이므로 `--fig f1`만으로도 동일. `--basis raw`는 폐기된 v1 재현용)
+- **basis**: `declared_normalized` — 원고 식 (1)의 그룹 정규화 점수.
+  그룹 = (세트, rate), `y1 = r1/max(r1)`, `y3 = r3/max(r3)`,
+  `y2 = (r2−min)/(max−min)` (max==min이면 0), `S = y1 − 0.3·y2 + β·y3`(생성 세트만), β=1.0.
+  점수 정의는 스크립트가 재구현하지 않고
+  `runs/20260730_190154_score_basis_audit/build_basis_audit.py`의
+  `normalize()/score()/tie_sets()`를 그대로 import해서 쓴다.
+- **입력**: `full_collection_540/cpu_{gpu,npu}/performance_{gpu,npu}_full540.json`
+  (측정 창 원본에서 재계산) + 검증 대조용
+  `runs/20260730_190154_score_basis_audit/divergence_by_group.csv`
+  (`basis == declared_normalized`, β=1.0 행 45개)
+- **검증**: 스크립트가 그리기 전에 불일치 집합을 (a) 위 CSV, (b) 기대 11그룹 목록과
+  대조하는 assert를 통과해야 한다. 불일치 시 그림을 쓰지 않고 실패한다.
+- 재생성: 2026-07-30 19:1x KST, HEAD `6d068e2` (pre-commit)
 - figsize (3.4, 2.6)in, 색: 일치 `#E8E8E8` / 불일치 `#DE8F05`, 셀 내 텍스트 없음
+  (셀 배열·색·축 규약은 v1과 동일 — 캡션의 "orange cells" 참조가 유지된다)
+
+> **기저 변경 이력**: 최초 판(2026-07-30 10:59, HEAD `1ee0f8e`)은
+> `analysis/platform_divergence.csv`의 raw 기저 행을 읽어 **29/45**를 그렸다. 기저 감사
+> (`runs/20260730_190154_score_basis_audit`)에서 그 CSV가 식 (1)이 아닌 원시 총계 기저임이
+> 확인되어, 선언 기저로 재생성했다(**11/45**). raw 기저 입력은
+> `analysis/platform_divergence_raw_v1.csv`로 보존.
 
 ### 세트 순서 결정
 
@@ -23,14 +43,18 @@ S6, S10, S7, S8. (지시문의 서술 순서 대신 N 오름차순을 택함 —
 | S2, S3, S4, base1–5, S5, S9 | 1.0 | 2.0 | 3.0 |
 | S6, S7, S8, S10 | 1.0 | 1.5 | 2.0 |
 
-### 불일치 분포 (캡션 문구용)
+### 불일치 분포 (캡션 문구용) — 선언 기저 β=1.0
 
-- 전체 **29/45 불일치** (β=1.0)
-- N별: N=2 0/3, N=3 4/9, **N=4 15/15 (base1–5 전부, 모든 rate)**, N=5 3/6,
-  N=6 3/3, N=7 3/6, N=8 1/3
-- 패턴은 "큰 N·고rate 집중"이 **아니라** 세트 단위 전부-또는-전무에 가깝다:
-  4모델 base 세트와 S3·S5·S6·S7은 세 rate 모두 불일치, S1·S2·S9·S10은 모두
-  일치. rate가 가르는 세트는 S4(low에서만 불일치)와 S8(high에서만 불일치) 둘뿐.
+- 전체 **11/45 불일치**
+- N별: N=2 0/3, N=3 0/9, **N=4 7/15**, N=5 1/6, N=6 0/3, N=7 2/6, N=8 1/3
+- 불일치 11그룹: `base3@1.0`, `base3@3.0`, `base4@1.0`, `base4@3.0`,
+  `base5@1.0`, `base5@2.0`, `base5@3.0`, `S5@3.0`, `S10@2.0`, `S7@2.0`, `S8@2.0`
+- 패턴: **4모델 base 세트(base3–5)에 집중**되고, 나머지는 각 세트의 **high rate 열**에
+  단발로 나타난다(S5·S7·S8·S10). base1·base2·S3·S4·S6·S9·S1·S2는 세 rate 모두 일치.
+  base5만 세 rate 전부 불일치, base3·base4는 low·high만(mid는 일치).
+- v1(raw)의 "세트 단위 전부-또는-전무" 패턴은 이 기저에서 사라진다. 또한 v1에서 0/12였던
+  **vision-only에 불일치 1건**이 생긴다(`S10@2.0`) — 캡션에서 "vision-only는 전부 일치"라고
+  쓸 수 없다.
 
 ## F2 — fig_transfer.{pdf,png}
 

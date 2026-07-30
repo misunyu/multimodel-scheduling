@@ -7,6 +7,13 @@ embedded (Type 42) fonts + a dpi=200 PNG proof for each figure.
   python make_figures.py --fig f1   -> analysis/figures/fig_divergence.{pdf,png}
   python make_figures.py --fig f2   -> analysis/figures/fig_transfer.{pdf,png}
 
+F1 takes an explicit --basis (default "declared_normalized", the manuscript's Eq. (1)
+per-group normalization). It recomputes the divergence through the basis-audit run's
+build_basis_audit module -- the score definitions live there, not here -- and asserts
+the resulting disagreement set against that run's divergence_by_group.csv and the
+expected 11-group list before anything is drawn. "--basis raw" reproduces the
+superseded v1 figure from platform_divergence_raw_v1.csv.
+
 Palette (colorblind-safe, no red/green): blue #0173B2, orange #DE8F05, plus
 grays. The "unified" bar uses #CCCCCC instead of the mid-gray #999999 because
 #999999 is isoluminant with the orange (grayscale-print ambiguity); #CCCCCC
@@ -14,6 +21,7 @@ keeps a monotone lightness order blue < orange < gray.
 """
 import argparse
 import csv
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -46,18 +54,84 @@ SET_N = {"S1": 2, "S2": 3, "S3": 3, "S4": 3, "base1": 4, "base2": 4,
          "S10": 7, "S7": 7, "S8": 8}
 
 
-def load_divergence():
-    """(set, rate) -> same(0/1) for the beta=1.0 rows of platform_divergence.csv."""
+# F1's score basis is an EXPLICIT parameter, not an implicit property of whichever
+# csv happens to sit in analysis/. "declared_normalized" is the manuscript's Eq. (1)
+# basis (per-group normalization); "raw" reproduces the superseded v1 figure built on
+# raw measured window totals. See the basis audit run below and figures/README.md.
+BASIS_CHOICES = ("declared_normalized", "raw")
+AUDIT_RUN = ac.ROOT / "runs" / "20260730_190154_score_basis_audit"
+# The 11 disagreeing groups the declared basis must yield (audit run, beta=1.0).
+EXPECTED_DECLARED_DIFF = {
+    "S10@2.0", "S5@3.0", "S7@2.0", "S8@2.0", "base3@1.0", "base3@3.0",
+    "base4@1.0", "base4@3.0", "base5@1.0", "base5@2.0", "base5@3.0"}
+
+
+def _load_audit_module():
+    """Import the audit run's build_basis_audit so the score definitions are shared.
+
+    F1 must not re-implement normalization/scoring/tie-breaking: it reuses that
+    module's normalize() / score() / tie_sets() verbatim.
+    """
+    path = AUDIT_RUN / "build_basis_audit.py"
+    spec = importlib.util.spec_from_file_location("build_basis_audit", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _audit_csv_diff_groups(basis, beta=1.0):
+    """Disagreeing groups recorded in the audit run's divergence_by_group.csv."""
+    out = set()
+    with open(AUDIT_RUN / "divergence_by_group.csv") as fh:
+        for r in csv.DictReader(fh):
+            if r["basis"] == basis and float(r["beta"]) == beta and int(r["agree"]) == 0:
+                out.add(f"{r['set']}@{float(r['rate'])}")
+    return out
+
+
+def load_divergence_declared(beta=1.0):
+    """(set, rate) -> same(0/1) on the declared (Eq. 1) basis, recomputed + asserted.
+
+    Recomputes from the measured windows through the audit module, then checks the
+    result against BOTH the audit run's per-group csv and the expected 11-group list.
+    A mismatch is a hard failure: the figure is never written from unverified data.
+    """
+    bba = _load_audit_module()
+    rows = {pl: bba.normalize(bba.load_rows(pl), "r1_totals") for pl in ("gpu", "npu")}
+    tg = bba.tie_sets(rows["gpu"], bba.ALPHA, beta, "normalized")
+    tn = bba.tie_sets(rows["npu"], bba.ALPHA, beta, "normalized")
+    same = {k: int(bool(tg[k] & tn[k])) for k in tg}
+
+    got = {f"{s}@{float(r)}" for (s, r), v in same.items() if not v}
+    from_csv = _audit_csv_diff_groups("declared_normalized", beta)
+    assert got == from_csv, (
+        "declared-basis disagreement set differs from the audit csv:\n"
+        f"  recomputed-only: {sorted(got - from_csv)}\n"
+        f"  csv-only:        {sorted(from_csv - got)}")
+    if beta == 1.0:
+        assert got == EXPECTED_DECLARED_DIFF, (
+            "declared-basis disagreement set differs from the expected 11 groups:\n"
+            f"  unexpected: {sorted(got - EXPECTED_DECLARED_DIFF)}\n"
+            f"  missing:    {sorted(EXPECTED_DECLARED_DIFF - got)}")
+    print(f"F1 basis=declared_normalized beta={beta}: "
+          f"{len(got)}/{len(same)} disagree, assert OK (audit csv + expected list)")
+    return same
+
+
+def load_divergence_raw():
+    """(set, rate) -> same(0/1) for the beta=1.0 rows of the superseded v1 csv."""
     rows = {}
-    with open(ac.ANALYSIS / "platform_divergence.csv") as fh:
+    with open(ac.ANALYSIS / "platform_divergence_raw_v1.csv") as fh:
         for r in csv.DictReader(line for line in fh if not line.startswith("#")):
             if float(r["beta"]) == 1.0:
                 rows[(r["set"], float(r["rate"]))] = int(r["same"])
     return rows
 
 
-def fig_f1():
-    rows = load_divergence()
+def fig_f1(basis="declared_normalized"):
+    assert basis in BASIS_CHOICES, basis
+    rows = (load_divergence_declared() if basis == "declared_normalized"
+            else load_divergence_raw())
     rates_of = {s: sorted(r for (ss, r) in rows if ss == s) for s in SET_ORDER}
     assert all(len(v) == 3 for v in rates_of.values())
     # matrix[y][x]: y = set (N ascending, top->bottom), x = low/mid/high rate
@@ -97,7 +171,7 @@ def fig_f1():
         d, n = sum(diff[y]), SET_N[s]
         a, b = by_n.get(n, (0, 0))
         by_n[n] = (a + d, b + 3)
-    return {"n_diff": n_diff, "by_n": by_n, "rates_of": rates_of}
+    return {"basis": basis, "n_diff": n_diff, "by_n": by_n, "rates_of": rates_of}
 
 
 def fig_f2():
@@ -171,7 +245,10 @@ def save(fig, name):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--fig", choices=["f1", "f2"], required=True)
+    ap.add_argument("--basis", choices=list(BASIS_CHOICES),
+                    default="declared_normalized",
+                    help="F1 score basis (default: the manuscript's Eq. (1) basis)")
     args = ap.parse_args()
-    info = fig_f1() if args.fig == "f1" else fig_f2()
+    info = fig_f1(args.basis) if args.fig == "f1" else fig_f2()
     print(json.dumps({str(k): v for k, v in (info or {}).items()
                       if k != "rates_of"}, default=str, ensure_ascii=False))

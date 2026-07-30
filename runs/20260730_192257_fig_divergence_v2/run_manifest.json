@@ -1,0 +1,159 @@
+{
+  "run_id": "20260730_192257_fig_divergence_v2",
+  "purpose": "Regenerate manuscript Figure 2 (fig_divergence) on the declared Eq. (1) basis and replace the raw-basis platform_divergence analysis artifacts with basis-explicit v2 versions",
+  "executed_at": "2026-07-30T19:23:50+09:00",
+  "git_commit": "6d068e2493804244e08082188d693a3a061e566c",
+  "git_branch": "ubuntu_gpu_mobilint",
+  "git_commit_note": "HEAD at execution time (outputs committed on top of it)",
+  "generator": {
+    "script": "xgboost_model/full_collection_540/scripts/make_figures.py",
+    "sha256": "2582aa59fe8fe85ee16b33467a701c9f5c65e93928f729aa76ffb5b4e6d0ede8",
+    "invocation": "python make_figures.py --fig f1 --basis declared_normalized",
+    "change": "added an explicit --basis parameter (default declared_normalized); F1 now recomputes divergence through the audit run's build_basis_audit.normalize()/score()/tie_sets() instead of reading a basis-implicit csv, and asserts the result before drawing. The raw path is retained as --basis raw over the renamed v1 csv. Original version is preserved in git history (no file-copy backup).",
+    "modified_in_place_not_new_script": true
+  },
+  "basis": {
+    "name": "declared_normalized",
+    "group": "(set, rate)",
+    "definition": "y1 = r1/max(r1); y3 = r3/max(r3); y2 = (r2-min r2)/(max r2-min r2), 0 when max == min; S = y1 - 0.3*y2 + beta*y3 (beta term only for generative sets)",
+    "beta": 1.0,
+    "beta_0_5_figure_generated": false,
+    "tie_rule": "1e-9 tie set; intersecting tie sets count as agreement",
+    "score_definitions_shared_from": "runs/20260730_190154_score_basis_audit/build_basis_audit.py"
+  },
+  "assert_results": {
+    "n_disagree": 11,
+    "n_groups": 45,
+    "expected_groups": [
+      "S10@2.0",
+      "S5@3.0",
+      "S7@2.0",
+      "S8@2.0",
+      "base3@1.0",
+      "base3@3.0",
+      "base4@1.0",
+      "base4@3.0",
+      "base5@1.0",
+      "base5@2.0",
+      "base5@3.0"
+    ],
+    "matches_audit_csv": true,
+    "matches_expected_11_group_list": true,
+    "passed": true,
+    "note": "both asserts live inside make_figures.load_divergence_declared(); the figure is not written unless they pass"
+  },
+  "figure_text_verification": {
+    "method": "pdftotext fig_divergence.pdf",
+    "residual_29_occurrences": 0,
+    "contains_11_of_45": true,
+    "legend_line": "different placement (11/45)",
+    "passed": true
+  },
+  "input_artifacts": [
+    {
+      "path": "runs/20260730_190154_score_basis_audit/divergence_by_group.csv",
+      "sha256": "c6aa5d36a1a4ec8a01d44465d21796a8989acbc9045267fd426311418de54fab",
+      "bytes": 9678
+    },
+    {
+      "path": "runs/20260730_190154_score_basis_audit/build_basis_audit.py",
+      "sha256": "4317e057c170c273750453a2c62f90a72c4faa09df824c70ef83cc379c83f895",
+      "bytes": 14568
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_gpu/performance_gpu_full540.json",
+      "sha256": "813c915250bc924308223211770639e1ffc89b78665cfbb7c916acd837ed6a9d",
+      "bytes": 666231
+    },
+    {
+      "path": "xgboost_model/full_collection_540/cpu_npu/performance_npu_full540.json",
+      "sha256": "0fbf775ae5b59cf8a4b778115226334922a158e2db4a1179780e7480073e83d8",
+      "bytes": 665394
+    }
+  ],
+  "outputs_modified_in_place": [
+    {
+      "path": "xgboost_model/full_collection_540/scripts/make_figures.py",
+      "sha256": "2582aa59fe8fe85ee16b33467a701c9f5c65e93928f729aa76ffb5b4e6d0ede8",
+      "bytes": 11757
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/figures/fig_divergence.pdf",
+      "sha256": "3c13b1dfe82814c0df6a7a4b7b715b35cd08912c316eaa215e0a575c098f1fd5",
+      "bytes": 13462
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/figures/fig_divergence.png",
+      "sha256": "7972b922b1f2de8c0ff2dabfb8dfb00f67cae84bcc441177ce9a613cc186abd5",
+      "bytes": 48618
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/figures/README.md",
+      "sha256": "c56cc573198f7ff4277495d577bad8b79f86b3e460bb16ec5e1166b360fc53ff",
+      "bytes": 5538
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/platform_divergence.md",
+      "sha256": "274d3ceaa9df18e70546af46532c0e2aa204caff67aeaf16e881131990936c8e",
+      "bytes": 4768
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/platform_divergence.csv",
+      "sha256": "3de5a7c9070acbd2aec7afedb62e474b6ac4e17499b6da836d2e9f9d7c337a2e",
+      "bytes": 5989
+    }
+  ],
+  "renamed_for_preservation": {
+    "xgboost_model/full_collection_540/analysis/platform_divergence.md": "xgboost_model/full_collection_540/analysis/platform_divergence_raw_v1.md",
+    "xgboost_model/full_collection_540/analysis/platform_divergence.csv": "xgboost_model/full_collection_540/analysis/platform_divergence_raw_v1.csv"
+  },
+  "stale_references_to_old_platform_divergence": [
+    {
+      "path": "xgboost_model/full_collection_540/scripts/compare_platforms_v2.py",
+      "lines": [
+        9,
+        10,
+        86,
+        111
+      ],
+      "issue": "WRITE COLLISION: this raw-basis generator still writes analysis/platform_divergence.{csv,md}; re-running it would silently overwrite the v2 declared-basis files",
+      "severity": "high"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/SUMMARY.md",
+      "lines": [
+        58
+      ],
+      "issue": "P2 output-path row points at platform_divergence.{csv,md}, whose content is now v2; SUMMARY's own P2 figure (29/45) and decision #6 ('P2 score is raw measured totals') now describe the renamed v1 file",
+      "severity": "medium"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/platform_divergence_raw_v1.md",
+      "lines": [
+        26
+      ],
+      "issue": "self-reference 'see platform_divergence.csv' now resolves to the v2 csv instead of its own platform_divergence_raw_v1.csv",
+      "severity": "low"
+    },
+    {
+      "path": "runs/20260730_172053_coverage/{coverage_report.md,build_coverage.py,make_manifest.py}",
+      "lines": [],
+      "issue": "historical run records citing platform_divergence.md for the raw 29/45 and 30/45; correct as of their execution, now pointing at renamed content",
+      "severity": "informational"
+    },
+    {
+      "path": "runs/20260730_184450_coeff_sweep/{sweep_report.md,build_sweep.py,sweep_facts.json,make_manifest.py}",
+      "lines": [],
+      "issue": "same as above (E-1 reconciliation against the raw 29/45, 30/45)",
+      "severity": "informational"
+    },
+    {
+      "path": "runs/20260730_190154_score_basis_audit/{basis_audit.md,run_manifest.json,make_manifest.py,build_basis_audit.py}",
+      "lines": [],
+      "issue": "same as above; the audit's part-1 table intentionally documents the raw basis of the then-current platform_divergence.{md,csv}",
+      "severity": "informational"
+    }
+  ],
+  "stale_references_note": "reported only; no edits made to these files, per scope",
+  "unknowns": []
+}
