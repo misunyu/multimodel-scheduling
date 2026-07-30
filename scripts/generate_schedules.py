@@ -32,7 +32,14 @@ GEN_FPS = 2
 #               c2_reactive_baseline_report ("burst=all-CPU로 재실행"). Emitting top-1 here
 #               would emit the RECOVERED state as the failure and no violation would occur.
 FAILURE = {"q13_persistence_gpu": "allcpu", "q13_persistence_npu": "allcpu",
-           "q4b_control": "allcpu"}
+           "q4b_control": "allcpu",
+           # Q1.5's contrast axis is "relocate vs stay put", so the failure must be the
+           # all-CPU state Static is frozen in; emitting top-1 would freeze Static in the
+           # RECOVERED placement and there would be nothing to compare.
+           "q15_buffer_gpu": "allcpu", "q15_buffer_npu": "allcpu",
+           # Q1.1 never leaves combination_stable; the field is irrelevant but set for
+           # consistency with the other vision-3 scenarios.
+           "q11_steady_gpu": "allcpu", "q11_steady_npu": "allcpu"}
 
 SCENARIOS = {
     # scenario   : (ranking file,                                   lam_stable, lam_burst)
@@ -62,6 +69,18 @@ SCENARIOS = {
     # 4b control on the identical vision-3 workload (v26 task 116 rule 3).
     "q13_persistence_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 25, 45),
     "q13_persistence_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 25, 45),
+    # v34 Q1.5 (tab:b2 buffer sweep). Same vision-3 working set and ranking as Q1.3 -- the
+    # published B2 schedule evaporated, so its working set is UNKNOWN beyond "yolo11s was
+    # in it" (docs/supplementary_conditions_v34.md). lam_burst is 0.9*mu* expressed as TOTAL
+    # demand and divided across the three views (GPU 123/3=41, NPU 93/3=31); the published
+    # 123/93 were applied per view, i.e. 2.7x capacity -- the same error v32 found in Q1.3.
+    "q15_buffer_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 25, 41),
+    "q15_buffer_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 25, 31),
+    # v34 Q1.1 (steady-state overhead). Only combination_stable is executed; the burst and
+    # candidates exist in the file but are never reached (--stop-after). The rate is low and
+    # uniform so V(t) ~ 0 and any delta between execution modes is monitoring cost.
+    "q11_steady_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 4, 4),
+    "q11_steady_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 4, 4),
 }
 N_CAND = 5
 

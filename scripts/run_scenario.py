@@ -61,6 +61,49 @@ def transition_summary(log_path):
             "reverts": reverts, "n_candidates_applied": len(applied)}
 
 
+def _run_with_cpu_sampling(cmd, env, log_path, cpu_csv, timeout_s):
+    """Run the executor and sample its process-tree CPU once a second.
+
+    psutil's cpu_percent is relative to the previous call per process, so children have to
+    be primed before their first real reading; the first sample of any newly-seen child is
+    therefore skipped rather than reported as 0. Failing to do that made the monitoring
+    overhead look smaller than it is, since new workers appear exactly when the safety
+    layer starts working.
+    """
+    import psutil
+    with open(log_path, "w") as lf, open(cpu_csv, "w") as cf:
+        cf.write("t_s,n_proc,cpu_percent_tree,rss_mb_tree\n")
+        proc = subprocess.Popen(cmd, cwd=PROJECT, env=env, stdout=lf,
+                                stderr=subprocess.STDOUT)
+        try:
+            parent = psutil.Process(proc.pid)
+        except psutil.NoSuchProcess:
+            return proc.wait(timeout=timeout_s)
+        primed, t0 = set(), time.time()
+        while proc.poll() is None and time.time() - t0 < timeout_s:
+            try:
+                procs = [parent] + parent.children(recursive=True)
+            except psutil.Error:
+                break
+            total, rss, n = 0.0, 0, 0
+            for p in procs:
+                try:
+                    c = p.cpu_percent(None)          # since this process was last polled
+                    m = p.memory_info().rss
+                except psutil.Error:
+                    continue
+                n += 1
+                rss += m
+                if p.pid in primed:
+                    total += c
+                else:
+                    primed.add(p.pid)               # first reading is meaningless: skip it
+            cf.write(f"{time.time()-t0:.1f},{n},{total:.1f},{rss/1e6:.1f}\n")
+            cf.flush()
+            time.sleep(1.0)
+        return proc.wait(timeout=timeout_s)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--schedule", required=True)
@@ -71,6 +114,10 @@ def main():
     ap.add_argument("--combo-trigger", action="append", default=[])
     ap.add_argument("--background", action="store_true")
     ap.add_argument("--buffer", default=None)
+    ap.add_argument("--perframe", action="store_true",
+                    help="log per-frame e2e latency into <run>/perframe.csv (Q1.5/tab:b2)")
+    ap.add_argument("--proc-cpu", action="store_true",
+                    help="sample executor process-tree CPU into <run>/proc_cpu.csv (Q1.1)")
     ap.add_argument("--stop-after", default=None)
     ap.add_argument("--select-combo", default=None,
                     help="run ONLY this combination (Static must START in the failure "
@@ -104,12 +151,27 @@ def main():
     env["FSRR_RATE_REPLICATE"] = "1"
     if a.buffer:
         env["FSRR_FRAME_BUFFER"] = str(a.buffer)
+    # Request-level scenarios (Q1.5/tab:b2) need per-frame e2e latency, not just the
+    # per-second V(t) series: p99/p999 and the late-vs-drop split are frame quantities.
+    # The log records deadline_ms per row, so miss can be recomputed offline at any
+    # deadline -- which is why the 15 ms vs 8.13 ms question does not need re-running.
+    # Written straight into the run directory; nothing to copy afterwards.
+    if a.perframe:
+        env["FSRR_PERFRAME_LOG"] = os.path.join(rd, "perframe.csv")
 
     before = set(glob.glob(os.path.join(PROJECT, "results", "performance_*.json")))
     t0 = time.time()
-    with open(log, "w") as lf:
-        rc = subprocess.call(cmd, cwd=PROJECT, env=env, stdout=lf,
-                             stderr=subprocess.STDOUT, timeout=a.duration * 6 + 300)
+    if a.proc_cpu:
+        # Q1.1 asks what the safety layer costs when nothing is going wrong, and the
+        # closest direct proxy is the executor's own CPU. Sampled here (parent side)
+        # rather than inside the executor so the measurement cannot itself be part of
+        # what is measured; summed over the process TREE because the workers are children.
+        rc = _run_with_cpu_sampling(cmd, env, log, os.path.join(rd, "proc_cpu.csv"),
+                                    a.duration * 6 + 300)
+    else:
+        with open(log, "w") as lf:
+            rc = subprocess.call(cmd, cwd=PROJECT, env=env, stdout=lf,
+                                 stderr=subprocess.STDOUT, timeout=a.duration * 6 + 300)
     wall = time.time() - t0
     # the executor writes its aggregate to results/; bring it INTO the run directory so
     # the run is self-contained (the aggregate is the per-view liveness evidence).
