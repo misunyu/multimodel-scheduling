@@ -73,7 +73,7 @@ def main():
             if base_id not in C:
                 continue
             base = C[base_id]["value"]
-            base_txt.append(f"{plabel} base {base:.2f}")
+            base_txt.append(f"{base:.2f} ({plat[0].upper()})")   # G = CPU-GPU, N = CPU-NPU
             ids.append((base_id, base))
             for arm, alabel, col in MONITORED:
                 i = f"q11_{plat}_{arm}_{metric}"
@@ -89,26 +89,31 @@ def main():
         bars = ax[k].bar(range(len(vals)), vals, yerr=errs, capsize=2, color=cols,
                          edgecolor="black", linewidth=0.5)
         ax[k].axhline(0, color="0.3", lw=0.8)
+        ax[k].margins(y=0.22)   # headroom so the "within spread" labels clear the frame
         ax[k].set_xticks(range(len(labels)))
         ax[k].set_xticklabels([l.replace("\n", " ") for l in labels], fontsize=5,
                               rotation=30, ha="right")
         ax[k].set_ylabel(f"$\\Delta$ {title} ({unit})", fontsize=7)
-        ax[k].set_title(f"{title} vs unmonitored", fontsize=8)
-        ax[k].annotate("  •  ".join(base_txt) + f"  {unit.split()[0]}",
-                       (0.5, 0.97), xycoords="axes fraction", ha="center", va="top",
-                       fontsize=4.6, color="0.3")
+        # the baseline goes in the subtitle, outside the data area: inside the axes it
+        # collided with the top of the error bars and was clipped by the frame
+        ax[k].set_title(f"{title} vs unmonitored\nbaseline " + " · ".join(base_txt),
+                        fontsize=7)
         for b, v, e in zip(bars, vals, errs):
             # a bar whose magnitude is inside its own spread is not a measured cost
             if abs(v) <= e:
-                ax[k].annotate("within\nspread", (b.get_x() + b.get_width() / 2, 0),
-                               xytext=(0, 6 if v >= 0 else -14), textcoords="offset points",
+                # place it past the whisker, on the side the bar points away from, so it
+                # never sits on top of the bar or its error bar
+                tip = v + e if v >= 0 else v - e
+                ax[k].annotate("within spread", (b.get_x() + b.get_width() / 2, tip),
+                               xytext=(0, 4 if v >= 0 else -10), textcoords="offset points",
                                ha="center", fontsize=4.4, color="0.35")
     fig.text(0.01, 0.005,
              "Deltas against Static (no monitoring threads), 3 runs per bar, 60 s steady "
              "state at 4 fps/view with $V(t)\\approx0$ and zero placement transitions. "
              "Adaptive and BoundGuard run the same code path here -- everything BoundGuard "
              "adds is per-transition -- so the BoundGuard bar shows that arming validation "
-             "adds nothing, not that it is a second system.", fontsize=4.4)
+             "adds nothing, not that it is a second system. Baselines: G = CPU-GPU, "
+             "N = CPU-NPU, in each panel's own unit.", fontsize=4.4)
     fig.tight_layout()
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(OUT, f"runtime_overhead.{ext}"), bbox_inches="tight")

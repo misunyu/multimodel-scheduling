@@ -89,8 +89,10 @@ def main():
             # so an all-zero false-trigger panel rendered as saturated pink and read as if
             # the values were large. Anchor the scale at zero instead.
             lo, hi = 0.0, max(hi, 1.0)
-            ax.annotate("constant across the grid", (0.5, 1.0), xycoords="axes fraction",
-                        ha="center", va="bottom", fontsize=5, color="0.35")
+            # inside the axes, not above them: above collided with the panel title
+            ax.annotate("constant across the grid", (0.5, 0.015), xycoords="axes fraction",
+                        ha="center", va="bottom", fontsize=5, color="0.35",
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="0.7", lw=0.4))
         im = ax.imshow(grid, cmap=cmap, aspect="auto", vmin=lo, vmax=hi)
         for ti, T in enumerate(T_VALUES):
             for ei, eps in enumerate(EPS_VALUES):
