@@ -107,8 +107,26 @@
 | 도안 | 운용점 $(T{=}3, \epsilon{=}1.0)$을 전 패널에서 **박스 표시**. 그림의 목적이 그 선택의 정당화이므로 찾을 수 있어야 한다 |
 | **함정** | 회복 지연은 정의되지 않는 셀이 있다(그 $(T,\epsilon)$에서 아무 후보도 회복하지 않음). **0이 아니라 해칭**으로 그린다 — 0은 "즉시 회복"으로 읽힌다 |
 
-### 나머지 (`dynamic_load_adaptation`, `c3_fluid_validation`, `qos_score_validation`, `architecture`)
-- 값 변경 없이 **유지** 판정된 그림들(`figure_regeneration_report.md`).
+### `c3_fluid_validation.pdf` — §IV 유체 모형 검증 (v35 재생성)
+| 항목 | 내용 |
+|---|---|
+| 무엇 | §II 유체 모형의 두 식을 실측과 대조. R4("확률적 큐잉 모형으로 대체하라")에 대한 답의 절반 — 결정론이 **미검토 가정이 아니라 정확도가 실측된 근사**임을 보이는 측정 |
+| 생성기 | `fig/plot_c3_v11.py`, 값은 `scripts/analyze_c3.py` → `scripts/emit_c3_confirmed.py` |
+| 조건 | `docs/c3_revalidation_conditions.md`(**실행 전 확정**), 결과는 `docs/c3_revalidation_report.md` |
+| 패널 | (a) 축적: 예측 $\lambda-\mu_{cpu}$ vs 실측 $dQ/dt$ / (b) 배출: 예측 $-(\mu^\ast-\lambda)$ vs 실측, **후보 $\mu^\ast$ 3종 전부** / (c) 배출 기울기 vs $\lambda$, 영점 교차 = $\mu^\ast_{eff}$ |
+| 쓰는 id | `c3_{gpu,npu}_{070,090,095}_{acc_slope,acc_pred,drain_slope,drain_pred_{pipe,sat,raw}}` + `_T_stable` 5개(gpu 0.95 제외) + `c3_{gpu,npu}_mu_star_{eff,anchor}` = **45** |
+| 도안 결정 1 | (a)와 (b)를 **같은 형태**(예측 vs 실측 + 항등선)로 그린다. (a)가 선 위에 있고 (b)가 아님을 축을 다시 읽지 않고 보게 하는 것이 목적이다. (b)를 "마음에 드는 예측 하나와의 비교"로 그리면 **세 후보가 전부 빗나간다는 사실이 가려진다** |
+| 도안 결정 2 | (b)는 **symlog**. 후보 예측이 −171~+36인데 실측은 −38~+3이라 선형축에서는 실측 6점이 한 픽셀 열로 뭉갠다 |
+| **함정 1** | (c)는 **부호 있는** 기울기를 그린다. GPU 0.95는 **양수**(가속기에서도 큐가 자랐다) — $\lvert$기울기$\rvert$로 그리면 발산이 "작은 배출"로 보인다 |
+| **함정 2** | GPU 0.95에는 $T_{stable}$이 **없다**. 확정표에 항목 자체를 넣지 않고 그림에는 "no drain"이라고만 쓴다. 창 길이를 값으로 적으면 **없는 수치를 지어내는 것**이다 (checker 음성 테스트 4번이 이 경우를 잡는다) |
+| **함정 3** | $T_{stable}$은 npu 0.70을 뺀 전부가 **외삽**이다(35 s 창 안에 큐가 비지 않았다). 외삽임을 하단 문구에 밝힌다 |
+| **함정 4** | `metrics.csv`의 `view*_fps`는 $1000/\text{infer\_ms}$ = **용량**이지 처리량이 아니다(포화 런에서 144 vs 실제 80). 서비스율은 **`perframe.csv`의 완료 프레임 수**로 센다. `runtime_overhead` 함정 2와 같은 함정 |
+
+### 나머지 (`dynamic_load_adaptation`, `qos_score_validation`, `architecture`)
+- `qos_score_validation`과 `dynamic_load_adaptation`은 **v35에서 논문에서 제거**됐다. 저장소에서
+  지우지 않고 미사용으로 표시한다(`confirmed_values.json` `_meta.removed_figures`,
+  `paper_figure_manifest.json`의 `status`). 확정표의 어떤 값도 이 둘을 `figure`로 지정하지 않으므로
+  checker가 거짓 경고를 내지 않는다.
 - `qos_score_validation`은 §II 동기 그림이며 **Table~I 밖 모델 4종**을 쓴다(재현 불가, `q1_workload_attribution.md`).
 - `architecture.pdf`는 **저장소에 없다**(사용자 보관).
 

@@ -39,7 +39,15 @@ FAILURE = {"q13_persistence_gpu": "allcpu", "q13_persistence_npu": "allcpu",
            "q15_buffer_gpu": "allcpu", "q15_buffer_npu": "allcpu",
            # Q1.1 never leaves combination_stable; the field is irrelevant but set for
            # consistency with the other vision-3 scenarios.
-           "q11_steady_gpu": "allcpu", "q11_steady_npu": "allcpu"}
+           "q11_steady_gpu": "allcpu", "q11_steady_npu": "allcpu",
+           # C3: the accumulation phase IS the all-CPU placement -- that is where
+           # dQ/dt = lambda - mu_cpu is measured. Emitting top-1 would put accumulation on
+           # the accelerator, where nothing accumulates.
+           "c3_fluid_gpu_070": "allcpu", "c3_fluid_gpu_090": "allcpu",
+           "c3_fluid_gpu_095": "allcpu", "c3_fluid_npu_070": "allcpu",
+           "c3_fluid_npu_090": "allcpu", "c3_fluid_npu_095": "allcpu",
+           "c3_mustar_gpu": "allcpu", "c3_mustar_npu": "allcpu",
+           "c3_mudrain_gpu": "allcpu", "c3_mudrain_npu": "allcpu"}
 
 SCENARIOS = {
     # scenario   : (ranking file,                                   lam_stable, lam_burst)
@@ -81,6 +89,36 @@ SCENARIOS = {
     # uniform so V(t) ~ 0 and any delta between execution modes is monitoring cost.
     "q11_steady_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 4, 4),
     "q11_steady_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 4, 4),
+    # v35 C3 fluid-model revalidation. Same vision-3 working set as the old C3
+    # (docs/c3_stress_report.md: "vision-only x cpu_gpu/cpu_npu", bottleneck yolo11s).
+    #
+    # lambda is anchored on the BOTTLENECK VIEW's pipeline service rate measured IN THE
+    # DRAIN REGIME on this system: yolo11s 121 fps (GPU) / 86 fps (NPU). The inherited mu*
+    # (137/103) does not hold here -- a pilot at 0.95*137 drained at ~237 fps where the
+    # model predicts 7 -- and the saturated measurement (view1 79/65 fps) is taken under
+    # 1200 fps of contention, so it is not the rate that applies while a backlog drains.
+    # mu* is load-dependent; docs/c3_revalidation_conditions.md carries the full record.
+    #
+    #   GPU 121 fps -> 0.70/0.90/0.95 = 85/109/115 per view
+    #   NPU  86 fps -> 0.70/0.90/0.95 = 60/77/82  per view
+    #
+    # Both phases carry the SAME rate: the experiment measures accumulation and drain
+    # slopes at one arrival rate, so varying lambda between phases would confound the slope
+    # with a rate change.
+    "c3_fluid_gpu_070": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 85, 85),
+    "c3_fluid_gpu_090": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 109, 109),
+    "c3_fluid_gpu_095": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 115, 115),
+    "c3_fluid_npu_070": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 60, 60),
+    "c3_fluid_npu_090": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 77, 77),
+    "c3_fluid_npu_095": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 82, 82),
+    # mu* measurement runs (not part of the sweep; they FIX its scale).
+    #   c3_mustar_*  : all-accelerator driven far past capacity -> saturated throughput
+    #   c3_mudrain_* : lambda=20/view, so the drain slope plus lambda gives the per-view
+    #                  service rate in the regime the sweep actually operates in
+    "c3_mustar_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 400, 400),
+    "c3_mustar_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 400, 400),
+    "c3_mudrain_gpu": ("rankings/ranking_Q1_3_persist_v3_cpu-gpu.json", 20, 20),
+    "c3_mudrain_npu": ("rankings/ranking_Q1_3_persist_v3_cpu-npu.json", 20, 20),
 }
 N_CAND = 5
 

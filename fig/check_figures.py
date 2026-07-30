@@ -38,8 +38,15 @@ EXACT_MATCH = ("quantity", "reference", "unit", "censored", "recovered", "window
 # 'p99' / 'miss' / 'count' and reference 'window' (v34, Q1.5/tab:b2): request-level
 # quantities. They are per-frame, not per-second, and they are measured over the whole
 # fixed window rather than from an event, so none of the recovery references apply.
+# 'backlog_slope' / 'service_rate' / 'T_stable' / 'backlog' / 'fit_slope' (v35, C3 유체 모형):
+# 회복 지표가 아니라 큐 동역학의 양이다. backlog_slope = dQ/dt(frames/s), service_rate = μ(fps),
+# T_stable = Q/|dQ/dt|(s), backlog = 배치 전환 시점의 큐 길이(frames),
+# fit_slope = d(배출 기울기)/d(λ)(무차원, 모형 예측 1.0).
+# 'drain'(회복 지표: 커밋→V≤ε, 단위 s)과 'backlog_slope'는 다른 양이다 — 이름이 비슷하다고
+# 같은 어휘를 쓰면 s와 frames/s가 한 축에 섞인다.
 VALID_QUANTITY = {"search", "drain", "persist", "cumV", "lastV", "bound", "lead",
-                  "p99", "miss", "count", "throughput", "cpu", "infer_ms"}
+                  "p99", "miss", "count", "throughput", "cpu", "infer_ms",
+                  "backlog_slope", "service_rate", "T_stable", "backlog", "fit_slope"}
 # 'commit' (v33): drain is measured from the moment the recovering candidate is committed,
 # which is neither t0 nor burst. It had been mislabelled 't0', which silently implied
 # drain and search shared an origin -- they do not, they are consecutive.
