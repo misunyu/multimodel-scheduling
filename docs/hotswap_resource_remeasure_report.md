@@ -195,17 +195,19 @@ v19 이후 코드가 바뀌었으므로 세 결론을 **기계적으로** 다시
 ```
 [1] cross-device only : 63 schedule files scanned, 0 same-device model swaps
 [2] kill-then-start   : sync(): _stop_one at 829, _start_one at 1015 → kill-then-start
-[3] no pre-flight check: 7 pattern hits, 0 unaccounted-for
+[3] no pre-flight check: 9 pattern hits, 0 unaccounted-for
 [OK] 세 구조적 결론 전부 v18 그대로 성립한다.
 ```
 
 1. **교차이동만 존재한다.** 스케줄 63종에서 한 뷰가 디바이스를 유지한 채 모델만 바꾸는 전환 **0건**.
 2. **kill-then-start 유지.** `BackgroundManager.sync`가 옮겨지는 child를 먼저 `_stop_one`하고
    그 뒤에 `_start_one`한다(`runtime/background_llm.py:70-78`).
-3. **사전 자원 점검은 여전히 없다.** v18과 **같은 grep 패턴**으로 7건이 걸리나 전부 무관하다
+3. **사전 자원 점검은 여전히 없다.** v18과 **같은 grep 패턴**으로 9건이 걸리나 전부 무관하다
    (버퍼 계수 주석, "insufficient score history" 로그, 축 여백 주석 등 — 스크립트가 사유와 함께
    열거한다). 전환 전 잔여 VRAM/DRAM을 확인하는 코드는 없다.
    `backup/`은 실행되지 않는 스냅샷이라 경로로 제외했다(사유를 코드에 적었다).
+   두 건은 **v38 자신의 계측 장치**가 "headroom"이라는 이름을 쓰기 때문에 걸린 것이다 —
+   검사기가 새 언급을 사람에게 보이려 한 것이므로 감추지 않고 사유와 함께 열거한다.
 
 > **셋 중 하나도 바뀌지 않았다.** 따라서 v18의 강한 답 — R4의 *"assumes sufficient residual
 > resources"*가 코드에 대한 정확한 진술이라는 것 — 은 유지된다. 흔들린 것은 **수치와, 수치에서

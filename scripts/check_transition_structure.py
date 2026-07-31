@@ -45,6 +45,10 @@ BENIGN = {
     "unified_viewer.py": "'insufficient data' trigger status",
     "scripts/run_bounded_recovery_sweep.py": "'insufficient data' docstring",
     "fig/plot_overhead_v11.py": "axis margin comment",
+    # v38's own apparatus names the measurement "headroom". Listed rather than skipped so the
+    # hit stays visible: these two files report resource numbers, they never gate on them.
+    "scripts/emit_hotswap_confirmed.py": "v38 confirmed-table emitter: names the metric",
+    "fig/check_figures.py": "quantity vocabulary entry for the v38 metric",
 }
 
 
