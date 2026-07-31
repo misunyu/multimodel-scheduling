@@ -367,7 +367,7 @@ matplotlib은 PDF에 `/CreationDate`를 찍는다. **내용이 완전히 같아�
 
 | 커밋 | 내용 |
 |---|---|
-| `<채움>` | `paper/` 배포본 · `figures/` 링크 · `Makefile` · 검사기/생성기 5종 · 주석 목록 · 픽스처 · 문서 정정 4곳 · 본 보고서 |
+| `03e8832` | `paper/` 배포본 · `figures/` 링크 · `Makefile` · 검사기/생성기 5종 · 주석 목록 · 픽스처 · 문서 정정 4곳 · 본 보고서 |
 
 **푸시하지 않았다.** 미푸시 커밋은 `git log origin/ubuntu_gpu_fsrr..HEAD`.
 
