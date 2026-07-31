@@ -33,14 +33,19 @@ RUNNER = os.path.join(PROJECT, "scripts", "run_scenario.py")
 DURATIONS = ["combination_stable=15", "combination_burst=10", "cand_1=20", "cand_2=20",
              "cand_3=20", "cand_4=20", "cand_5=45"]
 VARIANTS = {
-    # tag: (schedule, trigger keyword)
-    "memBG": ("schedules/q3_misprediction_cpu-gpu.yaml", "validate"),
-    "memA": ("schedules/q6_ablation_cpu-gpu.yaml", "v-above"),
+    # tag: (schedule, trigger keyword, npu?)
+    "memBG": ("schedules/q3_misprediction_cpu-gpu.yaml", "validate", False),
+    "memA": ("schedules/q6_ablation_cpu-gpu.yaml", "v-above", False),
+    # v39 task 206: the same two variants on CPU--NPU, where device memory is 16 GB rather
+    # than 32 and the paper already names it the binding constraint. One schedule for both:
+    # the Q5 file's own header says the corners are distinguished by executor flags alone.
+    "npumemBG": ("schedules/q5_misprediction_cpu-npu.yaml", "validate", True),
+    "npumemA": ("schedules/q5_misprediction_cpu-npu.yaml", "v-above", True),
 }
 
 
 def cmd_for(tag, rep, sampler=True):
-    sched, trig = VARIANTS[tag]
+    sched, trig, npu = VARIANTS[tag]
     c = [PY, RUNNER, "--schedule", os.path.join(PROJECT, sched), "--mode", "1",
          "--tag", tag, "--duration", "60", "--buffer", "12", "--background",
          "--rep", str(rep)]
@@ -50,6 +55,8 @@ def cmd_for(tag, rep, sampler=True):
         c += ["--combo-trigger", f"{cand}={trig}"]
     if sampler:
         c += ["--mem"]
+        if npu:
+            c += ["--mem-npu"]
     return c
 
 
@@ -63,7 +70,10 @@ def run(c, label):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--reps", type=int, default=3)
-    ap.add_argument("--variants", nargs="+", default=list(VARIANTS))
+    ap.add_argument("--rep-start", type=int, default=0,
+                    help="first rep index; v39 task 208 extends the v38 campaign to n>=8 "
+                         "rather than re-running the reps that already exist")
+    ap.add_argument("--variants", nargs="+", default=["memBG", "memA"])
     ap.add_argument("--pilot", action="store_true")
     ap.add_argument("--sampler-control", action="store_true")
     a = ap.parse_args()
@@ -80,7 +90,7 @@ def main():
 
     total, done, bad = len(a.variants) * a.reps, 0, 0
     for tag in a.variants:
-        for rep in range(a.reps):
+        for rep in range(a.rep_start, a.rep_start + a.reps):
             done += 1
             if run(cmd_for(tag, rep), f"[{done}/{total}] {tag} r{rep}"):
                 bad += 1

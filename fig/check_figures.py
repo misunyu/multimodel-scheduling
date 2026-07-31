@@ -46,10 +46,13 @@ EXACT_MATCH = ("quantity", "reference", "unit", "censored", "recovered", "window
 # 같은 어휘를 쓰면 s와 frames/s가 한 축에 섞인다.
 # 'maxV' (v37): 관측 창 안의 **최댓값**이며 `lastV`(창 끝 값)와 다른 양이다. Q4 본문이 인접한
 # 문장에서 둘을 함께 인용하므로(탐색 중 peak vs 종단), 한 어휘로 묶으면 한쪽이 조용히 낡는다.
-# 'rss' / 'vram' / 'hold' / 'headroom' (v38, 전환 자원 재측정, ISSRE R4): host RSS 와 GPU VRAM
-# 은 서로 다른 자원이며 한 어휘로 묶으면 "디바이스 메모리 증분 0"과 "호스트 메모리 증분 2 GB"가
-# 같은 축에 놓인다 — 이 라운드의 결론이 정확히 그 구분 위에 있다. hold = 피크가 유지된 시간(s),
+# 'rss' / 'vram' / 'hold' / 'headroom' (v38, 전환 자원 재측정, ISSRE R4): host RSS 와 디바이스
+# 메모리는 서로 다른 자원이며 한 어휘로 묶으면 "디바이스 메모리 증분 0"과 "호스트 메모리 증분 2 GB"가
+# 같은 축에 놓인다 — 그 라운드의 결론이 정확히 그 구분 위에 있다. hold = 피크가 유지된 시간(s),
 # headroom = (가용량 − 정상 상태) / 증분(무차원 배수).
+# 'vram' 은 v39 부터 **가속기 메모리 일반**을 뜻한다 — GPU VRAM 과 NPU DRAM 둘 다. 둘을 나누지 않는
+# 이유는 같은 질문("전환이 디바이스 메모리를 얼마나 더 쓰는가")의 답이고 단위가 같기 때문이며,
+# 어느 디바이스인지는 id(`hs_npu_*`)와 note 가 밝힌다.
 VALID_QUANTITY = {"search", "drain", "persist", "cumV", "lastV", "maxV", "bound", "lead",
                   "p99", "miss", "count", "throughput", "cpu", "infer_ms",
                   "backlog_slope", "service_rate", "T_stable", "backlog", "fit_slope",

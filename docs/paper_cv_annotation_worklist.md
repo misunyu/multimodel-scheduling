@@ -3,8 +3,8 @@
 **이 목록은 저장소 밖 정본에 적용한다.** `paper/main.tex` 는 배포본이며 편집하면
 `scripts/check_paper.py` 의 해시 검사가 실패한다 — 그것이 의도된 동작이다.
 
-주석 17개 · 추적 값 79건(고유 67건).
-대상 `main.tex` sha256 `23b834cfef15d72a…`
+주석 18개 · 추적 값 86건(고유 74건).
+대상 `main.tex` sha256 `0c7c3a1c0cdf2d65…`
 
 적용:
 
@@ -17,7 +17,25 @@ python3 scripts/apply_cv_annotations.py --tex /경로/정본/main.tex
 
 ---
 
-### L557 — Q1 — recovery totals, lead, and the part of the lead that precedes activation
+### L365 — §III — what a hot-swap costs in memory (v38/v39)
+
+```
+\textcolor{navyblue}{We measured what it costs. Two kinds of transition occur in our syste…
+```
+
+줄 끝에 붙일 것:
+
+```latex
+%!cv hs_vision_vram_incr_max,hs_gen_rss_incr_max,hs_gen_rss_headroom
+```
+
+| id | 확정표 값 |
+|---|---|
+| `hs_vision_vram_incr_max` | 574.0 MiB |
+| `hs_gen_rss_incr_max` | 3099.0 MiB |
+| `hs_gen_rss_headroom` | 18.1 x |
+
+### L558 — Q1 — recovery totals, lead, and the part of the lead that precedes activation
 
 ```
 \textcolor{navyblue}{Recovery completes in $30.4\pm0.5$\,s on CPU--GPU and $27.2\pm0.4$\,s…
@@ -37,7 +55,7 @@ python3 scripts/apply_cv_annotations.py --tex /경로/정본/main.tex
 | `q5_lead` | 22.4 s |
 | `q5_lead_pre_activation` | 9.6 s |
 
-### L579 — Q1.1 — steady-state throughput, inference latency, CPU occupancy
+### L580 — Q1.1 — steady-state throughput, inference latency, CPU occupancy
 
 ```
 \emph{Steady state.} We hold the workload in a feasible state throughout ($V(t)=0$, no rec…
@@ -61,7 +79,7 @@ python3 scripts/apply_cv_annotations.py --tex /경로/정본/main.tex
 | `q11_npu_static_cpu` | 17.437 percent |
 | `q11_npu_adaptive_cpu` | 17.72 percent |
 
-### L600 — Q1.2 — detection lag and recovery latency across the window sweep
+### L601 — Q1.2 — detection lag and recovery latency across the window sweep
 
 ```
 \textcolor{navyblue}{Figure~\ref{fig:detection_sensitivity} reports four quantities. No se…
@@ -81,7 +99,7 @@ python3 scripts/apply_cv_annotations.py --tex /경로/정본/main.tex
 | `q12_recover_lat_T1_eps1.0` | 17.96 s |
 | `q12_recover_lat_T5_eps1.0` | 21.84 s |
 
-### L602 — Q1.2 — the T=1 vs T=3 comparison the section's conclusion turns on
+### L603 — Q1.2 — the T=1 vs T=3 comparison the section's conclusion turns on
 
 ```
 Our configuration ($T=3$\,s, $\epsilon=1.0$) sits in the conservative corner of this space…
@@ -100,7 +118,7 @@ Our configuration ($T=3$\,s, $\epsilon=1.0$) sits in the conservative corner of 
 | `q12_recover_lat_T1_eps1.0` | 17.96 s |
 | `q12_recover_lat_T3_eps1.0` | 20.24 s |
 
-### L625 — Q1.3 — Static terminal V, cumulative violation, persistence range, ratios
+### L626 — Q1.3 — Static terminal V, cumulative violation, persistence range, ratios
 
 ```
 Figures~\ref{fig:q13-persistence} and~\ref{fig:q13-cumulative} report both metrics for the…
@@ -124,7 +142,7 @@ Figures~\ref{fig:q13-persistence} and~\ref{fig:q13-cumulative} report both metri
 | `q13_gpu_cumV_ratio` | 8.3 x |
 | `q13_npu_cumV_ratio` | 8.4 x |
 
-### L627 — Q1.3 — the search that is lead, and the no-dwell variant's counts
+### L628 — Q1.3 — the search that is lead, and the no-dwell variant's counts
 
 ```
 We do not read the small differences among stop-and-restart, Adaptive hot-swap, and BoundG…
@@ -143,7 +161,7 @@ We do not read the small differences among stop-and-restart, Adaptive hot-swap, 
 | `q4b_a_hotswaps` | 15 swaps |
 | `q4b_bg_hotswaps` | 6 swaps |
 
-### L644 — Q1.4 — sweep regression slopes against the predicted 1.0
+### L645 — Q1.4 — sweep regression slopes against the predicted 1.0
 
 ```
 The sweep separates the model's two halves, and they do not fare the same. Accumulation is…
@@ -160,7 +178,7 @@ The sweep separates the model's two halves, and they do not fare the same. Accum
 | `c3_gpu_dslope_dlambda` | 1.007 1 |
 | `c3_npu_dslope_dlambda` | 1.083 1 |
 
-### L646 — Q1.4 — the three service rates bracketing the effective drain rate
+### L647 — Q1.4 — the three service rates bracketing the effective drain rate
 
 ```
 The reason is the one Eq.~(\ref{eq:tstable}) now names. Inverting the measurements for the…
@@ -181,7 +199,7 @@ The reason is the one Eq.~(\ref{eq:tstable}) now names. Inverting the measuremen
 | `c3_gpu_mu_star_eff` | 112.7 fps |
 | `c3_npu_mu_star_eff` | 96.7 fps |
 
-### L684 — Q1.5 — buffer sweep: drops fall, miss rate barely moves
+### L685 — Q1.5 — buffer sweep: drops fall, miss rate barely moves
 
 ```
 Two observations follow, and both are stable across the buffer sweep of Figure~\ref{fig:b2…
@@ -200,7 +218,7 @@ Two observations follow, and both are stable across the buffer sweep of Figure~\
 | `q15_gpu_static_b0.5_miss` | 0.6316 ratio |
 | `q15_gpu_static_b1.5_miss` | 0.5332 ratio |
 
-### L686 — Q1.5 — the reconfigure-vs-stay-put division
+### L687 — Q1.5 — the reconfigure-vs-stay-put division
 
 ```
 Second, both metrics separate the methods, and they draw the same line: the primary divisi…
@@ -219,7 +237,7 @@ Second, both metrics separate the methods, and they draw the same line: the prim
 | `q15_npu_adaptive_b0.5_p99` | 6849.0 ms |
 | `q15_gpu_stoprestart_b0.5_p99` | 10050.0 ms |
 
-### L688 — Q1.5 — stop-restart vs in-place tail
+### L689 — Q1.5 — stop-restart vs in-place tail
 
 ```
 Within the reconfiguring group a second, smaller division appears, and it is the one this …
@@ -237,7 +255,7 @@ Within the reconfiguring group a second, smaller division appears, and it is the
 | `q15_gpu_boundguard_b0.5_p99` | 7426.0 ms |
 | `q15_gpu_adaptive_b0.5_p99` | 7571.0 ms |
 
-### L700 — Q2 / prediction-match — the recovery times that are indistinguishable
+### L701 — Q2 / prediction-match — the recovery times that are indistinguishable
 
 ```
 \textcolor{navyblue}{This scenario and the prediction-match control of Q6 are the same con…
@@ -254,7 +272,7 @@ Within the reconfiguring group a second, smaller division appears, and it is the
 | `q4b_adaptive_persist` | 13.0 s |
 | `q4b_c_persist` | 13.8 s |
 
-### L712 — Q3 — the level the baselines sit at while in violation (peak, not terminal)
+### L713 — Q3 — the level the baselines sit at while in violation (peak, not terminal)
 
 ```
 Figure~\ref{fig:misprediction} shows the resulting QoS trajectories on the CPU--GPU platfo…
@@ -270,7 +288,7 @@ Figure~\ref{fig:misprediction} shows the resulting QoS trajectories on the CPU--
 |---|---|
 | `q3_static_maxV` | 4.1 V |
 
-### L714 — Q3 — persist, search, drain, lead, envelope, baseline terminal V
+### L715 — Q3 — persist, search, drain, lead, envelope, baseline terminal V
 
 ```
 BoundGuard instead treats each ranked placement as a hypothesis. It rejects the top-ranked…
@@ -291,24 +309,28 @@ BoundGuard instead treats each ranked placement as a hypothesis. It rejects the 
 | `q3_bound` | 58.0 s |
 | `q3_baseline_lastV` | 3.5 V |
 
-### L743 — Q4 — terminal violation and the saturation-guard rejection count
+### L742 — Q4 — terminal and peak violation across the five variants (CORRECTS the annotation now in the distribution copy, which names q4_b_lastV: 294.2 lies inside the printed range 293--315 and so appears nowhere on the line)
 
 ```
-Two aspects deserve emphasis. \textcolor{navyblue}{The first concerns how the candidates w…
+Figure~\ref{fig:bounded} shows the outcome. BoundGuard evaluates each candidate in turn; a…
 ```
 
 줄 끝에 붙일 것:
 
 ```latex
-%!cv q4_bg_lastV,q4_saturated_advances_all
+%!cv q4_bg_lastV,q4_c_lastV,q4_adaptive_lastV,q4_bg_maxV,q4_b_maxV,q4_adaptive_maxV
 ```
 
 | id | 확정표 값 |
 |---|---|
 | `q4_bg_lastV` | 362.5 V |
-| `q4_saturated_advances_all` | 45 events |
+| `q4_c_lastV` | 292.6 V |
+| `q4_adaptive_lastV` | 315.1 V |
+| `q4_bg_maxV` | 480.3 V |
+| `q4_b_maxV` | 298.2 V |
+| `q4_adaptive_maxV` | 322.8 V |
 
-### L775 — Q5 — persist, lead, the pre-activation part of the lead, baseline terminal V
+### L776 — Q5 — persist, lead, the pre-activation part of the lead, baseline terminal V
 
 ```
 Figure~\ref{fig:npu_violation} shows the outcome. Static, stop-and-restart, and Adaptive h…
@@ -329,7 +351,7 @@ Figure~\ref{fig:npu_violation} shows the outcome. Static, stop-and-restart, and 
 | `q5_adaptive_lastV` | 26.7 V |
 | `q5_sr_lastV` | 26.9 V |
 
-### L817 — Q6 — variant A's terminal violation, integrated violation, and transition counts
+### L818 — Q6 — variant A's terminal violation, integrated violation, and transition counts
 
 ```
 Removing dwell fails differently, and the difference is the more instructive result. Under…

@@ -37,6 +37,18 @@ def _host_ram_mib():
         return None
 
 
+def _npu_capacity_mib():
+    """From the sampler's own column when a run carried it; the device is 16384 MiB."""
+    try:
+        import subprocess, re as _re
+        out = subprocess.run(["mblt-status", "-q", "-s", "MEMORY"],
+                             capture_output=True, text=True, timeout=5).stdout
+        m = _re.search(r"Total\s*:\s*([0-9.]+)\s*MB", out)
+        return round(float(m.group(1))) if m else None
+    except Exception:
+        return None
+
+
 def _vram_total_mib():
     try:
         import pynvml
@@ -50,15 +62,24 @@ def _vram_total_mib():
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TS = "%Y-%m-%d %H:%M:%S"
 METRICS = ("rss_mib", "vram_ours_mib", "vram_total_mib")
+# v39: the CPU--NPU runs carry three more columns. Older mem.csv files do not, and the
+# NPU ones leave them blank when mblt-status could not be read -- both are treated as absent
+# rather than as zero, because "no NPU memory" and "could not ask" are different answers.
+NPU_METRICS = ("npu_ours_mib", "npu_total_used_mib")
 MARGIN_PRE, MARGIN_POST = 1.0, 2.0
 STEADY_WIN = 2.0
 
 
 def load(run):
     mem = list(csv.DictReader(open(os.path.join(run, "mem.csv"))))
+    fields = list(METRICS)
+    if mem and mem[0].get("npu_ours_mib") not in (None, ""):
+        fields += list(NPU_METRICS)
     for r in mem:
-        for k in ("epoch",) + METRICS:
+        for k in ("epoch",) + tuple(fields):
             r[k] = float(r[k])
+    for r in mem:
+        r["_fields"] = fields
     met = []
     for r in csv.DictReader(open(os.path.join(run, "metrics.csv"))):
         try:
@@ -137,7 +158,7 @@ def analyse(run):
         # often are not any, and a median over two points is not a steady state -- those
         # cells report null rather than a number that looks measured.
         MIN_STEADY = 10          # 1 s at 10 Hz
-        for f in METRICS:
+        for f in mem[0]["_fields"]:
             pre = window_stats(mem, w_lo - STEADY_WIN, w_lo, f)
             peak_v = window_stats(mem, w_lo, w_hi, f)
             post = window_stats(mem, w_hi, w_hi + STEADY_WIN, f)
@@ -158,17 +179,19 @@ def analyse(run):
               and r["rss_mib"]["steady_post"] is not None]
     return {"run": os.path.basename(run), "transitions": out,
             "rss_floor_sequence": floors,
-            "global_peak": {f: round(max(r[f] for r in mem), 1) for f in METRICS}}
+            "global_peak": {f: round(max(r[f] for r in mem), 1)
+                            for f in mem[0]["_fields"]}}
 
 
-def campaign_runs():
+def campaign_runs(platform="gpu"):
     """The v38 campaign proper: rep 0-2 of each variant.
 
     r99 is the pilot and r90/r91 the sampler control; including them would mix a
     configuration check and an observer-cost check into the measurement.
     """
     out = []
-    for d in sorted(glob.glob(os.path.join(PROJECT, "runs", "*_mem*_r[0-2]"))):
+    pats = ["*_mem*_r[0-2]"] if platform == "gpu" else ["*_npumem*_r[0-2]"]
+    for d in sorted(sum([glob.glob(os.path.join(PROJECT, "runs", p)) for p in pats], [])):
         if os.path.isfile(os.path.join(d, "mem.csv")):
             out.append(d)
     return out
@@ -180,8 +203,8 @@ def summarise(results):
     buckets = collections.defaultdict(list)
     peaks = collections.defaultdict(list)
     for r in results:
-        for f in METRICS:
-            peaks[f].append(r["global_peak"][f])
+        for f, v in r["global_peak"].items():
+            peaks[f].append(v)
         for t in r["transitions"]:
             if t["kind"] == "none":
                 continue
@@ -192,7 +215,7 @@ def summarise(results):
            "kinds": {}}
     for kind, ts in buckets.items():
         k = {}
-        for f in ("rss_mib", "vram_ours_mib"):
+        for f in ("rss_mib", "vram_ours_mib", "npu_ours_mib"):
             usable = [t for t in ts if t.get(f) and t[f]["increment"] is not None]
             if not usable:
                 continue
@@ -218,7 +241,8 @@ def main():
     a = ap.parse_args()
     runs = a.runs
     if a.all or not runs:
-        runs = sorted(glob.glob(os.path.join(PROJECT, "runs", "*_mem*_r*")))
+        runs = sorted(glob.glob(os.path.join(PROJECT, "runs", "*_mem*_r*")) +
+                      glob.glob(os.path.join(PROJECT, "runs", "*_npumem*_r*")))
     runs = [r for r in runs if os.path.isfile(os.path.join(r, "mem.csv"))]
     res = [analyse(r) for r in runs]
 
@@ -253,8 +277,9 @@ def main():
           f"{'hold mean':>10s} {'peak max':>9s} {'headroom at max':>16s}")
     print("-" * 92)
     for kind, k in sorted(summ["kinds"].items()):
-        for f, cap in (("rss_mib", host_mib), ("vram_ours_mib", vram_mib)):
-            if f not in k:
+        for f, cap in (("rss_mib", host_mib), ("vram_ours_mib", vram_mib),
+                       ("npu_ours_mib", _npu_capacity_mib())):
+            if f not in k or cap is None:
                 continue
             v = k[f]
             # Headroom at the WORST transition, not on averages, and against ITS OWN steady

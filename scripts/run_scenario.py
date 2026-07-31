@@ -61,7 +61,7 @@ def transition_summary(log_path):
             "reverts": reverts, "n_candidates_applied": len(applied)}
 
 
-def _run_with_mem_sampling(cmd, env, log_path, mem_csv, timeout_s, hz=10.0):
+def _run_with_mem_sampling(cmd, env, log_path, mem_csv, timeout_s, hz=10.0, npu=False):
     """Run the executor while a sampler thread records tree RSS and VRAM at 10 Hz.
 
     R4 (ISSRE) is about the transition transient, and the transient is short -- a generative
@@ -78,7 +78,8 @@ def _run_with_mem_sampling(cmd, env, log_path, mem_csv, timeout_s, hz=10.0):
                                 stderr=subprocess.STDOUT)
         done = threading.Event()
         th = threading.Thread(target=mem_sampler.sample_into,
-                              args=(proc.pid, mem_csv, hz), kwargs={"stop": done.is_set},
+                              args=(proc.pid, mem_csv, hz),
+                              kwargs={"stop": done.is_set, "npu": npu},
                               daemon=True)
         th.start()
         try:
@@ -147,6 +148,8 @@ def main():
                     help="sample executor process-tree CPU into <run>/proc_cpu.csv (Q1.1)")
     ap.add_argument("--mem", action="store_true",
                     help="sample tree RSS + GPU VRAM into <run>/mem.csv at 10 Hz (R4/v38)")
+    ap.add_argument("--mem-npu", action="store_true",
+                    help="with --mem, also poll mblt-status for NPU DRAM (v39)")
     ap.add_argument("--stop-after", default=None)
     ap.add_argument("--select-combo", default=None,
                     help="run ONLY this combination (Static must START in the failure "
@@ -192,7 +195,7 @@ def main():
     t0 = time.time()
     if a.mem:
         rc = _run_with_mem_sampling(cmd, env, log, os.path.join(rd, "mem.csv"),
-                                    a.duration * 6 + 300)
+                                    a.duration * 6 + 300, npu=a.mem_npu)
     elif a.proc_cpu:
         # Q1.1 asks what the safety layer costs when nothing is going wrong, and the
         # closest direct proxy is the executor's own CPU. Sampled here (parent side)

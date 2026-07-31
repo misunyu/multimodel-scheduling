@@ -81,6 +81,13 @@ def representations(entry):
         reps.append((v * 100.0, "%"))
     elif unit in ("%", "percent"):
         reps.append((v / 100.0, "ratio"))
+    elif unit == "mib":
+        # v39: the paper writes the larger memory figures in GiB. Same conversion problem as
+        # p99's ms-vs-seconds, same fix -- the checker converts rather than the annotation
+        # carrying a hand-written factor that would go stale.
+        reps.append((v / 1024.0, "GiB"))
+    elif unit == "gib":
+        reps.append((v * 1024.0, "MiB"))
     return reps
 
 
