@@ -48,6 +48,8 @@ BENIGN = {
     # v38's own apparatus names the measurement "headroom". Listed rather than skipped so the
     # hit stays visible: these two files report resource numbers, they never gate on them.
     "scripts/emit_hotswap_confirmed.py": "v38 confirmed-table emitter: names the metric",
+    "scripts/emit_v39_confirmed.py": "v39 confirmed-table emitter: names the metric",
+    "scripts/gen_cv_worklist.py": "annotation worklist: names the metric's id",
     "fig/check_figures.py": "quantity vocabulary entry for the v38 metric",
 }
 
