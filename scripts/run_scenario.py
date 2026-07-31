@@ -61,6 +61,33 @@ def transition_summary(log_path):
             "reverts": reverts, "n_candidates_applied": len(applied)}
 
 
+def _run_with_mem_sampling(cmd, env, log_path, mem_csv, timeout_s, hz=10.0):
+    """Run the executor while a sampler thread records tree RSS and VRAM at 10 Hz.
+
+    R4 (ISSRE) is about the transition transient, and the transient is short -- a generative
+    relocation is ~2.9 s, a vision swap under a second. The 1 Hz --proc-cpu sampler above can
+    miss such a peak entirely. Sampling happens in the observing parent, never inside the
+    executor, so it cannot become part of what it measures; the cost of the observer itself
+    is measured separately (scripts/run_hotswap_mem_campaign.py --sampler-control).
+    """
+    import threading
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mem_sampler
+    with open(log_path, "w") as lf:
+        proc = subprocess.Popen(cmd, cwd=PROJECT, env=env, stdout=lf,
+                                stderr=subprocess.STDOUT)
+        done = threading.Event()
+        th = threading.Thread(target=mem_sampler.sample_into,
+                              args=(proc.pid, mem_csv, hz), kwargs={"stop": done.is_set},
+                              daemon=True)
+        th.start()
+        try:
+            return proc.wait(timeout=timeout_s)
+        finally:
+            done.set()
+            th.join(timeout=5)
+
+
 def _run_with_cpu_sampling(cmd, env, log_path, cpu_csv, timeout_s):
     """Run the executor and sample its process-tree CPU once a second.
 
@@ -118,6 +145,8 @@ def main():
                     help="log per-frame e2e latency into <run>/perframe.csv (Q1.5/tab:b2)")
     ap.add_argument("--proc-cpu", action="store_true",
                     help="sample executor process-tree CPU into <run>/proc_cpu.csv (Q1.1)")
+    ap.add_argument("--mem", action="store_true",
+                    help="sample tree RSS + GPU VRAM into <run>/mem.csv at 10 Hz (R4/v38)")
     ap.add_argument("--stop-after", default=None)
     ap.add_argument("--select-combo", default=None,
                     help="run ONLY this combination (Static must START in the failure "
@@ -161,7 +190,10 @@ def main():
 
     before = set(glob.glob(os.path.join(PROJECT, "results", "performance_*.json")))
     t0 = time.time()
-    if a.proc_cpu:
+    if a.mem:
+        rc = _run_with_mem_sampling(cmd, env, log, os.path.join(rd, "mem.csv"),
+                                    a.duration * 6 + 300)
+    elif a.proc_cpu:
         # Q1.1 asks what the safety layer costs when nothing is going wrong, and the
         # closest direct proxy is the executor's own CPU. Sampled here (parent side)
         # rather than inside the executor so the measurement cannot itself be part of

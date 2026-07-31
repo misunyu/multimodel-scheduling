@@ -46,9 +46,14 @@ EXACT_MATCH = ("quantity", "reference", "unit", "censored", "recovered", "window
 # 같은 어휘를 쓰면 s와 frames/s가 한 축에 섞인다.
 # 'maxV' (v37): 관측 창 안의 **최댓값**이며 `lastV`(창 끝 값)와 다른 양이다. Q4 본문이 인접한
 # 문장에서 둘을 함께 인용하므로(탐색 중 peak vs 종단), 한 어휘로 묶으면 한쪽이 조용히 낡는다.
+# 'rss' / 'vram' / 'hold' / 'headroom' (v38, 전환 자원 재측정, ISSRE R4): host RSS 와 GPU VRAM
+# 은 서로 다른 자원이며 한 어휘로 묶으면 "디바이스 메모리 증분 0"과 "호스트 메모리 증분 2 GB"가
+# 같은 축에 놓인다 — 이 라운드의 결론이 정확히 그 구분 위에 있다. hold = 피크가 유지된 시간(s),
+# headroom = (가용량 − 정상 상태) / 증분(무차원 배수).
 VALID_QUANTITY = {"search", "drain", "persist", "cumV", "lastV", "maxV", "bound", "lead",
                   "p99", "miss", "count", "throughput", "cpu", "infer_ms",
-                  "backlog_slope", "service_rate", "T_stable", "backlog", "fit_slope"}
+                  "backlog_slope", "service_rate", "T_stable", "backlog", "fit_slope",
+                  "rss", "vram", "hold", "headroom"}
 # 'commit' (v33): drain is measured from the moment the recovering candidate is committed,
 # which is neither t0 nor burst. It had been mislabelled 't0', which silently implied
 # drain and search shared an origin -- they do not, they are consecutive.

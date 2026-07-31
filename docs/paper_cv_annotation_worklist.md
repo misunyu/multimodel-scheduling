@@ -3,8 +3,8 @@
 **이 목록은 저장소 밖 정본에 적용한다.** `paper/main.tex` 는 배포본이며 편집하면
 `scripts/check_paper.py` 의 해시 검사가 실패한다 — 그것이 의도된 동작이다.
 
-주석 17개 · 추적 값 72건(고유 62건).
-대상 `main.tex` sha256 `dd1bcd9e7467ba0e…`
+주석 17개 · 추적 값 79건(고유 67건).
+대상 `main.tex` sha256 `23b834cfef15d72a…`
 
 적용:
 
@@ -124,7 +124,7 @@ Figures~\ref{fig:q13-persistence} and~\ref{fig:q13-cumulative} report both metri
 | `q13_gpu_cumV_ratio` | 8.3 x |
 | `q13_npu_cumV_ratio` | 8.4 x |
 
-### L627 — Q1.3 — the search that is lead and nothing else
+### L627 — Q1.3 — the search that is lead, and the no-dwell variant's counts
 
 ```
 We do not read the small differences among stop-and-restart, Adaptive hot-swap, and BoundG…
@@ -133,12 +133,15 @@ We do not read the small differences among stop-and-restart, Adaptive hot-swap, 
 줄 끝에 붙일 것:
 
 ```latex
-%!cv q13_gpu_bg_search
+%!cv q13_gpu_bg_search,q4b_a_recoveries,q4b_a_hotswaps,q4b_bg_hotswaps
 ```
 
 | id | 확정표 값 |
 |---|---|
 | `q13_gpu_bg_search` | 10.8 s |
+| `q4b_a_recoveries` | 2 of5 |
+| `q4b_a_hotswaps` | 15 swaps |
+| `q4b_bg_hotswaps` | 6 swaps |
 
 ### L644 — Q1.4 — sweep regression slopes against the predicted 1.0
 
@@ -326,7 +329,7 @@ Figure~\ref{fig:npu_violation} shows the outcome. Static, stop-and-restart, and 
 | `q5_adaptive_lastV` | 26.7 V |
 | `q5_sr_lastV` | 26.9 V |
 
-### L817 — Q6 — variant A's terminal violation and the integrated violation beside it
+### L817 — Q6 — variant A's terminal violation, integrated violation, and transition counts
 
 ```
 Removing dwell fails differently, and the difference is the more instructive result. Under…
@@ -335,7 +338,7 @@ Removing dwell fails differently, and the difference is the more instructive res
 줄 끝에 붙일 것:
 
 ```latex
-%!cv q6_a_lastV,q6_a_cumV,q6_adaptive_cumV
+%!cv q6_a_lastV,q6_a_cumV,q6_adaptive_cumV,q6_a_hotswaps,q6_bg_hotswaps,q4b_a_recoveries,q4b_a_hotswaps
 ```
 
 | id | 확정표 값 |
@@ -343,3 +346,7 @@ Removing dwell fails differently, and the difference is the more instructive res
 | `q6_a_lastV` | 51.7 V |
 | `q6_a_cumV` | 2226 V*s |
 | `q6_adaptive_cumV` | 264 V*s |
+| `q6_a_hotswaps` | 7 swaps |
+| `q6_bg_hotswaps` | 6 swaps |
+| `q4b_a_recoveries` | 2 of5 |
+| `q4b_a_hotswaps` | 15 swaps |

@@ -49,8 +49,8 @@ WORKLIST = [
      ["q13_static_lastV", "q13_gpu_static_cumV", "q13_npu_static_cumV",
       "q13_gpu_bg_persist", "q13_gpu_sr_persist", "q13_gpu_bg_cumV", "q13_gpu_sr_cumV",
       "q13_gpu_cumV_ratio", "q13_npu_cumV_ratio"]),
-    (627, "Q1.3 — the search that is lead and nothing else",
-     ["q13_gpu_bg_search"]),
+    (627, "Q1.3 — the search that is lead, and the no-dwell variant's counts",
+     ["q13_gpu_bg_search", "q4b_a_recoveries", "q4b_a_hotswaps", "q4b_bg_hotswaps"]),
     (644, "Q1.4 — sweep regression slopes against the predicted 1.0",
      ["c3_gpu_dslope_dlambda", "c3_npu_dslope_dlambda"]),
     (646, "Q1.4 — the three service rates bracketing the effective drain rate",
@@ -77,8 +77,9 @@ WORKLIST = [
     (775, "Q5 — persist, lead, the pre-activation part of the lead, baseline terminal V",
      ["q5_bg_persist", "q5_lead", "q5_lead_pre_activation", "q5_baseline_lastV",
       "q5_adaptive_lastV", "q5_sr_lastV"]),
-    (817, "Q6 — variant A's terminal violation and the integrated violation beside it",
-     ["q6_a_lastV", "q6_a_cumV", "q6_adaptive_cumV"]),
+    (817, "Q6 — variant A's terminal violation, integrated violation, and transition counts",
+     ["q6_a_lastV", "q6_a_cumV", "q6_adaptive_cumV", "q6_a_hotswaps", "q6_bg_hotswaps",
+      "q4b_a_recoveries", "q4b_a_hotswaps"]),
 ]
 
 
