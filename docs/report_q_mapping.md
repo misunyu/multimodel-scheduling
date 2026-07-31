@@ -16,7 +16,7 @@
 | 논문 위치 | 산출물 | 생성 스크립트 | 입력 데이터 | 실행 설정 근거 | 리포트 | 상태 |
 |---|---|---|---|---|---|---|
 | §II 동기, Fig.~1 | `qos_score_validation.pdf` | `scripts/qos_recovery_validation.py` (07-24 **replot**, ε=1.0) | `backup/results_pre_mla100_20260720_185647/results/qos_recovery_*.csv` (2026-04-09/10) — **개별 런 미상** | `tests/stale_phantom/qos_recovery_schedule.yaml` — 전경 4종 mnasnet·squeezenet1.0-12·resnet50·resnext50(Table~I 밖 3종), 배경 없음, `slo_ms` 미설정 → deadline = 도착 간격 1개(≈333 ms). 네 뷰 전부 실측(phantom 아님) | `q1_workload_attribution.md` §2 | **논문에서 제거(v35)** — 현 레지스트리에 없는 모델 4종, 원리적 재현 불가 |
-| §III 구조, Fig.~2 | `architecture.pdf` | 없음(수작업 도해로 추정) | — | — | — | **파일이 저장소에 없음** |
+| §III 구조, Fig.~2 | `architecture.pdf` | 없음(수작업 도해로 추정) | — | — | — | **저장소에 있음** — v36에서 루트에서 `docs/figures/`로 옮김(`figures/` 링크로 논문이 읽는 경로에 놓임). 해시가 `paper/paper.lock`에 있다 |
 | §IV-B Q1, Fig.~3 | `bounded_recovery_analysis.pdf` | `fig/plot_bounded_v8.py` — **부재**(증발) | `fig/confirmed_values.json` 8개 값 = 3시나리오×(search+drain+bound) − Q4 drain | Q3(CPU–GPU) 22.6+2.8·bound 26 / Q5(CPU–NPU) 14.2+0.0·bound 26 / Q4(CPU–GPU) 24(**종료 지연**, n=1)·bound 24 | `gate_f_fig3_attribution.md` | 정본 |
 | §IV Q1 오버헤드 | `runtime_overhead.pdf` | `scripts/runtime_overhead_analysis.py` | 미상 | `tests/stale_phantom/steady_state_views_schedule.yaml`(스크립트 기본값) | `runtime_overhead_analysis.md`(scripts/) | 정본 |
 | §IV 검출 민감도 | `detection_sensitivity.pdf` | `scripts/detection_sensitivity_analysis.py` | `results/bounded_sweep/run_s*_rep*.csv` — **저장소에 없음** | 미상 | `detection_sensitivity_analysis.md`(scripts/) | 정본 |
@@ -85,7 +85,7 @@
 - **`fig/plot_*_v8.py` 재생성 스크립트 5종 전부 부재.** `figure_regeneration_report.md:74`가 생성했다고
   기록하나 `fig/`에는 `check_figures.py`·`confirmed_values.json`·`paper_figure_manifest.json`·`README.md`뿐.
   → **`confirmed_values.json`에서 그림을 다시 그릴 수단이 없다.**
-- **`architecture.pdf`가 저장소에 없다**(참조 15개 중 유일한 결번).
+- ~~`architecture.pdf`가 저장소에 없다~~ → **오기였다.** 저장소 루트에 있었고(`figure_pipeline_report_v17.md`가 그렇게 적고 있다), v36에서 `docs/figures/`로 옮겨 논문이 읽는 경로에 놓였다.
 - 원시 런 `b2rep_q3`·`b2rep_q5`·`b3rep`·`q4_bsf_out`, `results/bounded_sweep/` — 전부 부재.
 - 그림 **8개**는 생성 스크립트가 저장소에 없다(위 표의 "없음"·"부재").
 

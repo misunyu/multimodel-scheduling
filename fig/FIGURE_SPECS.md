@@ -128,7 +128,7 @@
   `paper_figure_manifest.json`의 `status`). 확정표의 어떤 값도 이 둘을 `figure`로 지정하지 않으므로
   checker가 거짓 경고를 내지 않는다.
 - `qos_score_validation`은 §II 동기 그림이며 **Table~I 밖 모델 4종**을 쓴다(재현 불가, `q1_workload_attribution.md`).
-- `architecture.pdf`는 **저장소에 없다**(사용자 보관).
+- `architecture.pdf`는 **저장소에 있다** — `docs/figures/architecture.pdf`(v36에서 루트에서 옮김). 생성 스크립트는 없다(수작업 도해). "사용자 보관"이라는 옛 기술은 오기였다.
 
 ---
 
