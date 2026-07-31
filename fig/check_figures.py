@@ -44,7 +44,9 @@ EXACT_MATCH = ("quantity", "reference", "unit", "censored", "recovered", "window
 # fit_slope = d(배출 기울기)/d(λ)(무차원, 모형 예측 1.0).
 # 'drain'(회복 지표: 커밋→V≤ε, 단위 s)과 'backlog_slope'는 다른 양이다 — 이름이 비슷하다고
 # 같은 어휘를 쓰면 s와 frames/s가 한 축에 섞인다.
-VALID_QUANTITY = {"search", "drain", "persist", "cumV", "lastV", "bound", "lead",
+# 'maxV' (v37): 관측 창 안의 **최댓값**이며 `lastV`(창 끝 값)와 다른 양이다. Q4 본문이 인접한
+# 문장에서 둘을 함께 인용하므로(탐색 중 peak vs 종단), 한 어휘로 묶으면 한쪽이 조용히 낡는다.
+VALID_QUANTITY = {"search", "drain", "persist", "cumV", "lastV", "maxV", "bound", "lead",
                   "p99", "miss", "count", "throughput", "cpu", "infer_ms",
                   "backlog_slope", "service_rate", "T_stable", "backlog", "fit_slope"}
 # 'commit' (v33): drain is measured from the moment the recovering candidate is committed,

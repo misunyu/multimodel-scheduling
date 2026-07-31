@@ -32,8 +32,8 @@ OUT_MD = os.path.join(PROJECT, "docs", "paper_cv_annotation_worklist.md")
 # prose ahead of captions ahead of cross-section citations ahead of table cells, because a
 # table is replaced wholesale when it is updated and a sentence is not.
 WORKLIST = [
-    (557, "Q1 — recovery totals and lead on both platforms",
-     ["q3_bg_persist", "q5_bg_persist", "q3_lead", "q5_lead"]),
+    (557, "Q1 — recovery totals, lead, and the part of the lead that precedes activation",
+     ["q3_bg_persist", "q5_bg_persist", "q3_lead", "q5_lead", "q5_lead_pre_activation"]),
     (579, "Q1.1 — steady-state throughput, inference latency, CPU occupancy",
      ["q11_gpu_boundguard_throughput", "q11_gpu_boundguard_infer_ms",
       "q11_gpu_static_infer_ms", "q11_npu_adaptive_infer_ms",
@@ -67,15 +67,18 @@ WORKLIST = [
       "q15_gpu_adaptive_b0.5_p99"]),
     (700, "Q2 / prediction-match — the recovery times that are indistinguishable",
      ["q4b_adaptive_persist", "q4b_c_persist"]),
+    (712, "Q3 — the level the baselines sit at while in violation (peak, not terminal)",
+     ["q3_static_maxV"]),
     (714, "Q3 — persist, search, drain, lead, envelope, baseline terminal V",
      ["q3_bg_persist", "q3_bg_search", "q3_bg_drain", "q3_lead", "q3_bound",
       "q3_baseline_lastV"]),
-    (743, "Q4 — terminal violation when no admissible placement exists",
-     ["q4_bg_lastV"]),
-    (775, "Q5 — persist, lead, baseline terminal V",
-     ["q5_bg_persist", "q5_lead", "q5_baseline_lastV"]),
-    (817, "Q6 — variant A's terminal violation",
-     ["q6_a_lastV"]),
+    (743, "Q4 — terminal violation and the saturation-guard rejection count",
+     ["q4_bg_lastV", "q4_saturated_advances_all"]),
+    (775, "Q5 — persist, lead, the pre-activation part of the lead, baseline terminal V",
+     ["q5_bg_persist", "q5_lead", "q5_lead_pre_activation", "q5_baseline_lastV",
+      "q5_adaptive_lastV", "q5_sr_lastV"]),
+    (817, "Q6 — variant A's terminal violation and the integrated violation beside it",
+     ["q6_a_lastV", "q6_a_cumV", "q6_adaptive_cumV"]),
 ]
 
 
@@ -114,7 +117,7 @@ def main():
     n_ids = sum(len(i["ids"]) for i in items)
     n_uniq = len({i for it in items for i in it["ids"]})
     md = [
-        "# `%!cv` 주석 부착 목록 (v36 작업 190)",
+        "# `%!cv` 주석 부착 목록 (v36 작업 190 · v37 작업 196 확장)",
         "",
         "**이 목록은 저장소 밖 정본에 적용한다.** `paper/main.tex` 는 배포본이며 편집하면",
         "`scripts/check_paper.py` 의 해시 검사가 실패한다 — 그것이 의도된 동작이다.",

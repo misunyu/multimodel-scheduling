@@ -1,10 +1,10 @@
-# `%!cv` 주석 부착 목록 (v36 작업 190)
+# `%!cv` 주석 부착 목록 (v36 작업 190 · v37 작업 196 확장)
 
 **이 목록은 저장소 밖 정본에 적용한다.** `paper/main.tex` 는 배포본이며 편집하면
 `scripts/check_paper.py` 의 해시 검사가 실패한다 — 그것이 의도된 동작이다.
 
-주석 16개 · 추적 값 64건(고유 55건).
-대상 `main.tex` sha256 `98f947155c30ed76…`
+주석 17개 · 추적 값 72건(고유 62건).
+대상 `main.tex` sha256 `dd1bcd9e7467ba0e…`
 
 적용:
 
@@ -17,7 +17,7 @@ python3 scripts/apply_cv_annotations.py --tex /경로/정본/main.tex
 
 ---
 
-### L557 — Q1 — recovery totals and lead on both platforms
+### L557 — Q1 — recovery totals, lead, and the part of the lead that precedes activation
 
 ```
 \textcolor{navyblue}{Recovery completes in $30.4\pm0.5$\,s on CPU--GPU and $27.2\pm0.4$\,s…
@@ -26,7 +26,7 @@ python3 scripts/apply_cv_annotations.py --tex /경로/정본/main.tex
 줄 끝에 붙일 것:
 
 ```latex
-%!cv q3_bg_persist,q5_bg_persist,q3_lead,q5_lead
+%!cv q3_bg_persist,q5_bg_persist,q3_lead,q5_lead,q5_lead_pre_activation
 ```
 
 | id | 확정표 값 |
@@ -35,6 +35,7 @@ python3 scripts/apply_cv_annotations.py --tex /경로/정본/main.tex
 | `q5_bg_persist` | 27.2 s |
 | `q3_lead` | 9.0 s |
 | `q5_lead` | 22.4 s |
+| `q5_lead_pre_activation` | 9.6 s |
 
 ### L579 — Q1.1 — steady-state throughput, inference latency, CPU occupancy
 
@@ -250,6 +251,22 @@ Within the reconfiguring group a second, smaller division appears, and it is the
 | `q4b_adaptive_persist` | 13.0 s |
 | `q4b_c_persist` | 13.8 s |
 
+### L712 — Q3 — the level the baselines sit at while in violation (peak, not terminal)
+
+```
+Figure~\ref{fig:misprediction} shows the resulting QoS trajectories on the CPU--GPU platfo…
+```
+
+줄 끝에 붙일 것:
+
+```latex
+%!cv q3_static_maxV
+```
+
+| id | 확정표 값 |
+|---|---|
+| `q3_static_maxV` | 4.1 V |
+
 ### L714 — Q3 — persist, search, drain, lead, envelope, baseline terminal V
 
 ```
@@ -271,7 +288,7 @@ BoundGuard instead treats each ranked placement as a hypothesis. It rejects the 
 | `q3_bound` | 58.0 s |
 | `q3_baseline_lastV` | 3.5 V |
 
-### L743 — Q4 — terminal violation when no admissible placement exists
+### L743 — Q4 — terminal violation and the saturation-guard rejection count
 
 ```
 Two aspects deserve emphasis. \textcolor{navyblue}{The first concerns how the candidates w…
@@ -280,14 +297,15 @@ Two aspects deserve emphasis. \textcolor{navyblue}{The first concerns how the ca
 줄 끝에 붙일 것:
 
 ```latex
-%!cv q4_bg_lastV
+%!cv q4_bg_lastV,q4_saturated_advances_all
 ```
 
 | id | 확정표 값 |
 |---|---|
 | `q4_bg_lastV` | 362.5 V |
+| `q4_saturated_advances_all` | 45 events |
 
-### L775 — Q5 — persist, lead, baseline terminal V
+### L775 — Q5 — persist, lead, the pre-activation part of the lead, baseline terminal V
 
 ```
 Figure~\ref{fig:npu_violation} shows the outcome. Static, stop-and-restart, and Adaptive h…
@@ -296,16 +314,19 @@ Figure~\ref{fig:npu_violation} shows the outcome. Static, stop-and-restart, and 
 줄 끝에 붙일 것:
 
 ```latex
-%!cv q5_bg_persist,q5_lead,q5_baseline_lastV
+%!cv q5_bg_persist,q5_lead,q5_lead_pre_activation,q5_baseline_lastV,q5_adaptive_lastV,q5_sr_lastV
 ```
 
 | id | 확정표 값 |
 |---|---|
 | `q5_bg_persist` | 27.2 s |
 | `q5_lead` | 22.4 s |
+| `q5_lead_pre_activation` | 9.6 s |
 | `q5_baseline_lastV` | 26.7 V |
+| `q5_adaptive_lastV` | 26.7 V |
+| `q5_sr_lastV` | 26.9 V |
 
-### L817 — Q6 — variant A's terminal violation
+### L817 — Q6 — variant A's terminal violation and the integrated violation beside it
 
 ```
 Removing dwell fails differently, and the difference is the more instructive result. Under…
@@ -314,9 +335,11 @@ Removing dwell fails differently, and the difference is the more instructive res
 줄 끝에 붙일 것:
 
 ```latex
-%!cv q6_a_lastV
+%!cv q6_a_lastV,q6_a_cumV,q6_adaptive_cumV
 ```
 
 | id | 확정표 값 |
 |---|---|
 | `q6_a_lastV` | 51.7 V |
+| `q6_a_cumV` | 2226 V*s |
+| `q6_adaptive_cumV` | 264 V*s |

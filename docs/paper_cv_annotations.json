@@ -1,7 +1,7 @@
 {
   "_meta": {
     "note": "논문 정본(저장소 밖)에 붙일 %!cv 주석 목록. 배포본 paper/main.tex 은 편집하지 않는다.",
-    "target_main_tex_sha256": "98f947155c30ed76c820679b94e4b7b3630c2610294ebd1960e17ba20372a7dd",
+    "target_main_tex_sha256": "dd1bcd9e7467ba0e6f46de24492b672688c7c5e9f5364d663e8cc80d281f97d8",
     "apply_with": "python3 scripts/apply_cv_annotations.py --tex <정본 경로>",
     "verify_with": "주석을 붙인 새 main.tex 와 새 paper.lock 을 받은 뒤 `make check`",
     "line_sha256": "대상 줄의 sha256. 줄 번호는 편집으로 밀리므로 해시로 고정한다."
@@ -9,14 +9,15 @@
   "annotations": [
     {
       "line": 557,
-      "what": "Q1 — recovery totals and lead on both platforms",
+      "what": "Q1 — recovery totals, lead, and the part of the lead that precedes activation",
       "ids": [
         "q3_bg_persist",
         "q5_bg_persist",
         "q3_lead",
-        "q5_lead"
+        "q5_lead",
+        "q5_lead_pre_activation"
       ],
-      "annotation": "%!cv q3_bg_persist,q5_bg_persist,q3_lead,q5_lead",
+      "annotation": "%!cv q3_bg_persist,q5_bg_persist,q3_lead,q5_lead,q5_lead_pre_activation",
       "line_sha256": "e3f099ef61ca1557f2cce7aac653bf26f684e1494a749065c0c2ca45a30f8136",
       "line_excerpt": "\\textcolor{navyblue}{Recovery completes in $30.4\\pm0.5$\\,s on CPU--GPU and $27.2\\pm0.4$\\,s…",
       "values": {
@@ -34,6 +35,10 @@
         },
         "q5_lead": {
           "value": 22.4,
+          "unit": "s"
+        },
+        "q5_lead_pre_activation": {
+          "value": 9.6,
           "unit": "s"
         }
       }
@@ -405,6 +410,22 @@
       }
     },
     {
+      "line": 712,
+      "what": "Q3 — the level the baselines sit at while in violation (peak, not terminal)",
+      "ids": [
+        "q3_static_maxV"
+      ],
+      "annotation": "%!cv q3_static_maxV",
+      "line_sha256": "48ac0be7d571edaf534763142910c35ee22a8d685619fb0e1742fc9a09caadb8",
+      "line_excerpt": "Figure~\\ref{fig:misprediction} shows the resulting QoS trajectories on the CPU--GPU platfo…",
+      "values": {
+        "q3_static_maxV": {
+          "value": 4.1,
+          "unit": "V"
+        }
+      }
+    },
+    {
       "line": 714,
       "what": "Q3 — persist, search, drain, lead, envelope, baseline terminal V",
       "ids": [
@@ -447,29 +468,37 @@
     },
     {
       "line": 743,
-      "what": "Q4 — terminal violation when no admissible placement exists",
+      "what": "Q4 — terminal violation and the saturation-guard rejection count",
       "ids": [
-        "q4_bg_lastV"
+        "q4_bg_lastV",
+        "q4_saturated_advances_all"
       ],
-      "annotation": "%!cv q4_bg_lastV",
+      "annotation": "%!cv q4_bg_lastV,q4_saturated_advances_all",
       "line_sha256": "2974ddcfb086f4343ad29bcdca95f383e2a786a8cf4d437c5e9d3d4d07df82d9",
       "line_excerpt": "Two aspects deserve emphasis. \\textcolor{navyblue}{The first concerns how the candidates w…",
       "values": {
         "q4_bg_lastV": {
           "value": 362.5,
           "unit": "V"
+        },
+        "q4_saturated_advances_all": {
+          "value": 45,
+          "unit": "events"
         }
       }
     },
     {
       "line": 775,
-      "what": "Q5 — persist, lead, baseline terminal V",
+      "what": "Q5 — persist, lead, the pre-activation part of the lead, baseline terminal V",
       "ids": [
         "q5_bg_persist",
         "q5_lead",
-        "q5_baseline_lastV"
+        "q5_lead_pre_activation",
+        "q5_baseline_lastV",
+        "q5_adaptive_lastV",
+        "q5_sr_lastV"
       ],
-      "annotation": "%!cv q5_bg_persist,q5_lead,q5_baseline_lastV",
+      "annotation": "%!cv q5_bg_persist,q5_lead,q5_lead_pre_activation,q5_baseline_lastV,q5_adaptive_lastV,q5_sr_lastV",
       "line_sha256": "6df551ddb878da3d449231d44fb08519bd6ad8138f639c94203f967535b98ecc",
       "line_excerpt": "Figure~\\ref{fig:npu_violation} shows the outcome. Static, stop-and-restart, and Adaptive h…",
       "values": {
@@ -481,25 +510,47 @@
           "value": 22.4,
           "unit": "s"
         },
+        "q5_lead_pre_activation": {
+          "value": 9.6,
+          "unit": "s"
+        },
         "q5_baseline_lastV": {
           "value": 26.7,
+          "unit": "V"
+        },
+        "q5_adaptive_lastV": {
+          "value": 26.7,
+          "unit": "V"
+        },
+        "q5_sr_lastV": {
+          "value": 26.9,
           "unit": "V"
         }
       }
     },
     {
       "line": 817,
-      "what": "Q6 — variant A's terminal violation",
+      "what": "Q6 — variant A's terminal violation and the integrated violation beside it",
       "ids": [
-        "q6_a_lastV"
+        "q6_a_lastV",
+        "q6_a_cumV",
+        "q6_adaptive_cumV"
       ],
-      "annotation": "%!cv q6_a_lastV",
+      "annotation": "%!cv q6_a_lastV,q6_a_cumV,q6_adaptive_cumV",
       "line_sha256": "8a7ded22229bffad9d8de022d39b2725686401801d0136241de7f14d812a1086",
       "line_excerpt": "Removing dwell fails differently, and the difference is the more instructive result. Under…",
       "values": {
         "q6_a_lastV": {
           "value": 51.7,
           "unit": "V"
+        },
+        "q6_a_cumV": {
+          "value": 2226,
+          "unit": "V*s"
+        },
+        "q6_adaptive_cumV": {
+          "value": 264,
+          "unit": "V*s"
         }
       }
     }

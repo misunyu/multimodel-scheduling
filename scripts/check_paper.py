@@ -12,8 +12,10 @@
 2. **수치 대조** — `%!cv <id>[,<id>...]` 주석이 달린 줄에 대해, 나열된 각 id의 확정표 값이
    그 줄에 실제로 나타나는가. 주석은 줄 **끝**에 있어야 하고, 자기가 끝맺는 **문단** 전체를
    범위로 삼는다 — LaTeX 원고는 한 문장이 여러 줄로 접히고 그때 값은 앞 줄에 있다.
-3. **미추적 목록** — §IV에서 `%!cv` 없이 등장하는 수치. **경고이지 실패가 아니다** —
-   검사가 무엇을 덮지 못하는지 보이게 하는 것이 목적이다.
+3. **미추적 목록** — §IV에서 `%!cv` 없이 등장하는 수치, **그리고 주석이 달린 줄에서도 아무 id 가
+   설명하지 않는 수치**. **경고이지 실패가 아니다** — 검사가 무엇을 덮지 못하는지 보이게 하는 것이
+   목적이다. 둘째 항목이 없으면 줄 하나에 주석을 달았다는 이유로 그 줄의 낡은 수치까지
+   집계에서 사라진다(Q4 의 237/186/146 이 실제로 그렇게 가려졌다).
 4. **그림 참조** — `\\includegraphics` 대상이 `figures/`에 전부 있는가.
 5. **삭제된 그림** — 미사용으로 표시된 그림(`confirmed_values.json` `_meta.removed_figures`)을
    아직 참조하고 있지 않은가.
@@ -80,6 +82,23 @@ def representations(entry):
     elif unit in ("%", "percent"):
         reps.append((v / 100.0, "ratio"))
     return reps
+
+
+def matched_numerals(entry, nums_text):
+    """이 항목이 설명하는 줄의 수치들. 아래 미추적 집계에서 '이미 덮인 것'을 빼는 데 쓴다.
+
+    `sd` 도 포함한다: 논문은 "$30.4\pm0.5$" 로 적으므로 산포도 그 줄의 수치다. 다만 **검사하지는
+    않는다** — 산포를 인쇄하지 않는 문장이 많아 부재를 실패로 삼으면 거짓 경고가 쏟아진다.
+    여기서 세는 목적은 커버리지 집계에서 산포를 "설명되지 않은 수치"로 잘못 올리지 않는 것이다."""
+    hit = set()
+    vals = [v for v, _ in representations(entry)]
+    if entry.get("sd") is not None:
+        vals.append(float(entry["sd"]))
+    for value in vals:
+        for t in nums_text:
+            if abs(round(value, decimals(t)) - float(t)) < 1e-9:
+                hit.add(t)
+    return hit
 
 
 def line_matches(entry, nums_text):
@@ -150,6 +169,7 @@ def main():
     # ---- 2. 수치 대조 ----------------------------------------------------------------
     checked = 0
     annotated_lines = set()
+    uncovered_on_annotated = []
     for i, line in enumerate(lines):
         m = CV.search(line)
         if not m:
@@ -170,10 +190,12 @@ def main():
             j -= 1
         annotated_lines.update(range(j + 1, i + 1))
         nums_text = NUM.findall(strip_latex(" ".join(block)))
+        block_lines = list(range(j + 1, i + 1))
         where = f"main.tex:{i + 1}"
         if not nums_text:
             problems.append(f"{where}: %!cv 주석이 있는데 줄에 수치가 없다 — {','.join(ids)}")
             continue
+        consumed = set()
         for ident in ids:
             checked += 1
             e = confirmed.get(ident)
@@ -181,12 +203,20 @@ def main():
                 problems.append(f"{where}: 확정표에 없는 id — {ident}")
                 continue
             ok, tried = line_matches(e, nums_text)
+            if ok:
+                consumed |= matched_numerals(e, nums_text)
             if not ok:
                 problems.append(
                     f"{where}: {ident} = {e['value']}{' ' + e['unit'] if e.get('unit') else ''} "
                     f"가 이 줄에 없다\n"
                     f"    줄의 수치: {', '.join(nums_text)}\n"
                     f"    확정표를 줄의 자릿수로 반올림하면: {', '.join(tried)}")
+        # 주석이 달린 줄에도 **아무 id 도 설명하지 않는 수치**가 남는다. 줄 단위로만 세면 그 수치가
+        # 미추적 집계에서 사라져 커버리지가 실제보다 좋아 보인다 — 실제로 Q4 의 낡은 237/186/146 이
+        # 그렇게 가려졌다. 별도로 센다.
+        leftover = [t for t in nums_text if t not in consumed]
+        if leftover:
+            uncovered_on_annotated.append((block_lines[0] + 1, i + 1, leftover))
 
     # ---- 3. 미추적 수치 --------------------------------------------------------------
     s0, s1 = section_bounds(lines, a.section)
@@ -228,14 +258,22 @@ def main():
           f"(main.tex + {n_fig_ok}/{n_lock_fig} figures)")
     print(f"tracked values:  {checked} checked, "
           f"{sum(1 for p in problems if p.startswith('main.tex:'))} mismatch")
-    print(f"untracked:       {sum(len(n) for _, n in untracked)} numerals on "
-          f"{len(untracked)} lines of section '{a.section}' without %!cv")
+    n_unann = sum(len(n) for _, n in untracked)
+    n_onann = sum(len(n) for _, _, n in uncovered_on_annotated)
+    print(f"untracked:       {n_unann + n_onann} numerals "
+          f"({n_unann} on {len(untracked)} lines without %!cv, "
+          f"{n_onann} on {len(uncovered_on_annotated)} annotated lines that no id explains)")
     print(f"figures:         {len(refs)} referenced, {len(present)} present")
 
     if a.list_untracked and untracked:
         print("\n[untracked lines]")
         for ln, nums in untracked:
             print(f"  main.tex:{ln}  {', '.join(nums)}")
+    if a.list_untracked and uncovered_on_annotated:
+        print("\n[annotated lines, numerals no id explains]")
+        for lo, hi, nums in uncovered_on_annotated:
+            where = f"{lo}" if lo == hi else f"{lo}-{hi}"
+            print(f"  main.tex:{where}  {', '.join(nums)}")
 
     for w in warnings:
         print(f"\n[warn] {w}")
