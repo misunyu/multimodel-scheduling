@@ -1,0 +1,109 @@
+{
+  "run_id": "20260804_113431_greedy_review",
+  "purpose": "Read-only review of greedy_baseline.py: when the VLM's estimated load enters the cumulative accelerator load",
+  "read_only": true,
+  "modified_any_source": false,
+  "git_commit": "26e4407917148e1d828cfc21d444aefcf6406858",
+  "verdict": "C (path-dependent) -- deterministic per sort variant: speedup => A (VLM first in 60/60 groups), load_factor => B (VLM never first; 1-3 instances admitted before its load enters cum)",
+  "findings": {
+    "1_when_vlm_pinned": "inside the loop as an exception, greedy_baseline.py:49-51 (not pre-loop, not post-processing)",
+    "2_cum_initial": "0.0 at greedy_baseline.py:47; no VLM pre-load",
+    "3_vlm_load_added": "yes, greedy_baseline.py:50 (cum += r['load_factor'])",
+    "4_capacity_condition": "greedy_baseline.py:52  elif cum + r['load_factor'] <= 1.0:",
+    "5_over_capacity": "skip (greedy_baseline.py:55-56 else: decision='cpu'); no backtrack, no break; skip!=break observable in 64/180 (platform,variant,group) cells",
+    "6_platform_branching": "none in placement logic; accel only reaches _device_static(m, accel, S) at :38. main():88 branches on gpu for the md_caps reporting table only",
+    "vlm_load_defined": "yes; qwen2_vl cpu_infer=12302.185ms is a real measured value, so speedup is finite and maximal (GPU 123.3 / NPU 20.0) -- this is why it sorts first under the speedup variant",
+    "vlm_load_factor": {
+      "gpu": [
+        0.0217,
+        0.0325,
+        0.0433,
+        0.065
+      ],
+      "npu": [
+        0.1332,
+        0.2001,
+        0.2664,
+        0.3996
+      ]
+    }
+  },
+  "empirical": {
+    "qwen2_vl_first_speedup": {
+      "gpu": "30/30",
+      "npu": "30/30"
+    },
+    "qwen2_vl_first_load_factor": {
+      "gpu": "0/30",
+      "npu": "0/30"
+    },
+    "positions_load_factor": {
+      "gpu": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "npu": [
+        1,
+        2,
+        3
+      ]
+    },
+    "skip_ne_break_groups": {
+      "gpu/speedup": 0,
+      "gpu/load_factor": 26,
+      "npu/speedup": 15,
+      "npu/load_factor": 23
+    },
+    "cum_gt_1_at_end": {
+      "gpu/speedup": 0,
+      "gpu/load_factor": 2,
+      "npu/speedup": 0,
+      "npu/load_factor": 18
+    }
+  },
+  "manuscript_check": {
+    "revision": "r4 (2026-07-31)",
+    "line": 122,
+    "verdict": "VLM exception matches the code; 'while ... remains within capacity' reads as break but the code skips -- partial mismatch. GPU unaffected (0/45), NPU speedup differs in 15/45"
+  },
+  "reported_not_changed": [
+    "FORCED_ACCEL (greedy_baseline.py:30) is a hardcoded literal, not derived from model_registry.DEVICE_CONSTRAINTS despite the comment; model_registry is not imported",
+    "manuscript line 122 'while ... within capacity' vs the skip implementation",
+    "load_factor variant admits instances before the VLM's load is counted; on the NPU the VLM alone is 13-40% of capacity"
+  ],
+  "files_read": [
+    {
+      "path": "xgboost_model/full_collection_540/scripts/greedy_baseline.py",
+      "sha256": "579b9ac471efde32023eac347c690cf82abac7d4eca789ad9b5c317fe4e2f239"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/analysis_common.py",
+      "sha256": "cb5c9772e0d5e7b1664e530880733440ab87ae943ee96a5991f5fb5ffe71fa10"
+    },
+    {
+      "path": "xgboost_model/deploy_selector_xgb_suite.py",
+      "sha256": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532"
+    },
+    {
+      "path": "xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json",
+      "sha256": "7fec0eea36e9eb98700b87e908475e908d8b5dd23f602459fb56e85da8ba1d1b"
+    },
+    {
+      "path": "model_registry.py",
+      "sha256": "d66c50f684c80ef152a9ac333d30bf228524605e9997b85f0cd4f02a53e15fb5"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/greedy_summary.md",
+      "sha256": "cac45bf9f35e852e1708ea0e5e5ba16f2a61df4d9b36eb1ae6f483532db2350f"
+    },
+    {
+      "path": "manuscript/mlforsys_main.tex",
+      "sha256": "d31d17a05ae48b3328d14847e23707855c7497ce3785f7f7019eb7a3dfb3c7af"
+    }
+  ],
+  "additional_files_needed": [],
+  "unknowns": []
+}
