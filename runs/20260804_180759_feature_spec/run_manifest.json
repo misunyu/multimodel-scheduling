@@ -1,0 +1,101 @@
+{
+  "run_id": "20260804_180759_feature_spec",
+  "read_only": true,
+  "modified_any_source": false,
+  "purpose": "Enumerate the direct predictor's 37 features at item level and verify the manuscript's 37-dimensional claim",
+  "git_commit": "bca191b233bee6be0ea8f3e953d728b12050fcac",
+  "manuscript_revision": "r4",
+  "structure": "12 per-view features x {sum, mean, max} = 36, plus views.count.views = 37",
+  "verification": {
+    "1_count_is_37": {
+      "code": 37,
+      "artifacts": 37,
+      "analysis_common_FEATURE_ORDER": 37,
+      "verdict": "exactly 37 -- the manuscript's ':89 37-dimensional' claim is correct",
+      "note": "37 is not a hardcoded constant; it derives from 12 per-view keys x 3 aggregations + 1 count"
+    },
+    "2_gpu_npu_lists_identical": {
+      "artifact_files": 6,
+      "all_byte_identical": true,
+      "sha256_shared": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584",
+      "verdict": "names, order and count are identical; only feature VALUES differ by platform (exec_* indicator and which device's static profile is read)"
+    },
+    "3_artifact_vs_code": {
+      "set_equal": true,
+      "order_equal": true
+    },
+    "4_plan_level_only": {
+      "features_referencing_measurements": 0,
+      "verdict": "all 37 are plan-level; measured throughput/tokens/miss-rate are used only for targets, never for X",
+      "known_separate_defect": "shipped deploy_cpu_* artifacts were trained with the infps features all zero (train/serve skew, already documented in SUMMARY.md); this is an input-value defect, not a feature-spec defect"
+    }
+  },
+  "category_counts": {
+    "요청률": 3,
+    "디바이스 배치": 9,
+    "모델 유형": 6,
+    "단독 프로파일": 12,
+    "집계 부하": 3,
+    "기타": 4
+  },
+  "uncategorized_reported": {
+    "count": 4,
+    "items": [
+      "views.{sum,mean,max}.x.infps__static_infer_sel",
+      "views.count.views"
+    ],
+    "reason": "interaction term (request rate x isolated profile) and an instance count; neither fits the manuscript's five categories at :160"
+  },
+  "decomposed_relation": {
+    "shared_base_quantities": 12,
+    "decomposed_only": 6,
+    "direct_only": 1
+  },
+  "files_read": [
+    {
+      "path": "xgboost_model/deploy_selector_xgb_suite.py",
+      "sha256": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/analysis_common.py",
+      "sha256": "cb5c9772e0d5e7b1664e530880733440ab87ae943ee96a5991f5fb5ffe71fa10"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/train_decomposed.py",
+      "sha256": "d5608fb863c52468c3657ac8f934ad129dacfd837553645d2af5475935938769"
+    },
+    {
+      "path": "xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json",
+      "sha256": "7fec0eea36e9eb98700b87e908475e908d8b5dd23f602459fb56e85da8ba1d1b"
+    },
+    {
+      "path": "manuscript/mlforsys_main.tex",
+      "sha256": "03f6530db8fb372c9cfba5081a4c5c7895e324ed13b4da5151f1259cce02d30d"
+    },
+    {
+      "path": "xgboost_model/artifacts/deploy_conc_cpu_gpu_features.json",
+      "sha256": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584"
+    },
+    {
+      "path": "xgboost_model/artifacts/deploy_cpu_gpu_features.json",
+      "sha256": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584"
+    },
+    {
+      "path": "xgboost_model/artifacts/deploy_cpu_npu_features.json",
+      "sha256": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584"
+    },
+    {
+      "path": "xgboost_model/artifacts/deploy_xgb_features.json",
+      "sha256": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584"
+    },
+    {
+      "path": "xgboost_model/artifacts/gkf_cpu_gpu_features.json",
+      "sha256": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584"
+    },
+    {
+      "path": "xgboost_model/artifacts/gkf_cpu_npu_features.json",
+      "sha256": "79e34d26dbfe30a27f8a929eb52236b2afc34309638f50b15c7ca86aba2c5584"
+    }
+  ],
+  "unknowns": []
+}

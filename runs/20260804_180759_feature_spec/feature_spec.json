@@ -1,0 +1,350 @@
+{
+  "n_features": 37,
+  "source": "deploy_selector_xgb_suite.py:_view_features(:250-279) -> _aggregate(:282-294) -> featurize_window(:296-361)",
+  "structure": "12 per-view features x {sum, mean, max} = 36, plus views.count.views = 37",
+  "category_counts": {
+    "요청률": 3,
+    "디바이스 배치": 9,
+    "모델 유형": 6,
+    "단독 프로파일": 12,
+    "집계 부하": 3,
+    "기타": 4
+  },
+  "features": [
+    {
+      "index": 1,
+      "feature_name": "views.sum.view.infps",
+      "definition": "창 내 전 뷰 합: 스케줄이 이 뷰에 지정한 초당 요청 수 (baseline_rate x rate_factor)",
+      "unit_type": "fps (float)",
+      "category": "요청률",
+      "agg": "sum",
+      "base": "view.infps"
+    },
+    {
+      "index": 2,
+      "feature_name": "views.sum.view.exec_cpu",
+      "definition": "창 내 전 뷰 합: 이 뷰가 CPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "sum",
+      "base": "view.exec_cpu"
+    },
+    {
+      "index": 3,
+      "feature_name": "views.sum.view.exec_gpu",
+      "definition": "창 내 전 뷰 합: 이 뷰가 GPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "sum",
+      "base": "view.exec_gpu"
+    },
+    {
+      "index": 4,
+      "feature_name": "views.sum.view.exec_npu",
+      "definition": "창 내 전 뷰 합: 이 뷰가 NPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "sum",
+      "base": "view.exec_npu"
+    },
+    {
+      "index": 5,
+      "feature_name": "views.sum.view.is_vision",
+      "definition": "창 내 전 뷰 합: _model_kind(model)=='vision'이면 1",
+      "unit_type": "0/1 지시자",
+      "category": "모델 유형",
+      "agg": "sum",
+      "base": "view.is_vision"
+    },
+    {
+      "index": 6,
+      "feature_name": "views.sum.view.is_llm",
+      "definition": "창 내 전 뷰 합: _model_kind(model)이 llm/vlm이면 1",
+      "unit_type": "0/1 지시자",
+      "category": "모델 유형",
+      "agg": "sum",
+      "base": "view.is_llm"
+    },
+    {
+      "index": 7,
+      "feature_name": "views.sum.view.static_infer_sel",
+      "definition": "창 내 전 뷰 합: 배치된 디바이스의 단독 추론 지연 (_device_static의 infer). 결측시 0",
+      "unit_type": "ms (float)",
+      "category": "단독 프로파일",
+      "agg": "sum",
+      "base": "view.static_infer_sel"
+    },
+    {
+      "index": 8,
+      "feature_name": "views.sum.view.static_load_sel",
+      "definition": "창 내 전 뷰 합: 배치된 디바이스의 단독 모델 로드 시간 (load). 결측시 0",
+      "unit_type": "ms (float)",
+      "category": "단독 프로파일",
+      "agg": "sum",
+      "base": "view.static_load_sel"
+    },
+    {
+      "index": 9,
+      "feature_name": "views.sum.view.static_tokens_sel",
+      "definition": "창 내 전 뷰 합: 배치된 디바이스의 단독 토큰 생성률 (tokens). 결측시 0",
+      "unit_type": "tok/s (float)",
+      "category": "단독 프로파일",
+      "agg": "sum",
+      "base": "view.static_tokens_sel"
+    },
+    {
+      "index": 10,
+      "feature_name": "views.sum.view.capacity_fps",
+      "definition": "창 내 전 뷰 합: 1000 / static_infer_sel (static_infer_sel>0일 때, 아니면 0)",
+      "unit_type": "fps (float)",
+      "category": "단독 프로파일",
+      "agg": "sum",
+      "base": "view.capacity_fps"
+    },
+    {
+      "index": 11,
+      "feature_name": "views.sum.view.load_factor",
+      "definition": "창 내 전 뷰 합: view.infps / view.capacity_fps (capacity>0일 때, 아니면 0)",
+      "unit_type": "비율 (float)",
+      "category": "집계 부하",
+      "agg": "sum",
+      "base": "view.load_factor"
+    },
+    {
+      "index": 12,
+      "feature_name": "views.sum.x.infps__static_infer_sel",
+      "definition": "창 내 전 뷰 합: view.infps x view.static_infer_sel 상호작용항",
+      "unit_type": "fps·ms (float)",
+      "category": "기타",
+      "agg": "sum",
+      "base": "x.infps__static_infer_sel"
+    },
+    {
+      "index": 13,
+      "feature_name": "views.mean.view.infps",
+      "definition": "창 내 전 뷰 평균: 스케줄이 이 뷰에 지정한 초당 요청 수 (baseline_rate x rate_factor)",
+      "unit_type": "fps (float)",
+      "category": "요청률",
+      "agg": "mean",
+      "base": "view.infps"
+    },
+    {
+      "index": 14,
+      "feature_name": "views.mean.view.exec_cpu",
+      "definition": "창 내 전 뷰 평균: 이 뷰가 CPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "mean",
+      "base": "view.exec_cpu"
+    },
+    {
+      "index": 15,
+      "feature_name": "views.mean.view.exec_gpu",
+      "definition": "창 내 전 뷰 평균: 이 뷰가 GPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "mean",
+      "base": "view.exec_gpu"
+    },
+    {
+      "index": 16,
+      "feature_name": "views.mean.view.exec_npu",
+      "definition": "창 내 전 뷰 평균: 이 뷰가 NPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "mean",
+      "base": "view.exec_npu"
+    },
+    {
+      "index": 17,
+      "feature_name": "views.mean.view.is_vision",
+      "definition": "창 내 전 뷰 평균: _model_kind(model)=='vision'이면 1",
+      "unit_type": "0/1 지시자",
+      "category": "모델 유형",
+      "agg": "mean",
+      "base": "view.is_vision"
+    },
+    {
+      "index": 18,
+      "feature_name": "views.mean.view.is_llm",
+      "definition": "창 내 전 뷰 평균: _model_kind(model)이 llm/vlm이면 1",
+      "unit_type": "0/1 지시자",
+      "category": "모델 유형",
+      "agg": "mean",
+      "base": "view.is_llm"
+    },
+    {
+      "index": 19,
+      "feature_name": "views.mean.view.static_infer_sel",
+      "definition": "창 내 전 뷰 평균: 배치된 디바이스의 단독 추론 지연 (_device_static의 infer). 결측시 0",
+      "unit_type": "ms (float)",
+      "category": "단독 프로파일",
+      "agg": "mean",
+      "base": "view.static_infer_sel"
+    },
+    {
+      "index": 20,
+      "feature_name": "views.mean.view.static_load_sel",
+      "definition": "창 내 전 뷰 평균: 배치된 디바이스의 단독 모델 로드 시간 (load). 결측시 0",
+      "unit_type": "ms (float)",
+      "category": "단독 프로파일",
+      "agg": "mean",
+      "base": "view.static_load_sel"
+    },
+    {
+      "index": 21,
+      "feature_name": "views.mean.view.static_tokens_sel",
+      "definition": "창 내 전 뷰 평균: 배치된 디바이스의 단독 토큰 생성률 (tokens). 결측시 0",
+      "unit_type": "tok/s (float)",
+      "category": "단독 프로파일",
+      "agg": "mean",
+      "base": "view.static_tokens_sel"
+    },
+    {
+      "index": 22,
+      "feature_name": "views.mean.view.capacity_fps",
+      "definition": "창 내 전 뷰 평균: 1000 / static_infer_sel (static_infer_sel>0일 때, 아니면 0)",
+      "unit_type": "fps (float)",
+      "category": "단독 프로파일",
+      "agg": "mean",
+      "base": "view.capacity_fps"
+    },
+    {
+      "index": 23,
+      "feature_name": "views.mean.view.load_factor",
+      "definition": "창 내 전 뷰 평균: view.infps / view.capacity_fps (capacity>0일 때, 아니면 0)",
+      "unit_type": "비율 (float)",
+      "category": "집계 부하",
+      "agg": "mean",
+      "base": "view.load_factor"
+    },
+    {
+      "index": 24,
+      "feature_name": "views.mean.x.infps__static_infer_sel",
+      "definition": "창 내 전 뷰 평균: view.infps x view.static_infer_sel 상호작용항",
+      "unit_type": "fps·ms (float)",
+      "category": "기타",
+      "agg": "mean",
+      "base": "x.infps__static_infer_sel"
+    },
+    {
+      "index": 25,
+      "feature_name": "views.max.view.infps",
+      "definition": "창 내 전 뷰 최대: 스케줄이 이 뷰에 지정한 초당 요청 수 (baseline_rate x rate_factor)",
+      "unit_type": "fps (float)",
+      "category": "요청률",
+      "agg": "max",
+      "base": "view.infps"
+    },
+    {
+      "index": 26,
+      "feature_name": "views.max.view.exec_cpu",
+      "definition": "창 내 전 뷰 최대: 이 뷰가 CPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "max",
+      "base": "view.exec_cpu"
+    },
+    {
+      "index": 27,
+      "feature_name": "views.max.view.exec_gpu",
+      "definition": "창 내 전 뷰 최대: 이 뷰가 GPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "max",
+      "base": "view.exec_gpu"
+    },
+    {
+      "index": 28,
+      "feature_name": "views.max.view.exec_npu",
+      "definition": "창 내 전 뷰 최대: 이 뷰가 NPU에 배치되면 1, 아니면 0",
+      "unit_type": "0/1 지시자",
+      "category": "디바이스 배치",
+      "agg": "max",
+      "base": "view.exec_npu"
+    },
+    {
+      "index": 29,
+      "feature_name": "views.max.view.is_vision",
+      "definition": "창 내 전 뷰 최대: _model_kind(model)=='vision'이면 1",
+      "unit_type": "0/1 지시자",
+      "category": "모델 유형",
+      "agg": "max",
+      "base": "view.is_vision"
+    },
+    {
+      "index": 30,
+      "feature_name": "views.max.view.is_llm",
+      "definition": "창 내 전 뷰 최대: _model_kind(model)이 llm/vlm이면 1",
+      "unit_type": "0/1 지시자",
+      "category": "모델 유형",
+      "agg": "max",
+      "base": "view.is_llm"
+    },
+    {
+      "index": 31,
+      "feature_name": "views.max.view.static_infer_sel",
+      "definition": "창 내 전 뷰 최대: 배치된 디바이스의 단독 추론 지연 (_device_static의 infer). 결측시 0",
+      "unit_type": "ms (float)",
+      "category": "단독 프로파일",
+      "agg": "max",
+      "base": "view.static_infer_sel"
+    },
+    {
+      "index": 32,
+      "feature_name": "views.max.view.static_load_sel",
+      "definition": "창 내 전 뷰 최대: 배치된 디바이스의 단독 모델 로드 시간 (load). 결측시 0",
+      "unit_type": "ms (float)",
+      "category": "단독 프로파일",
+      "agg": "max",
+      "base": "view.static_load_sel"
+    },
+    {
+      "index": 33,
+      "feature_name": "views.max.view.static_tokens_sel",
+      "definition": "창 내 전 뷰 최대: 배치된 디바이스의 단독 토큰 생성률 (tokens). 결측시 0",
+      "unit_type": "tok/s (float)",
+      "category": "단독 프로파일",
+      "agg": "max",
+      "base": "view.static_tokens_sel"
+    },
+    {
+      "index": 34,
+      "feature_name": "views.max.view.capacity_fps",
+      "definition": "창 내 전 뷰 최대: 1000 / static_infer_sel (static_infer_sel>0일 때, 아니면 0)",
+      "unit_type": "fps (float)",
+      "category": "단독 프로파일",
+      "agg": "max",
+      "base": "view.capacity_fps"
+    },
+    {
+      "index": 35,
+      "feature_name": "views.max.view.load_factor",
+      "definition": "창 내 전 뷰 최대: view.infps / view.capacity_fps (capacity>0일 때, 아니면 0)",
+      "unit_type": "비율 (float)",
+      "category": "집계 부하",
+      "agg": "max",
+      "base": "view.load_factor"
+    },
+    {
+      "index": 36,
+      "feature_name": "views.max.x.infps__static_infer_sel",
+      "definition": "창 내 전 뷰 최대: view.infps x view.static_infer_sel 상호작용항",
+      "unit_type": "fps·ms (float)",
+      "category": "기타",
+      "agg": "max",
+      "base": "x.infps__static_infer_sel"
+    },
+    {
+      "index": 37,
+      "feature_name": "views.count.views",
+      "definition": "창의 뷰(동시 인스턴스) 개수 = N. _aggregate가 len(df)로 산출",
+      "unit_type": "개수 (float)",
+      "category": "기타",
+      "agg": "count",
+      "base": null
+    }
+  ],
+  "artifact_files_all_identical": true,
+  "code_matches_artifact_name_and_order": true
+}
