@@ -1,0 +1,120 @@
+{
+  "run_id": "20260804_142300_decomposed_review",
+  "read_only": true,
+  "modified_any_source": false,
+  "purpose": "Read-only implementation review of the P6 decomposed per-instance baseline",
+  "git_commit": "0ca46cf7ab9ba3b5b7820a3670fe074f91e500f8",
+  "manuscript_revision": "r4 (2026-07-31)",
+  "answers": {
+    "1_predictor_structure": "(a) ONE shared regressor over all vision views; 3 boosters per platform (one per fold), 6 total; no per-model split, no model one-hot -- identity enters only via static-profile numerics. Groups/folds inherited verbatim from P1's group_to_fold (train_decomposed.py:100-112)",
+    "2_learner": "XGBoost via the same analysis_common helpers as direct; _PARAMS seed=42, _PARAM_GRID 4 combos, rounds=300; outer 3-fold groupwise identical to P1; inner hyperparameter CV is group-aware",
+    "3_features": "18 = 12 own (_view_features) + 6 co-runner summaries (co.same_dev_load_sum, co.same_dev_count, co.other_dev_load_sum, co.other_dev_count, co.set_has_gen, co.gen_on_accel). NOT a pure per-instance feature set. All plan-level; no measured per-view dynamics",
+    "4_attainment": "eff = min(infps, cap); cap = 1000/static_infer_ms from sample_profiling_data.json; ratio = thr/eff; target = min(1.0, ratio); clipped count is 0 on both platforms",
+    "5_composition": "y1 = sum(r*eff)/Fmax_measured; y2 = clip01(unweighted mean(1-r)) then affine min-max against the group's MEASURED y2 lo/hi. Neither a threshold nor a learned map. P6 therefore needs measured group stats at predict time; P1 does not",
+    "6_y3": "shared verbatim -- P1's OOF y3_pred read from groupkfold_{platform}_oof.csv (:114-115); no artifact load, no retraining",
+    "7_appendix_C": "all 8 reported values trace to specific lines and match decomposed_metrics.json exactly; re-execution deliberately NOT performed (it would overwrite committed artifacts)"
+  },
+  "appendix_C_crosscheck": {
+    "per_view_rho": [
+      0.9930917737426418,
+      0.9915988630441291
+    ],
+    "per_view_mae": [
+      0.01702583165674029,
+      0.020131093854586033
+    ],
+    "y2_recon_rho": [
+      0.8343515504932715,
+      0.76299937557778
+    ],
+    "y2_recon_mae": [
+      0.14892274473585745,
+      0.16867734321769026
+    ],
+    "composed_group_rho": [
+      0.9310499607928602,
+      0.9108164657167215
+    ],
+    "composed_top1": [
+      0.9111111111111111,
+      0.6222222222222222
+    ],
+    "composed_top5": [
+      1.0,
+      1.0
+    ],
+    "all_match_manuscript": true
+  },
+  "manuscript_mismatches": [
+    {
+      "line": 124,
+      "kind": "misleading",
+      "issue": "'predicts the degradation of each task separately' reads as per-task models; implementation is one shared regressor"
+    },
+    {
+      "line": 124,
+      "kind": "material_omission",
+      "issue": "composition also uses the group's MEASURED Fmax and y2 lo/hi, so P6 requires measured group stats that P1 does not -- an asymmetry in the comparison (which happens to favor P6, so the conclusion is conservative)"
+    },
+    {
+      "line": 198,
+      "kind": "unverifiable+omission",
+      "issue": "'ports their structure' -- the port includes 6 co-runner features; Kim's original feature set cannot be checked from this repo"
+    },
+    {
+      "lines": [
+        192,
+        277,
+        278
+      ],
+      "kind": "metric_convention",
+      "issue": "0.993/0.992 and 0.834/0.763 are POOLED Spearman while Table 1's .931/.911 are GROUP-MEAN, used without distinction; the code also computes group-mean y2 recon (0.877/0.720) which is not reported"
+    },
+    {
+      "line": 124,
+      "kind": "minor",
+      "issue": "attainment upper clip min(1.0,.) not mentioned; 0 rows clipped"
+    },
+    {
+      "line": 264,
+      "kind": "explanatory_gap",
+      "issue": "composition loss cause not stated: unweighted mean, generative views excluded, request-count weighting not reproduced"
+    }
+  ],
+  "y3_statement_verdict": "manuscript :124 on y3 sharing MATCHES the code",
+  "files_read": [
+    {
+      "path": "xgboost_model/full_collection_540/scripts/train_decomposed.py",
+      "sha256": "d5608fb863c52468c3657ac8f934ad129dacfd837553645d2af5475935938769"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/scripts/analysis_common.py",
+      "sha256": "cb5c9772e0d5e7b1664e530880733440ab87ae943ee96a5991f5fb5ffe71fa10"
+    },
+    {
+      "path": "xgboost_model/deploy_selector_xgb_suite.py",
+      "sha256": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/decomposed_metrics.json",
+      "sha256": "5736f4389db4fdba8cb68b23e9bb991ad6792ad7b11be3dc91cd49d3dff2879b"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/groupkfold_gpu_metrics.json",
+      "sha256": "5f1b48849523ec171d8684cbc53d489fc89cb9d01e84e6801748ba3af9ff1998"
+    },
+    {
+      "path": "xgboost_model/full_collection_540/analysis/groupkfold_npu_metrics.json",
+      "sha256": "0040264e8c84b99d269a41fd0dc7ec598d6ae5ae31633c830e08c53b9ef72199"
+    },
+    {
+      "path": "manuscript/mlforsys_main.tex",
+      "sha256": "d31d17a05ae48b3328d14847e23707855c7497ce3785f7f7019eb7a3dfb3c7af"
+    }
+  ],
+  "additional_files_needed": [],
+  "unknowns": [
+    "Kim et al. ICCD2024 original feature set (outside this repo)",
+    "execution-level reproduction of the Appendix C numbers (not run: would overwrite artifacts)"
+  ]
+}
