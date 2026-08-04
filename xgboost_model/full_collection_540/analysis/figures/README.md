@@ -58,12 +58,35 @@ S6, S10, S7, S8. (지시문의 서술 순서 대신 N 오름차순을 택함 —
 
 ## F2 — fig_transfer.{pdf,png}
 
-- 생성: 2026-07-30 10:59 KST, HEAD `1ee0f8e` (pre-commit), 인자 `--fig f2`
+- **generator**: `scripts/make_figures.py --fig f2`
+- 재생성: 2026-08-04, HEAD `11fc6c6` (pre-commit) — **범례 라벨만 변경**
+- 최초 생성: 2026-07-30 10:59 KST, HEAD `1ee0f8e` (pre-commit)
 - 입력: `analysis/cross_platform_metrics.json`(asis 변형, commit d0e2644),
   `analysis/unified_metrics.json`(commit c37c5bd),
   `analysis/groupkfold_{gpu,npu}_metrics.json`(commit 475a208)
 - figsize (5.0, 2.2)in 2패널, y축 절단을 축 레이블에 명시
   (Spearman [0.85,1.00] / Top-1 [0.5,1.0]), 막대 위 수치 7pt
+
+### 범례 용어 (2026-08-04 갱신)
+
+원고 §4 Transfer 문단이 세 설정을 **platform-specific / zero-shot / joint**로 정의하므로
+범례를 본문 용어에 정렬했다. 막대 색·순서는 불변(파랑=platform-specific,
+주황=zero-shot, 회색=joint).
+
+| 이전 | 현재 |
+|---|---|
+| `specialized (own platform)` | `platform-specific` |
+| `zero-shot transfer` | `zero-shot` |
+| `unified (both)` | `joint (both platforms)` |
+
+**데이터 불변 검증** (재생성 전후):
+
+- `pdftotext` 순서 무관 비교: 차이는 **라벨 3건뿐**, 그 외 토큰 변화 0
+- 숫자 토큰 전수 비교: **완전 동일** (0.986/0.972/0.927/0.902/0.975/0.974/
+  0.933/0.867/0.800/0.844 및 축 눈금 전부)
+- `pdfinfo` 페이지 크기: **326.228 × 164.499 pts로 전후 동일** — 라벨이 짧아졌으나
+  `bbox_inches="tight"` 결과가 바뀌지 않았다
+- PNG 픽셀 치수: **904 × 457로 전후 동일**
 
 ### 정확한 값 (JSON에서 읽음 — SUMMARY 수치와 전부 일치, 불일치 없음)
 

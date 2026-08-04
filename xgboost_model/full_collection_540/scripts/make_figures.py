@@ -193,7 +193,10 @@ def fig_f2():
     panels = [("rho", "Group Spearman (axis from 0.85)", (0.85, 1.0), 0.05),
               ("top1", "Top-1 rate (axis from 0.5)", (0.5, 1.0), 0.1)]
     colors = [BLUE, ORANGE, GRAY_BAR]
-    labels = ["specialized (own platform)", "zero-shot transfer", "unified (both)"]
+    # Legend wording tracks the manuscript's Transfer paragraph, which defines the
+    # three settings as platform-specific / zero-shot / joint. Labels only -- the
+    # bars, axes and figure geometry are untouched.
+    labels = ["platform-specific", "zero-shot", "joint (both platforms)"]
     width = 0.26
     for ax, (metric, ylab, ylim, step) in zip(axes, panels):
         rng = ylim[1] - ylim[0]
