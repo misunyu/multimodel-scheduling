@@ -1,0 +1,403 @@
+% =========================================================================
+% CANONICAL COPY POLICY: this .tex is edited ONLY in the Claude chat
+% session; the latest downloaded file is the source of truth. Do not edit
+% in the repository. Re-upload this file at the start of each session.
+% REVISION: 2026-08-04 r12 -- working-set naming definition (base1-5 /
+%   S1-S10) moved from App.B to App.A, where set names first appear;
+%   carries author r11a+ edits: title finalized (Unified Predictor,
+%   GPU and NPU), abstract compressed to ~138 words, combined
+%   Fig.1+Table1 float before Sec.2 (renders p.2), fig_transfer 2.65in,
+%   intro triple-redundancy cuts, Limitations tightened. Body ends p.4.
+%   Prior r11a: FIX: reorder bug had left \end{document}
+%   mid-appendix, silently dropping App.D/E from the rendered PDF;
+%   moved to true end, all five appendices verified IN THE RENDERED PDF
+%   (A coverage / B per-set / C sweep / D greedy / E decomposed).
+%   Prior r11: appendices reordered to citation order and
+%   relabeled (A=coverage, B=per-set, C=sweep, D=greedy, E=decomposed);
+%   body refs updated; two mention sentences added (App.B in Ranking
+%   quality, App.D in greedy comparison); author r10+ edits carried
+%   (captions, Limitations full-sentence rewrite, fig_transfer
+%   0.55\linewidth, App.B y3 note). KNOWN OPEN: body overflows ~4 lines
+%   (3 from fig width + Limitations rewrite, ~1 from mention sentences);
+%   trim direction agreed separately before packaging.
+%   Prior r10: fit re-finalized after author Results
+%   rewrite: 3 sentences removed (divergence closing summary, transfer
+%   closing thesis [retained in Limitations], platform-specific
+%   definition [legend now self-describing]); 5 sentences tightened
+%   (sampling topic-sentence fold-in, beta merge, transfer metric merge,
+%   exhaustive split phrasing, greedy fairness + sensitivity phrasing);
+%   figs 0.74 / 2.65in; fig_transfer legend aligned to body terms
+%   (platform-specific / zero-shot / joint). Body ends p.4 (verified).
+%   Prior r9: fit finalized: float fractions
+%   (topfraction .95 / textfraction .03 / floatpagefraction .9) + three
+%   redundant sentences removed (Sec.3 intro shared-splits line, Sec.2
+%   raw-comparison clause, Top-5 interpretation clause); figures kept at
+%   0.78 / 2.8in; App.B restored to both-platform delayed-charging
+%   wording with forced-admit cum>1.0 note. Body ends p.4 (verified).
+%   Prior r8: compact layout and Results wording
+%   reduced float spacing and figure sizes; compressed the decomposed
+%   Results sentence without changing reported values. Carries r7 code-aligned
+%   decomposed description, pooled/group-mean Appendix C metrics, and
+%   declared-basis 11/45. KNOWN OPEN: App.B regressed to NPU-only
+%   delayed-charging wording (restore both-platform version).
+%   style neurips_2025.sty (PENDING 2026 swap).
+% =========================================================================
+% MLForSys @ NeurIPS submission (4 pages strict, refs/appendix excluded)
+% Format: neurips_2025.sty as linked from mlforsystems.org CFP.
+%   * Re-check when the 2026 CFP posts; if neurips_2026.sty is required,
+%     swap the \usepackage line only.
+% Submissions need not be anonymized -> [final] option shows authors.
+% All pending experiment numbers are marked \RES{...} (renders red).
+% Every \RES and \TODO must be resolved before submission.
+% =========================================================================
+\documentclass{article}
+
+\PassOptionsToPackage{numbers,sort&compress}{natbib}
+\usepackage[final]{neurips_2025}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+
+% pack floats tightly on text pages
+\renewcommand{\topfraction}{0.95}
+\renewcommand{\textfraction}{0.03}
+\renewcommand{\floatpagefraction}{0.9}
+\setcounter{topnumber}{3}
+\setlength{\textfloatsep}{6pt plus 2pt minus 2pt}
+\renewcommand{\topfraction}{0.95}
+\renewcommand{\textfraction}{0.03}
+\renewcommand{\floatpagefraction}{0.9}
+\setlength{\abovecaptionskip}{3pt}
+
+% discourage mid-word line breaks; forbid breaks inside inline math
+\hyphenpenalty=4000
+\exhyphenpenalty=2000
+\tolerance=1800
+\emergencystretch=2.5em
+\relpenalty=10000
+\binoppenalty=10000
+
+% ---- placeholder macros: MUST be empty of red before submission ----
+\newcommand{\RES}[1]{\textcolor{red}{\textbf{#1}}}
+\newcommand{\TODO}[1]{\textcolor{red}{[TODO: #1]}}
+
+% \title{Divergent Placements, Unified Predictors:\\ A Controlled GPU/NPU Study of Multi-Model Inference Placement}
+
+\title{Divergent Placements, Unified Predictor: A Controlled GPU and NPU Study of Multi-Model Inference}
+
+\author{%
+  Misun Yu\\
+  Electronics and Telecommunications Research Institute\\
+  \texttt{msyu@etri.re.kr}\\
+  % \And  \TODO{co-authors}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Placing concurrent inference workloads on heterogeneous nodes is difficult because isolated profiles do not capture co-execution interference. We present a learning-based method that predicts system-level performance from offline profiles and ranks placements without online execution. In a controlled comparison of GPU- and NPU-based platforms, the best measured placement differs in 11 of 45 workload groups, including 10 involving generative models. Motivated by this accelerator-dependent behavior, we compare predictor performance under three settings: platform-specific training, zero-shot cross-accelerator transfer, and joint training on both platforms. Zero-shot transfer reduces ranking quality, whereas the jointly trained predictor approaches platform-specific performance. It achieves Top-1 accuracies of 93.3\% on the GPU and 84.4\% on the NPU, compared with 93.3\% and 86.7\% for the platform-specific predictors. These results show that accelerator-specific profiling is required, but a single device-conditioned predictor can support both platforms.
+\end{abstract}
+
+
+\section{Introduction}
+\label{sec:intro}
+
+Modern inference nodes serve several applications on shared accelerators---detection and classification pipelines alongside language and vision-language models. Under co-execution these contend for the accelerator, host-side pipeline stages, and interconnect bandwidth, so a placement that is best in isolation is often not best under load. Contention is non-additive, so isolated profiles do not reliably predict concurrent behavior, and online evaluation is impractical because the candidate space grows exponentially with the number of workloads.
+
+Learning-based models predict performance under contention~\citep{kim_iccd2024_interference,xu_tpds2023_igniter,cui2021}, but prior predictors are developed and evaluated on a single platform, leaving unclear whether they capture workload characteristics or accelerator-specific behavior. We study this question using a controlled two-platform testbed. The host configuration, nine-model suite, workload schedules, request rates, and 37-dimensional feature representation are held fixed. The accelerator platform is either an NVIDIA RTX~5090 GPU or a Mobilint MLA100 NPU~\citep{mobilint_mla100}. On each platform, 540 profiling windows train XGBoost regressors, and a tunable scoring function converts their predictions into a complete ranking of placement candidates without online measurement.
+
+The controlled comparison yields three findings. First, the placement with the highest measured score differs between the GPU and NPU in 11 of 45 workload groups. This difference occurs in 10 of 33 groups containing a generative model, compared with only 1 of 12 vision-only groups. Changes to the scoring weights also affect the best placement more often on the NPU than on the GPU. Second, a predictor trained on one accelerator transfers only partially to the other when used without retraining. We refer to this setting as zero-shot transfer. A predictor trained jointly on both platforms performs comparably to separate per-platform predictors. Supporting a new accelerator therefore requires additional profiling data, but not a separately maintained model. Third, direct system-level regression outperforms both a capacity-based greedy heuristic and a decomposed per-instance model~\citep{kim_iccd2024_interference}. The greedy heuristic achieves Top-1 accuracy of only 0.42 on the GPU and 0.33 on the NPU. The decomposed model predicts individual application performance accurately, but loses accuracy when combining these predictions into system-level metrics.
+
+\textbf{Contributions.} (i) We formulate placement as a measurement-free ranking problem and evaluate it with group-wise cross-validation. (ii) We build a controlled GPU/NPU testbed with fixed host configuration, workloads, request rates, and features. (iii) We show that optimal placements and profiling data are accelerator-specific, while a jointly trained predictor performs comparably to separate platform-specific predictors. (iv) We show that direct system-level regression outperforms capacity-based and decomposed per-instance baselines.
+
+
+\section{Problem Formulation and Testbed}
+\label{sec:problem}
+
+Offline profiling collects platform-specific measurements and trains the predictors. At deployment time, the predictors rank feasible placements without online execution.
+
+\textbf{Placement model.} A node contains a CPU and one accelerator. We denote the available devices by $\mathcal{D}=\{\mathrm{CPU},\mathrm{ACC}\}$, where $\mathrm{ACC}$ is either the GPU or the NPU. The node serves $N$ concurrent application instances. Each instance is an end-to-end pipeline whose auxiliary stages execute on the CPU. A placement $\mathbf{x}=(x_1,\ldots,x_N)$, with $x_i\in\mathcal{D}$, assigns the core model of each instance to a device. The VLM is restricted to the accelerator. Placements are selected before deployment and remain fixed at runtime.
+
+\textbf{Performance targets.} Each workload and placement pair uses a 20\,s warmup followed by a 180\,s measurement window. We record aggregate vision throughput $r_1$, mean deadline miss rate $r_2$, and the token rate $r_3$ of a generative model on the accelerator. Each vision stream's response deadline is three times its request interval. Response time includes queueing delay, and late, dropped, or incomplete requests count as misses when computing $r_2$. The deadline becomes tighter as the request rate increases.
+
+\textbf{Normalization and ranking.} A workload group contains all candidate placements for the same model set and request rate configuration. Within each group, $r_1$ and $r_3$ are divided by their maxima, while $r_2$ is min--max scaled to $[0,1]$. We denote the normalized targets by $y_1$, $y_2$, and $y_3$. Candidates are ranked using
+\begin{equation}
+S(\mathbf{x}) = y_1(\mathbf{x}) - \alpha y_2(\mathbf{x})
++ \beta y_3(\mathbf{x}),
+\label{eq:score}
+\end{equation}
+where $\alpha=0.3$ and $\beta=1.0$ are selected by the operator rather than learned. The $\beta$ term is omitted when a workload has no generative model. Since normalization is performed within each group, the score represents relative placement quality. It cannot certify absolute SLO satisfaction, and scores from different groups are not directly comparable. All measured-best placements and divergence counts below use this same normalized score.
+
+\textbf{Controlled testbed.} Both platforms use the same Intel Core i7-13700K host, workload definitions, and measurement procedure. The GPU platform uses an NVIDIA RTX~5090. The NPU platform uses a Mobilint MLA100~\citep{mobilint_mla100}. Each accelerator uses its native software stack. On the MLA100, core assignment is a scheduling hint rather than an exclusive reservation. Multiple models may reside on the device, and device memory determines placement feasibility.
+
+Nine models---YOLO11 n/s/m/l/x, ResNet50, MobileNet-v2, LLaMA-3.2-1B, and Qwen2-VL-2B---form 15 workload sets with two to eight concurrent instances. The sets vary concurrency, the presence of generative models, and the detector variant, and include vision-only controls. Each set is evaluated at three request rate levels.
+
+
+For each workload set, we construct a candidate set of feasible placements. Ten sets are measured exhaustively. For the remaining five, we group placements by the number of non-pinned instances assigned to the accelerator and sample from each group using preset quotas. The same candidate placements are measured on both platforms to enable direct comparison. Across the 15 workload sets, this procedure produces 180 placement configurations. Evaluating each configuration at three request-rate levels yields 540 measurement windows and 45 workload groups per platform. Data collection takes approximately 32 hours per platform. Appendix~A reports the coverage for each workload set.
+
+\begin{figure}[t]
+\centering
+\begin{minipage}[t]{0.57\linewidth}
+\vspace{0pt}
+\centering
+\vspace{-2pt}
+\includegraphics[width=0.74\linewidth]{fig_divergence.pdf}
+\caption{Measured-best placement agreement between the GPU and NPU at $\beta{=}1.0$. Orange cells indicate 11 disagreements, including 10 generative and one vision-only group.}
+\label{fig:divergence}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.40\linewidth}
+\vspace{50pt}
+\centering
+\captionof{table}{Ranking quality on the shared measured candidate set under groupwise validation. The greedy baseline returns a single placement, so only Top-1 is reported and computed over measured outputs.}
+\label{tab:comparison}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}l cc cc@{}}
+\toprule
+& \multicolumn{2}{c}{Spearman $\rho$} & \multicolumn{2}{c}{Top-1} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Method & GPU & NPU & GPU & NPU \\
+\midrule
+Capacity greedy & --- & --- & .424 & .333 \\
+Decomposed per instance & .931 & .911 & .911 & .622 \\
+Direct regression & .986 & .972 & .933 & .867 \\
+\midrule
+Measured oracle & 1.00 & 1.00 & 1.00 & 1.00 \\
+\bottomrule
+\end{tabular}%
+}
+\end{minipage}
+\end{figure}
+
+\section{Methods Under Comparison}
+\label{sec:methods}
+
+We compare our direct model with two baselines and a measured oracle.
+
+\textbf{Direct system level regression.} Each placement is represented by features that summarize request rates, model types, device assignments, isolated device profiles, and aggregate load. Three XGBoost regressors~\citep{chen2016_xgboost} predict the normalized targets $\hat y_1$, $\hat y_2$, and $\hat y_3$. Equation~\eqref{eq:score} then converts these predictions into a ranking of candidate placements.
+
+We use three fold groupwise cross validation: all placements from a workload group remain in one fold, and normalization uses training data only, so closely related candidates never straddle the train--test split.
+
+\textbf{Capacity greedy baseline.} This nonlearning baseline uses the same request, placement, and isolated profile information as the predictor, but assumes that resource demand is additive. It considers instances in decreasing order of isolated accelerator speedup, admitting each one whose estimated load fits the remaining capacity budget; an instance that does not fit is placed on the CPU without stopping the scan. The VLM cannot run on the CPU and, holding the largest speedup on both platforms, is admitted first, so its load is charged before any other instance.
+
+
+\textbf{Decomposed per-instance model.}
+This baseline adapts prior work on per-task degradation prediction~\citep{kim_iccd2024_interference}. A single shared regressor predicts the attainment of each vision instance under contention from its own configuration and a placement-level summary of its co-runners. Attainment is defined as achieved throughput divided by the smaller of the instance's request rate and isolated capacity. The instance-level predictions are composed into $\hat y_1$ and $\hat y_2$. For a conservative comparison, the composition step uses the measured normalization statistics of the evaluation group. This gives the decomposed baseline information that is unavailable to our direct predictor at deployment. The generative target $\hat y_3$ uses the same predictor as the direct model.
+
+\textbf{Measured oracle.} The oracle selects the candidate with the highest measured score $S$ in each workload group and treats tied maxima as correct.
+
+\section{Results}
+\label{sec:results}
+
+\textbf{Ranking quality.} Table~\ref{tab:comparison} summarizes ranking performance under groupwise validation. Our direct regression model achieves mean Spearman correlations of $0.986$ on the GPU and $0.972$ on the NPU. Top-1 accuracy is $0.933$ on the GPU and $0.867$ on the NPU, while Top-5 accuracy is $1.000$ on both platforms. Per-set results are reported in Appendix~B. Unless otherwise noted, subsequent comparisons use the same validation protocol and measured candidate set.
+
+\textbf{Placement optima differ across accelerators.} Figure~\ref{fig:divergence} compares the measured-best placement in each workload group. The GPU and NPU select different optima in 11 of 45 groups, including 10 of 33 generative groups and 1 of 12 vision-only groups. Reducing the generative weight to $\beta{=}0.5$ increases the number of disagreements to 16 of 45. Candidate sampling does not explain this result. Among the 30 exhaustively measured groups, 8 have different optima across the two platforms. All 8 are generative, corresponding to 8 of 24 generative groups and none of the 6 vision-only groups. This divergence rate is no lower than that observed over the full candidate set. Sensitivity to the scoring coefficients is also asymmetric. With the generative term active ($\beta{>}0$), the GPU optimum changes in at most 3 of 15 workload sets across the sweep in Appendix~C, whereas the NPU optimum changes in up to 9.
+
+\textbf{Transfer across accelerators.}
+Figure~\ref{fig:transfer} compares platform-specific, zero-shot, and joint training. The zero-shot predictor is trained on one accelerator and applied to the other without retraining. The joint predictor is trained on data from both platforms. On the NPU, zero-shot transfer reduces Spearman correlation from $0.972$ to $0.902$ and Top-1 accuracy from $0.867$ to $0.800$. On the GPU, Spearman correlation decreases from $0.986$ to $0.927$, while Top-1 accuracy remains $0.933$. Joint training recovers most of the ranking loss. It reaches Spearman correlations of $0.975$ on the GPU and $0.974$ on the NPU, with Top-1 accuracies of $0.933$ and $0.844$, respectively.
+
+
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.55\linewidth]{fig_transfer.pdf}
+\caption{Transfer performance under groupwise validation. Zero-shot transfer degrades ranking quality, especially on the NPU, while joint training approaches platform-specific performance. The Spearman and Top-1 axes start at $0.85$ and $0.5$, respectively.}
+\vspace{-6pt}
+\label{fig:transfer}
+\end{figure}
+
+\textbf{Comparison with simpler models.}
+The capacity-based greedy baseline achieves Top-1 accuracies of $0.424$ on the GPU and $0.333$ on the NPU among outputs present in the measured candidate set. Because the greedy baseline uses the same request, placement, and isolated-profile inputs as direct regression, the performance gap indicates the benefit of learning nonadditive contention. Appendix~D compares two admission orderings for this baseline.
+
+The decomposed model achieves pooled Spearman correlations of $0.993$ on the GPU and $0.992$ on the NPU for individual attainment prediction. However, its placement-level Top-1 accuracies fall to $0.911$ and $0.622$, respectively. Even when the deadline-miss target is reconstructed from measured attainments and group statistics, group-mean Spearman reaches only $0.877$ on the GPU and $0.720$ on the NPU, as reported in Appendix~E. The main loss therefore arises from composing the instance-level estimates rather than predicting them.
+
+
+\section{Related Work}
+\label{sec:related}
+Cluster-scale serving systems optimize request scheduling rather than per-instance device assignment within a node~\citep{crankshaw_nsdi2017_clipper,shen_sosp2019_nexus,li_osdi2023_alpaserve,gujarati_osdi2020_clockwork}. Intra-node schedulers~\citep{oh_hpca2021_layerweaver,dagli_ppopp2024_haxconn,omniboost2025,yu2023partituner} operate at layer or operator granularity, which differs from our placement decision. Learned interference prediction is more closely related to our work. Abacus~\citep{cui2021} and iGniter~\citep{xu_tpds2023_igniter} target single-GPU overlap and provisioning, while \citet{kim_iccd2024_interference} learn per-task degradation on an edge SoC and assume one model per platform. Our decomposed baseline adapts their per-task prediction structure to our multi-model setting. HEFT and RL-based placement rely on task-graph cost models or execution-derived rewards, which are unavailable in our streaming setting without online candidate execution~\citep{topcuoglu2002heft,mirhoseini2017_deviceplacement}.
+
+\paragraph{Limitations and conclusion.}
+Our evaluation is limited to the collected candidate placements. Because $y_2$ is normalized within each workload group, it cannot certify absolute SLO satisfaction. The request-rate levels depend on workload-set size, which limits direct comparisons across sets. Dynamic re-placement is outside the scope of this study and could complement the offline placement method. Within these limits, placement optima and profiling data are accelerator-specific. However, the two evaluated platforms need not use separately maintained predictors. A single device-conditioned predictor trained jointly on both platforms approaches platform-specific performance and outperforms the capacity-based and decomposed baselines.
+
+\bibliographystyle{unsrtnat}
+\bibliography{mlforsys_main}
+
+\appendix
+\section*{Appendix}
+
+
+\subsection*{A. Candidate-set coverage by workload set}
+
+This appendix characterizes the candidate-placement coverage for each workload set and verifies that the observed GPU--NPU placement divergence is not an artifact of incomplete sampling.
+
+The five workload sets labeled base1--base5 each contain LLaMA-3.2-1B, Qwen2-VL-2B, ResNet50, and one YOLO11 detector. They differ only in the detector variant, using YOLO11 n, s, m, l, and x, respectively. The remaining sets, S1--S10, vary in concurrency, generative-model composition, and request-rate configuration.
+
+Table~\ref{tab:app_coverage} reports the full placement space, the feasible subset, and the measured subset for each workload set. Because each VLM is pinned to the accelerator, a set with $N$ instances has $2^{N-\#\mathrm{VLM}}$ feasible placements; sets without a VLM retain all $2^N$ placements. We measure ten workload sets exhaustively. For the remaining five, we stratify placements by the number of non-pinned instances assigned to the accelerator and sample each stratum using quotas fixed before data collection. Both platforms use the same generated measurement schedule, and post hoc verification confirms that their measured candidate sets are identical for every workload set and request-rate configuration.
+
+All appendix analyses follow the normalization procedure in Section~2. Within each workload group, $y_1=r_1/\max r_1$ and $y_3=r_3/\max r_3$, while $y_2=(r_2-\min r_2)/(\max r_2-\min r_2)$, with $y_2{=}0$ when all candidates have the same $r_2$. Optimal placements are evaluated with ties: every candidate whose score is within $10^{-9}$ of the group maximum is treated as optimal, and the two platforms are considered to agree when their optimal-placement sets intersect.
+
+The sampling procedure does not explain the observed placement divergence. Among the 30 exhaustively measured workload groups, the GPU and NPU select different optima in 8 groups: 8 of 24 generative groups and none of the 6 vision-only groups. At $\beta{=}0.5$, 13 of the 30 exhaustive groups diverge. These rates are no lower than those obtained over all 45 groups. The sampled vision-only controls S9 and S10 account for only one divergence among their six workload groups, occurring for S10 at its highest request rate.
+
+\begin{table}[h]
+\centering
+\caption{Placement-space coverage. Measured counts are identical on the
+two platforms. Cov.\ = measured/feasible.}
+\label{tab:app_coverage}
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}ll rrrr l@{}}
+\toprule
+Set & $N$ & $2^{N}$ & Feasible & Measured & Cov. & Mode \\
+\midrule
+S1  & 2 & 4   & 4   & 4  & 100\% & exhaustive \\
+S2  & 3 & 8   & 8   & 8  & 100\% & exhaustive \\
+S3  & 3 & 8   & 8   & 8  & 100\% & exhaustive \\
+S4  & 3 & 8   & 4   & 4  & 100\% & exhaustive \\
+base1--base5 & 4 & 16 & 8 & 8 & 100\% & exhaustive \\
+S5  & 5 & 32  & 16  & 16 & 100\% & exhaustive \\
+S9  & 5 & 32  & 32  & 16 & 50\%  & stratified \\
+S6  & 6 & 64  & 32  & 16 & 50\%  & stratified \\
+S7  & 7 & 128 & 64  & 20 & 31\%  & stratified \\
+S10 & 7 & 128 & 128 & 24 & 19\%  & stratified \\
+S8  & 8 & 256 & 128 & 24 & 19\%  & stratified \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{B. Per-set out-of-fold ranking fidelity}
+Table~\ref{tab:app_perset} reports per-target group Spearman correlations under the GroupKFold protocol, averaged across the request-rate levels of each workload set.
+
+The $y_3$ metric applies only to sets containing a generative model. The two lowest values, observed for $y_3$ on S3-GPU and S4-NPU, come from $N{=}3$ sets with few valid $y_3$ candidates. A single rank inversion therefore changes the correlation substantially.
+
+\begin{table}[h]
+\centering
+\caption{Per-set out-of-fold Spearman correlations, averaged over request-rate levels. A dash indicates that $y_3$ is not applicable.}
+\label{tab:app_perset}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}ll ccc ccc@{}}
+\toprule
+& & \multicolumn{3}{c}{GPU} & \multicolumn{3}{c}{NPU} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+Set & $N$ & $y_1$ & $y_2$ & $y_3$ & $y_1$ & $y_2$ & $y_3$ \\
+\midrule
+S1 & 2 & $+$1.000 & $+$0.811 & --- & $+$1.000 & $+$0.949 & --- \\
+S2 & 3 & $+$0.992 & $+$0.820 & --- & $+$0.976 & $+$0.914 & --- \\
+S3 & 3 & $+$0.992 & $+$0.894 & $+$0.400 & $+$0.881 & $+$0.837 & $+$0.867 \\
+S4 & 3 & $+$0.933 & $+$0.867 & $+$0.933 & $+$0.867 & $+$0.966 & $+$0.533 \\
+base1 & 4 & $+$1.000 & $+$0.892 & $+$0.960 & $+$0.929 & $+$0.932 & $+$0.960 \\
+base2 & 4 & $+$1.000 & $+$0.922 & $+$0.929 & $+$0.968 & $+$0.980 & $+$0.968 \\
+base3 & 4 & $+$0.984 & $+$0.984 & $+$0.976 & $+$0.992 & $+$0.956 & $+$0.952 \\
+base4 & 4 & $+$1.000 & $+$0.968 & $+$0.984 & $+$0.992 & $+$0.946 & $+$0.960 \\
+base5 & 4 & $+$0.968 & $+$0.960 & $+$0.992 & $+$0.976 & $+$0.889 & $+$0.992 \\
+S5 & 5 & $+$0.995 & $+$0.929 & $+$0.976 & $+$0.951 & $+$0.883 & $+$0.973 \\
+S9 & 5 & $+$0.993 & $+$0.930 & --- & $+$0.975 & $+$0.831 & --- \\
+S6 & 6 & $+$0.984 & $+$0.977 & $+$0.972 & $+$0.973 & $+$0.966 & $+$0.973 \\
+S10 & 7 & $+$0.997 & $+$0.931 & --- & $+$0.987 & $+$0.812 & --- \\
+S7 & 7 & $+$0.993 & $+$0.954 & $+$0.950 & $+$0.980 & $+$0.935 & $+$0.964 \\
+S8 & 8 & $+$0.998 & $+$0.944 & $+$0.974 & $+$0.981 & $+$0.958 & $+$0.973 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{C. Sensitivity to scoring coefficients}
+
+Table~\ref{tab:app_sweep} evaluates how the optimal placements change as the scoring coefficients vary. For each $(\alpha,\beta)$ pair, it reports the number of workload sets whose optimum differs from the baseline optimum set at $\alpha{=}0.3$ and $\beta{=}1.0$. The comparison is tie-aware and covers all 15 workload sets.
+
+When the generative objective is active with $\beta{>}0$, the two platforms exhibit different levels of sensitivity. The GPU optimum changes in at most three workload sets and, outside the low-$\alpha$ region, only S8 changes. In contrast, the NPU optimum changes in as many as nine sets, primarily among the base workloads, S5, and S7.
+
+The $\beta{=}0$ setting removes the generative objective entirely and causes substantial changes on both platforms. We therefore include this setting for completeness but exclude it from the cross-platform sensitivity comparison. For any fixed $\beta{>}0$, varying only $\alpha$ changes the optimum in at most one set on the GPU and up to seven sets on the NPU. These results indicate that placement sensitivity is driven mainly by $\beta$ and is substantially greater on the NPU.
+
+\begin{table}[h]
+\centering
+\caption{Number of workload sets whose tie-aware optimum differs from the baseline at $\alpha{=}0.3$ and $\beta{=}1.0$, reported as GPU/NPU counts. The coefficient $\beta$ applies only to generative sets.}
+\label{tab:app_sweep}
+\footnotesize
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{@{}l ccccc@{}}
+\toprule
+& \multicolumn{5}{c}{$\beta$} \\
+\cmidrule(lr){2-6}
+$\alpha$ & 0 & 0.25 & 0.5 & 0.75 & 1.0 \\
+\midrule
+0.00 & 9/11 & 3/9 & 3/8 & 3/7 & 1/6 \\
+0.15 & 4/10 & 3/7 & 3/6 & 1/4 & 1/4 \\
+0.30 & 2/10 & 1/7 & 1/6 & 1/2 & 0/0 \\
+0.45 & 1/10 & 1/7 & 1/5 & 1/2 & 1/2 \\
+0.60 & 1/10 & 1/6 & 1/4 & 1/3 & 1/2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+
+\subsection*{D. Greedy ordering variants and unmeasured placements}
+
+Table~\ref{tab:app_greedy} compares the load-factor and speedup orderings. In the stratified-sampling sets S6--S10, a greedy ordering can produce a placement outside the measured candidate set. We exclude such outputs from the Top-1 evaluation rather than map them to nearby placements, and the reported denominators indicate the number of evaluable workload groups. Although the speedup ordering produces more unmeasured placements, it achieves higher Top-1 accuracy on both platforms.
+
+The two orderings also differ in when the VLM load is added to the capacity estimate. Under speedup ordering, the VLM is considered first, so its load is accounted for before any other admission decision. Under load-factor ordering, the VLM is considered only after one to three instances on the GPU and one to two instances on the NPU have already been admitted. This delayed accounting is more consequential on the NPU because the VLM consumes 0.13--0.40 of the estimated capacity, compared with 0.02--0.07 on the GPU. Since the VLM is admitted regardless of the remaining capacity, the cumulative estimated load exceeds 1.0 in 18 of the 45 NPU workload groups.
+
+\begin{table}[h]
+\centering
+\caption{Capacity-based greedy performance under two admission orderings at $\alpha{=}0.3$ and $\beta{=}1.0$. Top-1 is evaluated only for measured outputs.}
+\label{tab:app_greedy}
+\footnotesize
+\begin{tabular}{@{}ll cc c@{}}
+\toprule
+Platform & Ordering & Top-1 (measured) & Oracle ratio (norm.\ / raw) &
+Uncollected \\
+\midrule
+GPU & load-factor & 0.341 (14/41) & 0.575 / 0.669 & 4/45 \\
+GPU & speedup     & 0.424 (14/33) & 0.734 / 0.786 & 12/45 \\
+NPU & load-factor & 0.250 (9/36)  & 0.590 / 0.669 & 9/45 \\
+NPU & speedup     & 0.333 (11/33) & 0.793 / 0.760 & 12/45 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{E. Composition error in the decomposed model}
+
+Table~\ref{tab:app_decomp} examines whether the performance loss of the decomposed model arises from per-instance prediction or from composing instance-level estimates into system-level metrics. The shared regressor predicts individual attainment accurately when all instance-level samples are pooled.
+
+To isolate composition error, we reconstruct $y_2$ from measured rather than predicted attainments, thereby removing per-instance prediction error. The reconstruction also uses the measured group maximum for throughput normalization and the measured group minimum and maximum for deadline-miss normalization. These statistics are unavailable at deployment, so this analysis favors the decomposed baseline.
+
+Despite these advantages, composing the measured attainments still reduces ranking fidelity. The aggregation rule does not account for request-rate weighting or interactions that are not represented in the individual instance views, including interference associated with a generative co-runner. The final row of Table~\ref{tab:app_decomp} reports the resulting placement-level ranking performance. Top-5 accuracy remains $1.000$ on both platforms, but the lower Top-1 accuracy shows that composition error affects identification of the best placement.
+
+
+\begin{table}[h]
+\centering
+\caption{Error analysis of the decomposed model. Pooled metrics aggregate all instance-level samples, while group-mean $\rho$ averages rank correlations across workload groups.}
+\label{tab:app_decomp}
+\footnotesize
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}l cc@{}}
+\toprule
+Quantity & GPU & NPU \\
+\midrule
+Attainment OOF (pooled $\rho$ / MAE)
+& $0.993 / 0.017$
+& $0.992 / 0.020$ \\
+Measured-attainment $y_2$ (pooled $\rho$ / group-mean $\rho$ / MAE)
+& $0.834 / 0.877 / 0.149$
+& $0.763 / 0.720 / 0.169$ \\
+Composed ranking (group-mean $\rho$ / Top-1)
+& $0.931 / 0.911$
+& $0.911 / 0.622$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\end{document}
