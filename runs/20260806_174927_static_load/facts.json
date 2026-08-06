@@ -1,0 +1,127 @@
+{
+  "verdict": {
+    "field": "sample_profiling_data.json:total_data[].{cpu,gpu,npu}_load",
+    "meaning": "모델을 해당 디바이스에 적재해 추론 가능 상태로 만들기까지의 벽시계 시간",
+    "unit": "ms",
+    "is_runtime_load_indicator": false,
+    "producer": "profile_models.py:229 (vision) / :234 (generative)",
+    "timed_region": {
+      "vision_npu": "profile_models.py:90-92 (build_vision_npu)",
+      "vision_cpu_gpu": "profile_models.py:114-116 (ort.InferenceSession)",
+      "generative": "runtime/llm_engine.py:88-103 (from_pretrained + .to(cuda) + .eval())"
+    },
+    "averaging": "1회 측정, warmup 없음 (infer 는 warmup 3 + 15회 평균)"
+  },
+  "consumer": {
+    "feature": [
+      "views.{sum,mean,max}.view.static_load_sel"
+    ],
+    "path": "load_static_profiles(suite:101,118) -> _device_static(suite:126) -> _view_features(suite:253,273)",
+    "transform": "없음 (결측만 0.0 대체) — ms 그대로",
+    "load_factor_uses_static_load": false,
+    "load_factor_definition": "suite:260-261 — capacity=1000/s_infer, load_factor=infps/capacity",
+    "other_load_named_features_unrelated": [
+      "views.*.view.load_factor",
+      "co.same_dev_load_sum",
+      "co.other_dev_load_sum"
+    ]
+  },
+  "values": {
+    "llama1b/cpu": 824.146,
+    "llama1b/gpu": 1033.189,
+    "llama1b/npu": 1449.563,
+    "mobilenet_v2/cpu": 15.052,
+    "mobilenet_v2/gpu": 12.891,
+    "mobilenet_v2/npu": 89.825,
+    "qwen2_vl/cpu": 665.418,
+    "qwen2_vl/gpu": 832.011,
+    "qwen2_vl/npu": 1674.867,
+    "resnet50/cpu": 179.893,
+    "resnet50/gpu": 281.213,
+    "resnet50/npu": 171.89,
+    "yolo11l/cpu": 117.049,
+    "yolo11l/gpu": 57.523,
+    "yolo11l/npu": 117.944,
+    "yolo11m/cpu": 106.244,
+    "yolo11m/gpu": 49.162,
+    "yolo11m/npu": 112.775,
+    "yolo11n/cpu": 18.713,
+    "yolo11n/gpu": 20.289,
+    "yolo11n/npu": 98.361,
+    "yolo11s/cpu": 60.469,
+    "yolo11s/gpu": 29.537,
+    "yolo11s/npu": 110.386,
+    "yolo11x/cpu": 295.199,
+    "yolo11x/gpu": 109.209,
+    "yolo11x/npu": 134.089
+  },
+  "representative_pairs": {
+    "mobilenet_v2/cpu": 15.052,
+    "yolo11x/cpu": 295.199,
+    "qwen2_vl/npu": 1674.867
+  },
+  "onnx_size_mb": {
+    "resnet50": 102.15,
+    "mobilenet_v2": 13.99,
+    "yolo11n": 10.74,
+    "yolo11s": 38.01,
+    "yolo11m": 80.67,
+    "yolo11l": 101.74,
+    "yolo11x": 228.06
+  },
+  "spearman": {
+    "cpu": {
+      "size_vs_load": 0.964,
+      "size_vs_load_excl_resnet50": 0.943,
+      "load_vs_infer": 0.643
+    },
+    "gpu": {
+      "size_vs_load": 0.929,
+      "size_vs_load_excl_resnet50": 0.943,
+      "load_vs_infer": 0.464
+    },
+    "npu": {
+      "size_vs_load": 0.929,
+      "size_vs_load_excl_resnet50": 0.943,
+      "load_vs_infer": 0.464
+    }
+  },
+  "doc_consistency": {
+    "feature_spec.md": "일치 (로드 시간/ms/단독 프로파일, load_factor 와 분리 기술)",
+    "MODEL_GUIDE.md:390-393": "부분 불일치 — load_factor·capacity_fps 를 '단독 프로파일 값'에 묶어 서술 (실제로는 infps·s_infer 파생). 결론 무영향"
+  },
+  "unconfirmed": [
+    "생성 모델 2행의 측정 실행 기록이 파일에 없음 (profiling_runs 는 vision 1건뿐)",
+    "resnet50 의 GPU/NPU load 팽창이 최초 컨텍스트 초기화 때문이라는 것은 정황 추론",
+    "build_vision_npu 가 적재 구간에서 수행하는 범위"
+  ],
+  "checks": {
+    "s_load_only_unpack_guard_and_one_use": true,
+    "s_load_used_in_exactly_one_feature_row": true,
+    "capacity_uses_only_s_infer": true,
+    "27_pairs_no_null": true,
+    "rep1_mobilenet_cpu": true,
+    "rep2_yolo11x_cpu": true,
+    "rep3_qwen2vl_npu": true,
+    "qwen2vl_npu_is_global_max": true,
+    "mobilenet_gpu_is_global_min": true,
+    "all_generative_loads_exceed_all_vision": true,
+    "vision_load_range": true,
+    "gen_load_range": true,
+    "size_corr_dominates_infer_corr": true,
+    "size_corr_at_least_0_92": true,
+    "resnet50_first_in_recorded_run": true,
+    "resnet50_inflated_on_gpu_npu_not_cpu": true,
+    "one_profiling_run_recorded": true,
+    "generative_models_absent_from_run_record": true,
+    "onnx_sizes": true,
+    "no_utilization_query_in_profiler": true
+  },
+  "problems": [],
+  "input_sha256": {
+    "profile_models.py": "db4cec136c98c3cecb13aa674e99efd705875a1c4e6f970d6b41cfa10926cbee",
+    "runtime/llm_engine.py": "00f51913449fec9ba60941a5a8f7168210b15df9957d39f3676fa5b29637a576",
+    "xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json": "7fec0eea36e9eb98700b87e908475e908d8b5dd23f602459fb56e85da8ba1d1b",
+    "xgboost_model/deploy_selector_xgb_suite.py": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532"
+  }
+}

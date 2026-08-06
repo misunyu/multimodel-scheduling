@@ -1,0 +1,82 @@
+{
+  "run": "20260806_174927_static_load",
+  "task": "작업 12 — static_load 필드의 실체 확정 (읽기 전용)",
+  "generated_at": "2026-08-06T17:53:47+09:00",
+  "git_commit": "a0d014f2f5c89d3931793cf98cc45403435f906f (pre-commit HEAD)",
+  "scope": {
+    "created": [
+      "runs/20260806_174927_static_load/*"
+    ],
+    "modified": [],
+    "note": "코드·데이터·원고 미수정. 프로파일러 실행도 하지 않았다(하드웨어 필요)."
+  },
+  "inputs": {
+    "profile_models.py": "db4cec136c98c3cecb13aa674e99efd705875a1c4e6f970d6b41cfa10926cbee",
+    "runtime/llm_engine.py": "00f51913449fec9ba60941a5a8f7168210b15df9957d39f3676fa5b29637a576",
+    "xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json": "7fec0eea36e9eb98700b87e908475e908d8b5dd23f602459fb56e85da8ba1d1b",
+    "xgboost_model/deploy_selector_xgb_suite.py": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532",
+    "xgboost_model/full_collection_540/scripts/greedy_baseline.py": "579b9ac471efde32023eac347c690cf82abac7d4eca789ad9b5c317fe4e2f239",
+    "xgboost_model/full_collection_540/scripts/train_decomposed.py": "d5608fb863c52468c3657ac8f934ad129dacfd837553645d2af5475935938769",
+    "xgboost_model/MODEL_GUIDE.md": "ed44e5fecf0c27be72f23a3d30190f498896ae5f3b62dd1926c642755b9aaace",
+    "runs/20260804_180759_feature_spec/feature_spec.md": "a953c07c5c2f2a5519f914404a40841bcca0529cb91cc0e5635ba0b6f43a41ab"
+  },
+  "outputs": {
+    "check.py": "11bf545132bfcdf571a3d974ff081abd6d5f62c3a01b75092e8801c91961759a",
+    "facts.json": "2b177f9be5cbe6cac8af3847d06baaabfafed14a6fe01149faf1a81319187f5b",
+    "make_manifest.py": "670d6912425117e356558125c9cfeeeeeed2502f607823fc7648c35363b370d5",
+    "report.md": "032b5cbb2beb7d1c763dc83ddd9cf281a941705933ddbe9b15bcf39e94f6a927"
+  },
+  "verdict": {
+    "field": "sample_profiling_data.json:total_data[].{cpu,gpu,npu}_load",
+    "meaning": "모델을 해당 디바이스에 적재해 추론 가능 상태로 만들기까지의 벽시계 시간",
+    "unit": "ms",
+    "is_runtime_load_indicator": false,
+    "producer": "profile_models.py:229 (vision) / :234 (generative)",
+    "timed_region": {
+      "vision_npu": "profile_models.py:90-92 (build_vision_npu)",
+      "vision_cpu_gpu": "profile_models.py:114-116 (ort.InferenceSession)",
+      "generative": "runtime/llm_engine.py:88-103 (from_pretrained + .to(cuda) + .eval())"
+    },
+    "averaging": "1회 측정, warmup 없음 (infer 는 warmup 3 + 15회 평균)"
+  },
+  "representative_pairs_ms": {
+    "mobilenet_v2/cpu": 15.052,
+    "yolo11x/cpu": 295.199,
+    "qwen2_vl/npu": 1674.867
+  },
+  "doc_consistency": {
+    "feature_spec.md": "일치 (로드 시간/ms/단독 프로파일, load_factor 와 분리 기술)",
+    "MODEL_GUIDE.md:390-393": "부분 불일치 — load_factor·capacity_fps 를 '단독 프로파일 값'에 묶어 서술 (실제로는 infps·s_infer 파생). 결론 무영향"
+  },
+  "unconfirmed": [
+    "생성 모델 2행의 측정 실행 기록이 파일에 없음 (profiling_runs 는 vision 1건뿐)",
+    "resnet50 의 GPU/NPU load 팽창이 최초 컨텍스트 초기화 때문이라는 것은 정황 추론",
+    "build_vision_npu 가 적재 구간에서 수행하는 범위"
+  ],
+  "verification": {
+    "checks": {
+      "s_load_only_unpack_guard_and_one_use": true,
+      "s_load_used_in_exactly_one_feature_row": true,
+      "capacity_uses_only_s_infer": true,
+      "27_pairs_no_null": true,
+      "rep1_mobilenet_cpu": true,
+      "rep2_yolo11x_cpu": true,
+      "rep3_qwen2vl_npu": true,
+      "qwen2vl_npu_is_global_max": true,
+      "mobilenet_gpu_is_global_min": true,
+      "all_generative_loads_exceed_all_vision": true,
+      "vision_load_range": true,
+      "gen_load_range": true,
+      "size_corr_dominates_infer_corr": true,
+      "size_corr_at_least_0_92": true,
+      "resnet50_first_in_recorded_run": true,
+      "resnet50_inflated_on_gpu_npu_not_cpu": true,
+      "one_profiling_run_recorded": true,
+      "generative_models_absent_from_run_record": true,
+      "onnx_sizes": true,
+      "no_utilization_query_in_profiler": true
+    },
+    "problems": [],
+    "all_passed": true
+  }
+}
