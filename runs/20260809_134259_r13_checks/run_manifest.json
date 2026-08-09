@@ -1,0 +1,106 @@
+{
+  "run": "20260809_134259_r13_checks",
+  "task": "작업 13 — r13 원고 마무리용 확인 3건 (읽기 전용)",
+  "generated_at": "2026-08-09T13:48:59+09:00",
+  "git_commit": "afadbdace22853ff88ac881524fbcef8a90a716a (pre-commit HEAD)",
+  "scope": {
+    "created": [
+      "runs/20260809_134259_r13_checks/*"
+    ],
+    "modified": [],
+    "note": "코드·데이터·원고 미수정. 학습·수집·프로파일링 실행 없음. 라이브 호스트 조회는 버전·CPU 모델명 확인용 읽기만."
+  },
+  "inputs": {
+    "xgboost_model/full_collection_540/scripts/greedy_baseline.py": "579b9ac471efde32023eac347c690cf82abac7d4eca789ad9b5c317fe4e2f239",
+    "xgboost_model/full_collection_540/analysis/greedy_results.csv": "5381eb4fd7572709894bcf2678c1e1218ecba3089ef10fce62001442a9427027",
+    "xgboost_model/full_collection_540/scripts/collect_run.py": "b73181b45385613ecd88ccf0d55b063cca5494f45b54f72a7415efb2ae0e4113",
+    "xgboost_model/gen_collection_schedules.py": "a5b2d32b59d667956b58ca7e8bfe0a221a15fbe20d8eef16d48d0d742651b6c7",
+    "generate_schedules.py": "270bf3b83cd29d091c545d21a91ab0efd8ebccb2bbcf64bfce01f274ae5fc550",
+    "best_deploy_finder_executor.py": "7efdafa36526fd97b2194244ec123f7b91d0c82e879570bb7eb7fc1b51ed1381",
+    "runtime/llm_engine.py": "00f51913449fec9ba60941a5a8f7168210b15df9957d39f3676fa5b29637a576",
+    "runtime/mobilint_vision.py": "21d1d26fbe6ca7f3e199337f0b18d048304536e017186d70d9bd95fe289726e8",
+    "model_processors.py": "aa9aa0b38a738ea0674f93d732e905b248f786600bc9972ae0d288100ee42fff",
+    "model_registry.py": "d66c50f684c80ef152a9ac333d30bf228524605e9997b85f0cd4f02a53e15fb5",
+    "unified_viewer.py": "81277f620553480282eef30040524c84359fc57261b4842980bf9b932de5aebe",
+    "requirements.txt": "e5628fb20e54dea68ace16eddedaafe3cde62846cb12b66aa22ef8f3ef51b0d0",
+    "runtime_env.sh": "e2802a6e9394322c1d00efebbaf97b220e8c404e71390db07f24b024f80def60",
+    "working_sets.yaml": "42a15580c58efc0074f837f7a5688e690e7beb3c0319e4746a83d0e2f40f4611",
+    "PRE_COLLECTION_FINAL.md": "a8b61f54e59d72f190980512baf3fe68f185a42824ff7f2b042ec6d7d995a693",
+    "NPU_POSTPROCESS_UNIFICATION.md": "7a9ebf6f96d5f780761b74f2738ef5fa51aaad20c07e29c9916caa92184ad6ea",
+    "docs/llama1b_core_confound_report.md": "02db0497b63c1db7eb1cb98fcfcfeaea68844ea13332d9fd1357033c60f51082",
+    "xgboost_model/performance_data/sample_profiling_data/sample_profiling_data.json": "7fec0eea36e9eb98700b87e908475e908d8b5dd23f602459fb56e85da8ba1d1b"
+  },
+  "outputs": {
+    "checks.py": "c6197c30adc98daa662b5694db1fe99034f03af837bafeb6079157d8fef40fbd",
+    "facts.json": "7d09e6700c5b3430c093df4f59d8b9acd3523d6e855c8ee0741aeae5f0522ecf",
+    "make_manifest.py": "11c2d5c077ce5d2c9f6dba3b662963ab7c26bf48ae3482dccdb41b5a0c88907f",
+    "report.md": "669c86f2221ca912c1c9bef21fa58c13c50b35e26bd3762db55850e0d7faf031"
+  },
+  "findings": {
+    "q1_oracle_ratio": {
+      "verdict": "(a) 그룹별 비율의 산술평균 — 수집된 그룹만",
+      "manuscript_sentence_matches": true,
+      "formula": "ratio_col = mean_{g in G_collected} ( S(greedy_g) / max_{c in C_g} S(c) )",
+      "denominators_by_cell": {
+        "gpu/load_factor": 41,
+        "gpu/speedup": 33,
+        "npu/load_factor": 36,
+        "npu/speedup": 33
+      },
+      "optional_refinements": [
+        "'score' 가 measured score 임을 명시",
+        "norm./raw 두 열이 점수 기저 차이임을 캡션에 명시",
+        "정규화 기저의 비율은 하한이 0이 아니다 (최소 -0.156, 음수 7건)"
+      ]
+    },
+    "q2_run_settings": {
+      "table_rows": 26,
+      "unknown_count": 7,
+      "manuscript_conflict": "§142 'Intel Core i7-13700K' vs 저장소·라이브 호스트 'Intel Core Ultra 9 285K' — 저자 확인 필요"
+    },
+    "q3_candidate_policy": {
+      "verdict": "동일 규칙 · 코드 이중화 · 샘플링 단계만 상이",
+      "feasibility_rule_single_source": true,
+      "two_enumerators_agree_on_full_set": true,
+      "profiling_subsamples": [
+        "S6",
+        "S7",
+        "S8",
+        "S9",
+        "S10"
+      ],
+      "deployment_subsamples": false,
+      "manuscript_sentence_insertable_as_is": false
+    }
+  },
+  "verification": {
+    "checks": {
+      "table5_gpu/load_factor_mean_of_group_ratios_matches": true,
+      "table5_gpu/load_factor_top1_and_denominators_match": true,
+      "table5_gpu/load_factor_ratio_of_sums_differs": true,
+      "table5_gpu/speedup_mean_of_group_ratios_matches": true,
+      "table5_gpu/speedup_top1_and_denominators_match": true,
+      "table5_gpu/speedup_ratio_of_sums_differs": true,
+      "table5_npu/load_factor_mean_of_group_ratios_matches": true,
+      "table5_npu/load_factor_top1_and_denominators_match": true,
+      "table5_npu/load_factor_ratio_of_sums_differs": true,
+      "table5_npu/speedup_mean_of_group_ratios_matches": true,
+      "table5_npu/speedup_top1_and_denominators_match": true,
+      "table5_npu/speedup_ratio_of_sums_differs": true,
+      "no_nan_ratios_so_denominator_is_exactly_collected_groups": true,
+      "group_max_is_the_same_oracle_as_top1": true,
+      "accel_set_unique_within_group_so_iloc0_is_exact": true,
+      "two_enumerators_agree_on_full_feasible_set": true,
+      "collection_samples_only_stratified_sets": true,
+      "deploy_path_has_no_sampling": true,
+      "enumerate_placements_falls_back_to_cpu_for_infeasible_model": true,
+      "all_placements_pins_vlm_to_accel": true,
+      "llm_prompts_are_4_unique": true,
+      "vlm_prompt_is_the_fixed_default": true,
+      "live_host_cpu_is_core_ultra_9_285k": true,
+      "manuscript_i7_13700k_not_found_in_repo": true
+    },
+    "problems": [],
+    "all_passed": true
+  }
+}
