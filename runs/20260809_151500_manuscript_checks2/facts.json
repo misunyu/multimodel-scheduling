@@ -1,0 +1,171 @@
+{
+  "q1_cpu_only_generative_candidates": {
+    "who": "생성 세트인데 생성 뷰가 전부 CPU — S3 의 4배치 × 3 rate = 플랫폼당 12창",
+    "a_prediction_path": {
+      "y3_trained_on": "y3_valid 행만 (train_groupkfold.py:56 / train_unified.py:56)",
+      "y3_predicted_for": "held-out fold 전 행 (train_groupkfold.py:71 / :64) — 마스크 없음",
+      "beta_term": "has_gen 은 세트 단위 → S3 은 True → beta*yhat3 가 더해진다 (analysis_common.py:188)",
+      "special_handling": "없음 (0 대입도, beta 항 생략도 아니다)",
+      "production_path": "deploy_selector_xgb_suite.py:794-795 도 세트 단위 combo_has_generative 로 with_y3 를 정한다"
+    },
+    "b_included_in_ranking": {
+      "included": true,
+      "why": "ranking_metrics(analysis_common.py:191-212)에 배제 필터 없음",
+      "evidence": {
+        "gpu": {
+          "group_size": 8,
+          "s3_groups": 3,
+          "top1": [
+            1,
+            1,
+            1
+          ],
+          "oracle_ratio": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "npu": {
+          "group_size": 8,
+          "s3_groups": 3,
+          "top1": [
+            1,
+            1,
+            1
+          ],
+          "oracle_ratio": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    "c_measured_score": {
+      "uses_window_total_r3": false,
+      "actual": "featurize_window 의 뷰별 tokens_per_s 합 (deploy_selector_xgb_suite.py:323) = 이 후보들에서 0.0",
+      "why": "수집 JSONL 이 뷰별 토큰 미보존(collect_run.py:122-123) + jsonl_to_windows.py:35,43 가 총계를 '가속기 생성 뷰'에만 얹는데 이 후보들에는 그 뷰가 없다",
+      "window_total_range_tok_s": [
+        0.0,
+        2.02
+      ],
+      "window_total_mean_tok_s": 0.535,
+      "numeric_impact": "없음 — S3 그룹의 max(r3) 가 두 관례에서 동일"
+    },
+    "per_platform_detail": {
+      "gpu": {
+        "n_s3_rows": 24,
+        "n_cpu_only_generative_rows": 12,
+        "y3_pred_min": 0.1232,
+        "y3_pred_max": 0.263,
+        "y3_meas_unique": [
+          0.0
+        ],
+        "has_gen_all_true": true,
+        "s3_group_top1": [
+          1,
+          1,
+          1
+        ],
+        "s3_group_oracle_ratio": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "npu": {
+        "n_s3_rows": 24,
+        "n_cpu_only_generative_rows": 12,
+        "y3_pred_min": 0.9037,
+        "y3_pred_max": 0.9805,
+        "y3_meas_unique": [
+          0.0
+        ],
+        "has_gen_all_true": true,
+        "s3_group_top1": [
+          1,
+          1,
+          1
+        ],
+        "s3_group_oracle_ratio": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
+  },
+  "q2_hyperparameter_selection": {
+    "grid": [
+      {
+        "max_depth": 3,
+        "eta": 0.1
+      },
+      {
+        "max_depth": 4,
+        "eta": 0.1
+      },
+      {
+        "max_depth": 5,
+        "eta": 0.05
+      },
+      {
+        "max_depth": 6,
+        "eta": 0.1
+      }
+    ],
+    "fixed_params": {
+      "colsample_bytree": 0.8,
+      "eta": 0.1,
+      "eval_metric": "rmse",
+      "max_depth": 5,
+      "min_child_weight": 3.0,
+      "objective": "reg:squarederror",
+      "seed": 42,
+      "subsample": 0.8
+    },
+    "rounds": 300,
+    "inner_cv_folds": 3,
+    "inner_split": "assign_group_folds — 바깥 fold 와 같은 함수·같은 그룹 키 (models, rate_factor), seed 42. 그룹 존중",
+    "selection_metric": "MAE (3 inner fold 평균) 최소화",
+    "objective_vs_selection": "학습 목적함수는 reg:squarederror, 선택 기준은 MAE — 다르다",
+    "scope": "바깥 fold 마다 · 타깃(y1/y2/y3) 마다 독립 수행",
+    "shipped_path_contrast": "deploy_selector_xgb_suite._cv_select_params(:534)는 같은 그리드지만 inner fold 가 arange(n)%folds — 그룹 미존중",
+    "code": {
+      "cv_select_params": "analysis_common.py:228-256",
+      "grid": "deploy_selector_xgb_suite.py:525-530",
+      "fixed": "deploy_selector_xgb_suite.py:519-523"
+    }
+  },
+  "checks": {
+    "grid_is_the_four_documented_points": true,
+    "objective_is_reg_squarederror": true,
+    "fixed_params_as_documented": true,
+    "inner_cv_uses_the_same_group_fold_function": true,
+    "gpu_cpu_only_generative_is_12_rows": true,
+    "gpu_y3_pred_is_nonzero_for_them": true,
+    "gpu_y3_meas_is_exactly_zero_for_them": true,
+    "gpu_has_gen_true_so_beta_term_applies": true,
+    "gpu_s3_groups_keep_all_8_candidates": true,
+    "gpu_s3_three_groups_present_in_ranking": true,
+    "gpu_s3_all_top1_correct": true,
+    "npu_cpu_only_generative_is_12_rows": true,
+    "npu_y3_pred_is_nonzero_for_them": true,
+    "npu_y3_meas_is_exactly_zero_for_them": true,
+    "npu_has_gen_true_so_beta_term_applies": true,
+    "npu_s3_groups_keep_all_8_candidates": true,
+    "npu_s3_three_groups_present_in_ranking": true,
+    "npu_s3_all_top1_correct": true,
+    "window_total_nonzero_while_viewsum_zero": true,
+    "group_max_r3_unchanged_by_convention": true
+  },
+  "problems": [],
+  "input_sha256": {
+    "xgboost_model/full_collection_540/scripts/analysis_common.py": "cb5c9772e0d5e7b1664e530880733440ab87ae943ee96a5991f5fb5ffe71fa10",
+    "xgboost_model/full_collection_540/scripts/train_groupkfold.py": "a7e1f1058631c7bf1705a2b42aaefacf8bfe11c55309ef78525204ca64d89f6f",
+    "xgboost_model/full_collection_540/scripts/train_unified.py": "444587b05e5243e2645f9baa8fb6a14c89973c2bbd0fedaa43ba24fe29b56cab",
+    "xgboost_model/full_collection_540/scripts/jsonl_to_windows.py": "0a4a367cf83e0f02110fd2d91bd2bc557a5be3030d27bc07d84972c0f8805922",
+    "xgboost_model/deploy_selector_xgb_suite.py": "ee80caf0b939058643b89f55c4a783f0acbead4ae445de2480ec8286891e5532"
+  }
+}
