@@ -1,0 +1,385 @@
+{
+  "definition": {
+    "oracle_ratio": "그룹에서 그 방법이 고른 배치의 **측정** 점수 / 그룹 최고 측정 점수",
+    "regret": "1 - oracle_ratio",
+    "score_basis": "그룹 정규화 (analysis_common.scores_from, alpha=0.3, beta=1.0)",
+    "note": "정규화 점수는 음수가 될 수 있어 ratio 가 0 미만이 될 수 있다 (regret > 1). 하한 행의 0 채움은 '완전 실패'의 관례적 표기다.",
+    "sources": {
+      "direct": "analysis/groupkfold_{pl}_oof.csv",
+      "decomposed": "analysis/decomposed_view_oof.csv 재합성 (train_decomposed.py:150-186 동일 식) + P1 y3_pred",
+      "greedy": "analysis/greedy_results.csv (ratio_norm)"
+    }
+  },
+  "table": [
+    {
+      "method": "direct (P1)",
+      "platform": "gpu",
+      "denominator": "45 groups",
+      "top1": 0.9333,
+      "oracle_ratio": {
+        "n": 45,
+        "mean": 0.9963,
+        "min": 0.9212,
+        "p10": 1.0,
+        "median": 1.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 42,
+        "n_below_0.9": 0,
+        "n_below_0.5": 0
+      },
+      "regret": {
+        "n": 45,
+        "mean": 0.0037,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0,
+        "p90": 0.0,
+        "max": 0.0788,
+        "n_exact": 0,
+        "n_below_0.9": 45,
+        "n_below_0.5": 45
+      }
+    },
+    {
+      "method": "direct (P1)",
+      "platform": "npu",
+      "denominator": "45 groups",
+      "top1": 0.8667,
+      "oracle_ratio": {
+        "n": 45,
+        "mean": 0.9927,
+        "min": 0.9097,
+        "p10": 0.9759,
+        "median": 1.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 39,
+        "n_below_0.9": 0,
+        "n_below_0.5": 0
+      },
+      "regret": {
+        "n": 45,
+        "mean": 0.0073,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0,
+        "p90": 0.0241,
+        "max": 0.0903,
+        "n_exact": 0,
+        "n_below_0.9": 45,
+        "n_below_0.5": 45
+      }
+    },
+    {
+      "method": "decomposed (P6)",
+      "platform": "gpu",
+      "denominator": "45 groups",
+      "top1": 0.9111,
+      "oracle_ratio": {
+        "n": 45,
+        "mean": 0.9796,
+        "min": 0.2488,
+        "p10": 1.0,
+        "median": 1.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 41,
+        "n_below_0.9": 1,
+        "n_below_0.5": 1
+      },
+      "regret": {
+        "n": 45,
+        "mean": 0.0204,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0,
+        "p90": 0.0,
+        "max": 0.7512,
+        "n_exact": 0,
+        "n_below_0.9": 45,
+        "n_below_0.5": 44
+      }
+    },
+    {
+      "method": "decomposed (P6)",
+      "platform": "npu",
+      "denominator": "45 groups",
+      "top1": 0.6222,
+      "oracle_ratio": {
+        "n": 45,
+        "mean": 0.951,
+        "min": 0.4551,
+        "p10": 0.8827,
+        "median": 1.0,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 28,
+        "n_below_0.9": 6,
+        "n_below_0.5": 1
+      },
+      "regret": {
+        "n": 45,
+        "mean": 0.049,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0,
+        "p90": 0.1173,
+        "max": 0.5449,
+        "n_exact": 0,
+        "n_below_0.9": 45,
+        "n_below_0.5": 44
+      }
+    },
+    {
+      "method": "greedy (load_factor)",
+      "platform": "gpu",
+      "denominator": "41 measured groups",
+      "top1": 0.3415,
+      "oracle_ratio": {
+        "n": 41,
+        "mean": 0.5748,
+        "min": -0.1536,
+        "p10": 0.0737,
+        "median": 0.5306,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 14,
+        "n_below_0.9": 27,
+        "n_below_0.5": 17
+      },
+      "regret": {
+        "n": 41,
+        "mean": 0.4252,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.4694,
+        "p90": 0.9263,
+        "max": 1.1536,
+        "n_exact": 0,
+        "n_below_0.9": 36,
+        "n_below_0.5": 24
+      }
+    },
+    {
+      "method": "greedy (load_factor)",
+      "platform": "gpu",
+      "denominator": "45 groups (unmeasured = ratio 0)",
+      "top1": 0.3111,
+      "oracle_ratio": {
+        "n": 45,
+        "mean": 0.5237,
+        "min": -0.1536,
+        "p10": 0.0,
+        "median": 0.5219,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 14,
+        "n_below_0.9": 31,
+        "n_below_0.5": 21
+      },
+      "regret": {
+        "n": 45,
+        "mean": 0.4763,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.4781,
+        "p90": 1.0,
+        "max": 1.1536,
+        "n_exact": 4,
+        "n_below_0.9": 36,
+        "n_below_0.5": 24
+      }
+    },
+    {
+      "method": "greedy (speedup)",
+      "platform": "gpu",
+      "denominator": "33 measured groups",
+      "top1": 0.4242,
+      "oracle_ratio": {
+        "n": 33,
+        "mean": 0.7338,
+        "min": 0.0893,
+        "p10": 0.3972,
+        "median": 0.7816,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 14,
+        "n_below_0.9": 19,
+        "n_below_0.5": 7
+      },
+      "regret": {
+        "n": 33,
+        "mean": 0.2662,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.2184,
+        "p90": 0.6028,
+        "max": 0.9107,
+        "n_exact": 0,
+        "n_below_0.9": 32,
+        "n_below_0.5": 26
+      }
+    },
+    {
+      "method": "greedy (speedup)",
+      "platform": "gpu",
+      "denominator": "45 groups (unmeasured = ratio 0)",
+      "top1": 0.3111,
+      "oracle_ratio": {
+        "n": 45,
+        "mean": 0.5381,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.5669,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 14,
+        "n_below_0.9": 31,
+        "n_below_0.5": 19
+      },
+      "regret": {
+        "n": 45,
+        "mean": 0.4619,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.4331,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 12,
+        "n_below_0.9": 32,
+        "n_below_0.5": 26
+      }
+    },
+    {
+      "method": "greedy (load_factor)",
+      "platform": "npu",
+      "denominator": "36 measured groups",
+      "top1": 0.25,
+      "oracle_ratio": {
+        "n": 36,
+        "mean": 0.59,
+        "min": -0.1563,
+        "p10": 0.021,
+        "median": 0.569,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 9,
+        "n_below_0.9": 23,
+        "n_below_0.5": 14
+      },
+      "regret": {
+        "n": 36,
+        "mean": 0.41,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.431,
+        "p90": 0.9789,
+        "max": 1.1563,
+        "n_exact": 0,
+        "n_below_0.9": 31,
+        "n_below_0.5": 22
+      }
+    },
+    {
+      "method": "greedy (load_factor)",
+      "platform": "npu",
+      "denominator": "45 groups (unmeasured = ratio 0)",
+      "top1": 0.2,
+      "oracle_ratio": {
+        "n": 45,
+        "mean": 0.472,
+        "min": -0.1563,
+        "p10": 0.0,
+        "median": 0.4191,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 9,
+        "n_below_0.9": 32,
+        "n_below_0.5": 23
+      },
+      "regret": {
+        "n": 45,
+        "mean": 0.528,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.5809,
+        "p90": 1.0,
+        "max": 1.1563,
+        "n_exact": 9,
+        "n_below_0.9": 31,
+        "n_below_0.5": 22
+      }
+    },
+    {
+      "method": "greedy (speedup)",
+      "platform": "npu",
+      "denominator": "33 measured groups",
+      "top1": 0.3333,
+      "oracle_ratio": {
+        "n": 33,
+        "mean": 0.7926,
+        "min": 0.0287,
+        "p10": 0.4428,
+        "median": 0.9257,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 11,
+        "n_below_0.9": 15,
+        "n_below_0.5": 4
+      },
+      "regret": {
+        "n": 33,
+        "mean": 0.2074,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0743,
+        "p90": 0.5572,
+        "max": 0.9713,
+        "n_exact": 0,
+        "n_below_0.9": 32,
+        "n_below_0.5": 29
+      }
+    },
+    {
+      "method": "greedy (speedup)",
+      "platform": "npu",
+      "denominator": "45 groups (unmeasured = ratio 0)",
+      "top1": 0.2444,
+      "oracle_ratio": {
+        "n": 45,
+        "mean": 0.5812,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.6858,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 11,
+        "n_below_0.9": 27,
+        "n_below_0.5": 16
+      },
+      "regret": {
+        "n": 45,
+        "mean": 0.4188,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.3142,
+        "p90": 1.0,
+        "max": 1.0,
+        "n_exact": 12,
+        "n_below_0.9": 32,
+        "n_below_0.5": 29
+      }
+    }
+  ],
+  "checks": {
+    "direct_top1_matches_P1_gpu": true,
+    "direct_top1_matches_P1_npu": true,
+    "decomposed_top1_matches_P6_gpu": true,
+    "decomposed_top1_matches_P6_npu": true,
+    "n_groups_45_direct_gpu": true,
+    "n_groups_45_direct_npu": true,
+    "n_groups_45_decomposed_gpu": true,
+    "n_groups_45_decomposed_npu": true
+  }
+}
