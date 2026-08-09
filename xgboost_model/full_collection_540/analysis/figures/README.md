@@ -59,11 +59,15 @@ S6, S10, S7, S8. (지시문의 서술 순서 대신 N 오름차순을 택함 —
 ## F2 — fig_transfer.{pdf,png}
 
 - **generator**: `scripts/make_figures.py --fig f2`
-- 재생성: 2026-08-04, HEAD `11fc6c6` (pre-commit) — **범례 라벨만 변경**
+- 재생성: 2026-08-09, HEAD `3d26661` (pre-commit) — **joint 계열 값만 교체** (아래)
+- 이전 재생성: 2026-08-04, HEAD `11fc6c6` (pre-commit) — 범례 라벨만 변경
 - 최초 생성: 2026-07-30 10:59 KST, HEAD `1ee0f8e` (pre-commit)
 - 입력: `analysis/cross_platform_metrics.json`(asis 변형, commit d0e2644),
-  `analysis/unified_metrics.json`(commit c37c5bd),
+  **`runs/20260809_140605_checklist_r2/A_joint_paired/paired_metrics.json`의 `new45`**
+  (joint 계열 — 아래 참조),
   `analysis/groupkfold_{gpu,npu}_metrics.json`(commit 475a208)
+- **검증**: 그리기 전에 joint 4개 값을 `EXPECTED_JOINT`와 대조하는 assert를 통과해야 한다
+  (`make_figures.py:load_joint_paired`). 불일치 시 그림을 쓰지 않고 실패한다.
 - figsize (5.0, 2.2)in 2패널, y축 절단을 축 레이블에 명시
   (Spearman [0.85,1.00] / Top-1 [0.5,1.0]), 막대 위 수치 7pt
 
@@ -88,14 +92,48 @@ S6, S10, S7, S8. (지시문의 서술 순서 대신 N 오름차순을 택함 —
   `bbox_inches="tight"` 결과가 바뀌지 않았다
 - PNG 픽셀 치수: **904 × 457로 전후 동일**
 
-### 정확한 값 (JSON에서 읽음 — SUMMARY 수치와 전부 일치, 불일치 없음)
+### joint 계열의 fold 분할 변경 (2026-08-09)
 
-| 평가 플랫폼 | 지표 | specialized | zero-shot transfer | unified |
+joint 막대는 더 이상 `analysis/unified_metrics.json`을 읽지 않는다. 출하 joint 실행(P4)은
+CV 그룹 키에 **플랫폼을 포함**해 90그룹으로 나누므로, 같은 (세트, rate)의 GPU 행과 NPU 행이
+서로 다른 fold 에 떨어질 수 있다 — **45쌍 중 27쌍이 실제로 갈라져 있었다.** 그러면 한
+플랫폼의 동일 워크로드를 학습에서 본 채로 다른 플랫폼의 같은 워크로드를 평가하게 된다.
+
+그래서 그룹 키에서 플랫폼을 뺀 **45 paired 그룹**으로 재학습한 값을 쓴다(그 외 프로토콜은
+전부 동일: 3-fold, seed 42, 그룹 인지 내부 CV, 동일 4조합 그리드, y3 마스킹, feature 37개).
+근거·재현: `runs/20260809_140605_checklist_r2/` (항목 A).
+**막대 색·순서·범례·축·그림 치수는 불변이고 joint 계열 값만 바뀐다.**
+
+| 평가 플랫폼 | 지표 | 구 분할(90그룹) | **신 분할(45 paired)** | 그림 라벨 |
 |---|---|---|---|---|
-| GPU | 그룹 Spearman | 0.9859 | 0.9272 (npu→gpu) | 0.9748 |
-| NPU | 그룹 Spearman | 0.9724 | 0.9022 (gpu→npu) | 0.9742 |
+| GPU | 그룹 Spearman | 0.97481 | **0.97550** | 0.975 → 0.975 (**변화 없음**) |
+| NPU | 그룹 Spearman | 0.97422 | **0.98421** | 0.974 → **0.984** |
+| GPU | Top-1 | 0.93333 | **0.93333** | 0.933 → 0.933 (변화 없음) |
+| NPU | Top-1 | 0.84444 | **0.86667** | 0.844 → **0.867** |
+
+GPU 그룹 Spearman 은 +0.0007 올랐지만 3자리 표기에서는 **0.975 그대로**다. 따라서 그림에서
+실제로 바뀌는 라벨은 **2건**이다(사전 예상은 3건이었다).
+
+**데이터 불변 검증** (재생성 전후):
+
+- `pdftotext` 토큰 다중집합 비교: 제거 `{0.974, 0.844}`, 추가 `{0.984, 0.867}` — **그뿐**.
+  총 토큰 수 49로 동일, **비숫자 토큰(범례·축 레이블·눈금 문자열) 완전 동일**
+- `pdfinfo` 페이지 크기: **326.228 × 164.499 pts로 전후 동일**
+- PNG 픽셀 치수: **904 × 457로 전후 동일**
+- specialized·zero-shot 막대 값은 전부 불변
+
+> NPU Top-1 은 이제 joint(0.867) = platform-specific(0.867) 로 **같은 높이**의 막대 두 개가
+> 된다. 라벨 dodge 조건(인접 라벨 간격 < 축 범위의 3%)은 두 막대가 인접하지 않아
+> (사이에 zero-shot 0.800) 발동하지 않는다 — 겹침 없음을 재생성 결과로 확인했다.
+
+### 정확한 값 (specialized·zero-shot 은 analysis/ JSON, joint 은 paired 런)
+
+| 평가 플랫폼 | 지표 | platform-specific | zero-shot | joint (paired) |
+|---|---|---|---|---|
+| GPU | 그룹 Spearman | 0.9859 | 0.9272 (npu→gpu) | **0.9755** |
+| NPU | 그룹 Spearman | 0.9724 | 0.9022 (gpu→npu) | **0.9842** |
 | GPU | Top-1 | 0.9333 | 0.9333 (npu→gpu) | 0.9333 |
-| NPU | Top-1 | 0.8667 | 0.8000 (gpu→npu) | 0.8444 |
+| NPU | Top-1 | 0.8667 | 0.8000 (gpu→npu) | **0.8667** |
 
 ### 구현 결정
 
@@ -114,5 +152,9 @@ S6, S10, S7, S8. (지시문의 서술 순서 대신 N 오름차순을 택함 —
 - **GPU 평가의 Top-1은 세 조건 모두 0.933으로 동일** — "zero-shot 열화"는
   GPU 평가에서는 Spearman(0.986→0.927)에만 나타나고 Top-1에는 나타나지
   않는다. NPU 평가에서는 둘 다 열화(0.972→0.902, 0.867→0.800).
-- unified의 NPU Spearman(0.9742)은 specialized(0.9724)보다 오히려 +0.002
-  높다 — "통합은 회복"이 NPU에서는 완전 회복 이상.
+- joint의 NPU Spearman(0.9842)은 platform-specific(0.9724)보다 **+0.012 높다** —
+  "통합은 회복"이 NPU에서는 완전 회복 이상이다. (paired fold 이전에는 +0.002였다.)
+- **NPU Top-1은 joint와 platform-specific이 0.867로 동일하다** — NPU 평가에서
+  "joint approaches platform-specific"이 아니라 **matches**다. GPU는 세 조건 모두
+  0.933으로 원래부터 동일했으므로, Top-1 기준으로 joint가 뒤지는 플랫폼은 없다.
+  (paired fold 이전에는 NPU joint가 0.844로 0.022 뒤졌다.)

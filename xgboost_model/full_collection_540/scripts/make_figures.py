@@ -174,20 +174,48 @@ def fig_f1(basis="declared_normalized"):
     return {"basis": basis, "n_diff": n_diff, "by_n": by_n, "rates_of": rates_of}
 
 
+# The joint bars come from the PAIRED-fold retraining, not from analysis/
+# unified_metrics.json. The shipped joint run puts the platform in the CV group key, so
+# the GPU and NPU rows of one (set, rate) can land in different folds -- 27 of the 45
+# pairs actually did. The paired run drops the platform from the key (45 paired groups,
+# protocol otherwise identical) so a workload's two platforms always share a fold.
+# Numbers move only for the joint series; the other two series are untouched.
+JOINT_PAIRED_GLOB = "runs/*_checklist_r2/A_joint_paired/paired_metrics.json"
+# Guard against a silent regression: these are the paired-fold values this figure was
+# regenerated for, at the 3-decimal precision the bar labels print. GPU rho moves
+# 0.97481 -> 0.97550, which is still 0.975 on the figure, so only two labels change.
+EXPECTED_JOINT = {("rho", "gpu"): 0.975, ("rho", "npu"): 0.984,
+                  ("top1", "gpu"): 0.933, ("top1", "npu"): 0.867}
+
+
+def load_joint_paired():
+    """Joint (both-platform) ranking metrics from the paired-fold run."""
+    hits = sorted(ac.ROOT.glob(JOINT_PAIRED_GLOB))
+    assert len(hits) == 1, f"expected exactly one {JOINT_PAIRED_GLOB}, got {hits}"
+    blob = json.loads(hits[0].read_text())
+    out = {pl: blob["new45"]["per_platform"][pl]["ranking"] for pl in ("gpu", "npu")}
+    for (metric, pl), want in EXPECTED_JOINT.items():
+        key = "group_spearman_mean" if metric == "rho" else "top1"
+        got = round(out[pl][key], 3)
+        assert got == want, f"joint {metric}/{pl}: {got} != expected {want}"
+    return out, hits[0]
+
+
 def fig_f2():
     cp = json.loads((ac.ANALYSIS / "cross_platform_metrics.json").read_text())
-    uni = json.loads((ac.ANALYSIS / "unified_metrics.json").read_text())
+    joint, joint_src = load_joint_paired()
     spec = {pl: json.loads((ac.ANALYSIS / f"groupkfold_{pl}_metrics.json").read_text())
             for pl in ("gpu", "npu")}
     other = {"gpu": "npu", "npu": "gpu"}
-    vals = {}          # (metric, eval_pl) -> [specialized, transfer, unified]
+    vals = {}          # (metric, eval_pl) -> [specialized, transfer, joint]
     for pl in ("gpu", "npu"):
         s = spec[pl]["ranking"]
         t = cp[f"{other[pl]}->{pl}|asis"]["ranking"]
-        u = uni["per_platform"][pl]["ranking"]
+        u = joint[pl]
         vals[("rho", pl)] = [s["group_spearman_mean"], t["group_spearman_mean"],
                              u["group_spearman_mean"]]
         vals[("top1", pl)] = [s["top1"], t["top1"], u["top1"]]
+    print(f"joint series read from {joint_src.relative_to(ac.ROOT)}")
 
     fig, axes = plt.subplots(1, 2, figsize=(5.0, 2.2))
     panels = [("rho", "Group Spearman (axis from 0.85)", (0.85, 1.0), 0.05),
