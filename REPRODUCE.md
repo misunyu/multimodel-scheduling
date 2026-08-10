@@ -114,24 +114,16 @@ run2 = (동일)
 
 ## 5. 데이터 무결성
 
-`paper.lock`은 **이 저장소에 존재하지 않는다.** 대신 이전 run이 기록해 둔 sha256으로
-대조했다:
+측정 입력의 무결성은 저장소 루트의 **`paper.lock`과 대조**해 확인한다:
 
 ```bash
-python - <<'EOF'
-import json, hashlib
-from pathlib import Path
-rec = json.load(open('runs/20260806_103943_model_guide/run_manifest.json'))['input_data_files']
-for p, h in rec.items():
-    if h and hashlib.sha256(Path(p).read_bytes()).hexdigest() != h:
-        print('MISMATCH', p)
-print('checked', sum(1 for h in rec.values() if h))
-EOF
+sha256sum -c paper.lock
 ```
 
-결과: **기록된 18개 파일 전부 일치**(수집 창 2종, 수집 JSONL 4종, 스케줄 YAML 2종,
-정적 프로파일, 워킹셋 정의, feature 순서 사이드카 등). 향후 `paper.lock`을 만든다면
-이 18개 항목이 그 내용이 되어야 한다.
+결과: **18개 파일 전부 `OK`**(수집 창 2종, 수집 JSONL 4종, 앵커 JSONL 2종, 레거시 OOF 2종,
+스케줄 YAML 2종, 정적 프로파일, 워킹셋 정의, 모델 레지스트리, P1 지표·OOF 4종,
+feature 순서 사이드카). `paper.lock`은 `sha256sum -c` 호환 형식이며 헤더에 생성일·근거
+매니페스트·대응 원고 리비전이 주석으로 들어 있다.
 
 ---
 
