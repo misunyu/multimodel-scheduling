@@ -37,6 +37,7 @@ PAIRED = ROOT / "runs/20260809_140605_checklist_r2/A_joint_paired/joint_oof_new4
 SETS = yaml.safe_load((ROOT / "working_sets.yaml").read_text())["sets"]
 SID_OF = {",".join(sorted(v)): k for k, v in SETS.items()}
 S3_KEY = "llama1b,resnet50,yolo11s"
+ZS_ASIS = "zero-shot (asis, superseded)"
 
 EXEC_COLS = [(f"views.{a}.view.exec_gpu", f"views.{a}.view.exec_npu")
              for a in ("sum", "mean", "max")]
@@ -144,18 +145,38 @@ for pl in ac.PLATFORMS:
     preds[("joint", pl)] = j[j["platform"] == pl][
         ["combination", "y1_pred", "y2_pred", "y3_pred"]].reset_index(drop=True)
 
-# zero-shot: 저장된 fold 부스터 3개의 예측 평균 (cross_platform_transfer.py:64-75, asis)
+# zero-shot: 평가 행의 fold 번호 f 에 대해 소스 플랫폼의 fold{f} 부스터 하나로만 예측한다
+# (cross_platform_transfer.py:78-102, fold_matched). 2026-08-13 지시문 #20 에서 논문의
+# zero-shot 프로토콜이 asis(3개 평균) → fold_matched 로 바뀌었으므로 여기도 맞춘다.
+# 구 asis 는 아래에서 회귀 비교용으로 함께 계산해 둔다 (METHODS 에는 넣지 않는다).
 other = {"gpu": "npu", "npu": "gpu"}
+ZS_FOLD = {}
+for pl in ac.PLATFORMS:
+    ZS_FOLD[pl] = ac.assign_group_folds(ac.group_keys(meta[pl])).values
+# fold 번호가 플랫폼에 무관해야 fold_matched 가 의미를 가진다 — 가정하지 말고 확인한다
+_fmap = {pl: dict(sorted(set(zip(
+    (str((m, r)) for m, r in zip(meta[pl]["models"], meta[pl]["rate_factor"])),
+    ZS_FOLD[pl])))) for pl in ac.PLATFORMS}
+assert _fmap["gpu"] == _fmap["npu"], "fold assignment differs across platforms"
+
 for pl in ac.PLATFORMS:
     Xv = feats[pl]
-    out = {"combination": meta[pl]["combination"].astype(str).values}
+    fold = ZS_FOLD[pl]
+    fm = {"combination": meta[pl]["combination"].astype(str).values}
+    asis = {"combination": meta[pl]["combination"].astype(str).values}
     for tag, _ in ac.TARGETS:
-        ps = []
+        ps, matched = [], np.full(len(Xv), np.nan)
         for f in range(ac.N_FOLDS):
             bst = ac.load_booster(ac.ARTIFACTS / f"gkf_cpu_{other[pl]}_{tag}_fold{f}.json")
             ps.append(ac.predict_booster(bst, Xv.values))
-        out[f"{tag}_pred"] = np.vstack(ps).mean(axis=0)
-    preds[("zero-shot", pl)] = pd.DataFrame(out)
+            m = fold == f
+            if m.any():
+                matched[m] = ac.predict_booster(bst, Xv.values[m])
+        assert np.isfinite(matched).all(), f"{pl} {tag}: unfilled rows"
+        fm[f"{tag}_pred"] = matched
+        asis[f"{tag}_pred"] = np.vstack(ps).mean(axis=0)
+    preds[("zero-shot", pl)] = pd.DataFrame(fm)
+    preds[(ZS_ASIS, pl)] = pd.DataFrame(asis)
 
 # decomposed: 뷰 OOF 재합성 + P1 yhat3 공유 (train_decomposed.py:114-115, :150-186)
 vo = pd.read_csv(AN / "decomposed_view_oof.csv", comment="#")
@@ -183,7 +204,10 @@ for pl in ac.PLATFORMS:
                             (c["miss"] - c["lo"]) / np.where(span > 1e-9, span, 1.0), 0.0)
     preds[("decomposed", pl)] = c[["combination", "y1_pred", "y2_pred", "y3_pred"]]
 
+# 원고 App B 의 "eight evaluated predictor--platform combinations" = METHODS × 2 플랫폼.
+# ZS_ASIS 는 폐기된 zero-shot 구현으로, 회귀 비교용으로만 계산하고 8조합에는 포함하지 않는다.
 METHODS = ["platform-specific", "zero-shot", "joint", "decomposed"]
+METHODS_ALL = METHODS + [ZS_ASIS]
 
 # decomposed 가 P1 yhat3 를 그대로 공유하는지 검산
 share_ok = {}
@@ -210,14 +234,14 @@ def scored(method, pl, meas_variant, mask_y3):
 # ------------------------------------------------------------------ A 파트
 extrap = {}
 for pl in ac.PLATFORMS:
-    for m in METHODS:
+    for m in METHODS_ALL:
         d = scored(m, pl, "B1", False)
         v = d.loc[d["is_target"], "y3_pred"].values
         extrap[f"{m}/{pl}"] = {"min": d4(v.min()), "max": d4(v.max()),
                                "mean": d4(v.mean()), "n": int(len(v))}
 
 A = {}
-for m in METHODS:
+for m in METHODS_ALL:
     for pl in ac.PLATFORMS:
         row = {}
         gms = {}
@@ -259,7 +283,7 @@ for m in METHODS:
 
 # ------------------------------------------------------------------ B 파트
 Bres = {}
-for m in METHODS:
+for m in METHODS_ALL:
     for pl in ac.PLATFORMS:
         row, gms = {}, {}
         for tag in ("B1", "B2"):
@@ -390,12 +414,44 @@ checks = {
 }
 # A 가 divergence 를 못 바꾼다는 것을 구성이 아니라 값으로도 확인
 checks["A_measured_labels_identical_across_A1_A2"] = True
-for m in METHODS:
+for m in METHODS_ALL:
     for pl in ac.PLATFORMS:
         a = scored(m, pl, "B1", False)["s_meas"].values
         b = scored(m, pl, "B1", True)["s_meas"].values
         if not np.array_equal(a, b):
             checks["A_measured_labels_identical_across_A1_A2"] = False
+
+# ------------------------------------------------- 원고 App B 문장 게이트 (8조합 한정)
+# 원고: "does not change any Top-1 outcome across the eight evaluated predictor--platform
+#        combinations and leaves the same 11 workload groups ... maximum absolute change
+#        in group-mean Spearman correlation is 0.013, attained by the decomposed
+#        predictor on the NPU."
+_cells = [f"{m}/{pl}" for m in METHODS for pl in ac.PLATFORMS]
+_dr = {c: abs(A[c]["delta_A2_minus_A1"]["all45_mean_spearman"]) for c in _cells}
+_argmax = max(_dr, key=_dr.get)
+appB_gate = {
+    "n_combinations": len(_cells),
+    "combinations": _cells,
+    "top1_changes_total": int(sum(A[c]["delta_A2_minus_A1"]["n_groups_top1_changed"]
+                                  + Bres[c]["delta_B2_minus_B1"]["n_groups_top1_changed"]
+                                  for c in _cells)),
+    "max_abs_delta_group_spearman": d4(_dr[_argmax]),
+    "max_attained_by": _argmax,
+    "rounded_as_printed": round(_dr[_argmax], 3),
+    "per_cell_abs_delta_spearman": {c: d4(v) for c, v in sorted(_dr.items())},
+    "divergence_groups": div_total["n_disagree"],
+    "zero_shot_below_max": {
+        c: bool(_dr[c] < _dr[_argmax]) for c in _cells if c.startswith("zero-shot")},
+    "regression_asis_delta_spearman": {
+        pl: d4(abs(A[f"{ZS_ASIS}/{pl}"]["delta_A2_minus_A1"]["all45_mean_spearman"]))
+        for pl in ac.PLATFORMS},
+}
+appB_gate["passes"] = bool(
+    appB_gate["n_combinations"] == 8
+    and appB_gate["top1_changes_total"] == 0
+    and appB_gate["divergence_groups"] == 11
+    and appB_gate["rounded_as_printed"] == 0.013
+    and appB_gate["max_attained_by"] == "decomposed/npu")
 
 facts = {
     "scope": {
@@ -404,8 +460,13 @@ facts = {
         "no_retraining": "저장된 OOF CSV·측정 창·저장된 fold 부스터 추론만 사용",
         "alpha": ALPHA, "beta": BETA, "tie_eps": TIE,
         "joint_source": str(PAIRED.relative_to(ROOT)) + " (paired-fold, 작업 14-A)",
-        "zero_shot_source": "artifacts/gkf_cpu_{train}_{tag}_fold{0,1,2}.json 평균 (asis)",
+        "zero_shot_source": "artifacts/gkf_cpu_{train}_{tag}_fold{f}.json — 평가 행의 "
+                            "fold f 하나만 사용 (fold_matched, 지시문 #20 이후 논문 프로토콜)",
+        "zero_shot_superseded": f"'{ZS_ASIS}' 항목은 폐기된 3개-부스터 평균(asis)이며 "
+                                "회귀 비교용으로만 남긴다. 원고의 8조합에는 포함되지 않는다.",
+        "paper_eight_combinations": [f"{m}/{pl}" for m in METHODS for pl in ac.PLATFORMS],
     },
+    "appB_manuscript_gate": appB_gate,
     "extrapolated_yhat3_on_targets": extrap,
     "restored_r3_on_targets": {
         pl: {"min": d4(float(meas[(pl, "B2")].loc[target_rows[pl], "r3_raw"].min())),
@@ -467,6 +528,15 @@ for k, v in greedy_B.items():
 print(f"\n== divergence: 창총계 {div_total['n_disagree']}/45, "
       f"뷰별합 {div_viewsum['n_disagree']}/45, 동일집합 {facts['divergence']['identical']}")
 print(f"== S3 best-measured 변화: {best_changed}")
+print("\n== App B 게이트 (8조합) ==")
+for k in ("n_combinations", "top1_changes_total", "max_abs_delta_group_spearman",
+          "max_attained_by", "rounded_as_printed", "divergence_groups", "passes"):
+    print(f"  {k:32s} {appB_gate[k]}")
+print(f"  zero-shot Δρ (fold_matched)        {_dr['zero-shot/gpu']:.4f} / "
+      f"{_dr['zero-shot/npu']:.4f}")
+print(f"  zero-shot Δρ (asis, 회귀비교)       "
+      f"{appB_gate['regression_asis_delta_spearman']['gpu']:.4f} / "
+      f"{appB_gate['regression_asis_delta_spearman']['npu']:.4f}")
 print("\n== 검산 ==")
 for k, v in checks.items():
     print(f"  {'OK ' if v else 'FAIL'} {k}")

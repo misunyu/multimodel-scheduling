@@ -1,0 +1,78 @@
+{
+  "run": "20260809_160000_y3_sensitivity",
+  "task": "작업 18-r2 — CPU-only 생성 후보 y3 처리 민감도 (읽기 전용 재채점)",
+  "generated_at": "2026-08-09T23:03:30+09:00",
+  "git_commit": "3163f676d9547c86129ef1394f3fc778a80cf233 (pre-commit HEAD)",
+  "scope": {
+    "created": [
+      "runs/20260809_160000_y3_sensitivity/*"
+    ],
+    "modified": [],
+    "note": "재학습·재수집 없음. 저장된 OOF CSV·측정 창·저장된 fold 부스터 추론만 사용."
+  },
+  "inputs": {
+    "xgboost_model/full_collection_540/cpu_gpu/performance_gpu_full540.json": "813c915250bc924308223211770639e1ffc89b78665cfbb7c916acd837ed6a9d",
+    "xgboost_model/full_collection_540/cpu_npu/performance_npu_full540.json": "0fbf775ae5b59cf8a4b778115226334922a158e2db4a1179780e7480073e83d8",
+    "xgboost_model/full_collection_540/analysis/groupkfold_gpu_oof.csv": "2e10bbead96a997132fb1571c95fe62d8fb257231aaaf78fa88476a656738ed0",
+    "xgboost_model/full_collection_540/analysis/groupkfold_npu_oof.csv": "7c65760df3ac1afd9e70ae01ad20ea5fea50f01196b35215386847d13aec87d3",
+    "xgboost_model/full_collection_540/analysis/decomposed_view_oof.csv": "061d16059f7d6c4cb1c367d71f6a79e4be4c887fedc9e3454008f77b54680d2a",
+    "xgboost_model/full_collection_540/analysis/greedy_results.csv": "5381eb4fd7572709894bcf2678c1e1218ecba3089ef10fce62001442a9427027",
+    "runs/20260809_140605_checklist_r2/A_joint_paired/joint_oof_new45.csv": "b78a2f4583be9111330d854cd93e174aca57610641aa00a7e0c497cbab6b2f3c",
+    "runs/20260730_190154_score_basis_audit/build_basis_audit.py": "4317e057c170c273750453a2c62f90a72c4faa09df824c70ef83cc379c83f895",
+    "xgboost_model/full_collection_540/scripts/analysis_common.py": "cb5c9772e0d5e7b1664e530880733440ab87ae943ee96a5991f5fb5ffe71fa10"
+  },
+  "outputs": {
+    "facts.json": "dfcd385a66e4b7d3e4c73d7bd309d2f54b20f087948b8f00f5d937f32e411ecf",
+    "report.md": "910eb478539ba48df4238cfe6e00d4a291a1e4055cd58f9ad22205a7aa21cda3",
+    "sensitivity.py": "d3592817df1e528bed3793106faef043d3861a67a667c86d92c844b40b6e2da4"
+  },
+  "headline": {
+    "top1_groups_flipped_A": {
+      "platform-specific/gpu": 0,
+      "platform-specific/npu": 0,
+      "zero-shot/gpu": 0,
+      "zero-shot/npu": 0,
+      "joint/gpu": 0,
+      "joint/npu": 0,
+      "decomposed/gpu": 0,
+      "decomposed/npu": 0
+    },
+    "top1_groups_flipped_B": {
+      "platform-specific/gpu": 0,
+      "platform-specific/npu": 0,
+      "zero-shot/gpu": 0,
+      "zero-shot/npu": 0,
+      "joint/gpu": 0,
+      "joint/npu": 0,
+      "decomposed/gpu": 0,
+      "decomposed/npu": 0
+    },
+    "max_abs_delta_45group_spearman_A": 0.0127,
+    "max_abs_delta_45group_spearman_B": 0.0,
+    "divergence_total": 11,
+    "divergence_viewsum": 11,
+    "divergence_group_sets_identical": true,
+    "S3_best_measured_changed": {
+      "gpu": [],
+      "npu": []
+    },
+    "greedy_all_deltas_zero": true,
+    "only_nonzero_B_effect": "decomposed/npu selected-score ratio: S3 +0.0377, 45-group +0.0025"
+  },
+  "conclusion": "발표 수치 불변 (Top-1 0 flips, divergence 11/45, Table 1·App H 그대로). 예측측 마스킹은 8셀 중 7셀에서 개선(최대 +0.0127)이나 Top-1은 불변 — 설계 변경 사안.",
+  "verification": {
+    "checks": {
+      "target_rows_are_12_per_platform": true,
+      "target_rows_all_in_S3": true,
+      "B1_y3_meas_zero_on_targets": true,
+      "B2_changes_only_S3_rows": true,
+      "B2_changes_no_group_max_r3": true,
+      "decomposed_shares_P1_y3_pred": true,
+      "A_leaves_measured_scores_untouched": true,
+      "divergence_invariant_under_A": true,
+      "divergence_total_is_11_of_45": true,
+      "A_measured_labels_identical_across_A1_A2": true
+    },
+    "all_passed": true
+  }
+}

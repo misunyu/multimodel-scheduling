@@ -106,6 +106,29 @@ def printed_in_tex(tex: str, value: float) -> bool:
     return f"{value:.3f}" in tex
 
 
+# ------------------------------------------------------- docs vs. what code reads
+# Twice now a script's input moved and the document describing it did not follow
+# (지시문 #21 Phase 2, #22 A). Values were fine; the provenance trail pointed at a
+# retired file. Catch it: figures/README.md must name every analysis/ file
+# make_figures.py opens, and its 입력 block must not cite a runs/ path as an input.
+def doc_path_drift() -> list:
+    mf = (ROOT / "xgboost_model/full_collection_540/scripts/make_figures.py").read_text()
+    rd = ROOT / "xgboost_model/full_collection_540/analysis/figures/README.md"
+    if not rd.exists():
+        return ["analysis/figures/README.md is missing"]
+    doc, out = rd.read_text(), []
+    reads = set(re.findall(r'ac\.ANALYSIS / f?"([^"]+)"', mf))
+    for name in sorted(reads):
+        stem = re.sub(r"\{[^}]+\}", "", name)          # groupkfold_{pl}_x -> groupkfold__x
+        if not any(part and part in doc for part in stem.split("_metrics")[:1] or [stem]):
+            out.append(f"figures/README.md never names {name}, which make_figures.py reads")
+    block = re.search(r"^- 입력.*?(?=^- \*\*검증)", doc, re.S | re.M)
+    for m in re.findall(r"runs/[\w./*{}-]+", block.group(0) if block else ""):
+        out.append(f"figures/README.md lists {m} as a current F2 input; "
+                   "make_figures.py reads analysis/ only")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
@@ -147,6 +170,8 @@ def main() -> int:
     if not any(k.endswith("|fold_matched") for k in CP):
         problems.append("cross_platform_metrics.json has no fold_matched variant. "
                         "Re-run scripts/cross_platform_transfer.py")
+    drift = doc_path_drift()
+    problems.extend(drift)
 
     out = {
         "manuscript": {"path": str(TEX.relative_to(ROOT)), "sha256": sha(TEX)}
@@ -164,6 +189,7 @@ def main() -> int:
             "python xgboost_model/full_collection_540/scripts/make_figures.py --fig f1",
             "python xgboost_model/full_collection_540/scripts/make_figures.py --fig f2",
         ],
+        "doc_path_drift": drift,
         "problems": problems,
         "ok": not problems,
     }
@@ -184,6 +210,7 @@ def main() -> int:
         print(f"{'':16} {'':18} {'':5} {'':9} {'':8} {'':7} "
               f"  └ {r['artifact']} : {r['field']}")
     print(f"\npaper.lock: {n_ok} files OK (exit {lock.returncode})")
+    print(f"doc path drift: {len(drift)} (figures/README.md vs make_figures.py inputs)")
     print(f"artifacts hashed: {len(artifacts)}, boosters hashed: {len(boosters)}")
     print("\nregenerate everything:")
     for c in out["regenerate"]:

@@ -70,22 +70,26 @@ python runs/20260810_150000_repro/compare.py
 | 6 | **Fig. 1**, §4 divergence, **App.A** 본문·표, **App.C** 표 | 측정 창, `working_sets.yaml` | `reproduce.py` 6단계 — `ba.normalize` → `ba.divergence` / `ba.sweep_setcounts` | `reproduced.json:{divergence,sweep,coverage}` | 0.1 s |
 | 7 | **App.H** 표 | 1·4·5단계의 그룹별 지표 | `reproduce.py` 7단계 — 세트 단위 cluster bootstrap, `RandomState(42)`, B=10,000 | `reproduced.json:bootstrap` | 4.3 s |
 | 8 | **App.B** y3 민감도 문장 | 측정 창 + 1단계 OOF | `reproduce.py` 8단계 | `reproduced.json:y3_sensitivity` | 0.0 s |
-| 9 | **Fig. 1 · Fig. 2** PDF | `analysis/` 산출물 + 작업 14-A paired 결과 | `make_figs_repro.py` — `make_figures.fig_f1/fig_f2`, `FIGDIR`만 교체 | `figures/fig_{divergence,transfer}.{pdf,png}` | 0.3 s |
+| 9 | **Fig. 1 · Fig. 2** PDF | `analysis/` 산출물만 (2026-08-13 이후 `runs/` 의존 없음) | `make_figs_repro.py` — `make_figures.fig_f1/fig_f2`, `FIGDIR`만 교체 | `figures/fig_{divergence,transfer}.{pdf,png}` | 0.3 s |
 
 ### 그림 판정 방식
 
 `make_figures.py`는 수정하지 않는다. 드라이버가 모듈을 import 한 뒤 `FIGDIR`만 run
 디렉터리로 바꿔 호출하므로 `analysis/figures/`는 그대로 남는다(실행 전후 해시 동일 확인:
-`fig_divergence.pdf` `3c13b1df…`, `fig_transfer.pdf` `1c376fe3…`).
+`fig_divergence.pdf` `3c13b1df…`, `fig_transfer.pdf` `7f52fa12…` — 2026-08-13 기준.
+`fig_transfer.pdf`는 지시문 #20 의 zero-shot 전환과 #21 의 joint 경로 이전으로 두 번
+재생성됐고, 그 이전 해시는 `1c376fe3…`이었다).
 
 PDF는 생성 타임스탬프를 담으므로 sha256이 달라질 수 있다. 그래서 **sha256 우선, 다르면
 `pdftotext` 토큰 다중집합 + `pdfinfo` 페이지 치수 동치**로 판정한다. 이번 검증에서는
 두 그림 모두 **sha256까지 동일**했고, `manuscript/`에 들어 있는 사본과도 해시가 같다.
 
-> **Fig. 2의 joint 계열 주의**: `make_figures.fig_f2`는 joint 값을
-> `runs/*_checklist_r2/A_joint_paired/paired_metrics.json`에서 glob으로 읽는다(커밋된
-> 산출물). 위 3단계의 독립 재학습이 그 값을 그대로 재현하므로 사슬은 닫혀 있지만,
-> 그림 자체는 커밋된 paired 결과에 의존한다.
+> **Fig. 2의 joint 계열** (2026-08-13 갱신): `make_figures.fig_f2`는 joint 값을
+> **`analysis/unified_metrics.json`**에서 읽는다 (`load_joint_paired`, `n_groups == 45`
+> assert 포함). 그 파일은 출하 스크립트 `train_unified.py`가 직접 만든다.
+> 이전에는 `runs/*_checklist_r2/A_joint_paired/paired_metrics.json`을 glob으로 읽어
+> 그림이 커밋된 run 산출물에 의존했다 — 지시문 #21 Phase 2 에서 해소됐다.
+> 아래 3단계의 독립 재학습이 같은 값을 재현하므로 사슬은 그대로 닫혀 있다.
 
 ---
 

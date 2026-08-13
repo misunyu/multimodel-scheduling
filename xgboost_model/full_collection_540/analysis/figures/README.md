@@ -59,16 +59,25 @@ S6, S10, S7, S8. (지시문의 서술 순서 대신 N 오름차순을 택함 —
 ## F2 — fig_transfer.{pdf,png}
 
 - **generator**: `scripts/make_figures.py --fig f2`
-- 재생성: 2026-08-13 — **zero-shot 계열을 fold-matched 전이로 교체** (아래)
+- 재생성: 2026-08-13 — **zero-shot 계열을 fold-matched 전이로 교체**, 이어서
+  **joint 계열 입력 경로를 `runs/` → `analysis/unified_metrics.json`으로 이전** (둘 다 아래).
+  경로 이전은 그린 값을 바꾸지 않았다 — `pdftotext` 토큰 다중집합 차이 0건
 - 이전 재생성: 2026-08-09, HEAD `3d26661` (pre-commit) — joint 계열 값만 교체 (아래)
 - 이전 재생성: 2026-08-04, HEAD `11fc6c6` (pre-commit) — 범례 라벨만 변경
 - 최초 생성: 2026-07-30 10:59 KST, HEAD `1ee0f8e` (pre-commit)
-- 입력: `analysis/cross_platform_metrics.json` — **`fold_matched` 변형** (2026-08-13 재생성; `asis`·`swap` 변형은 같은 파일에 보존),
-  **`runs/20260809_140605_checklist_r2/A_joint_paired/paired_metrics.json`의 `new45`**
-  (joint 계열 — 아래 참조),
-  `analysis/groupkfold_{gpu,npu}_metrics.json`(commit 475a208)
-- **검증**: 그리기 전에 joint 4개 값을 `EXPECTED_JOINT`와 대조하는 assert를 통과해야 한다
-  (`make_figures.py:load_joint_paired`). 불일치 시 그림을 쓰지 않고 실패한다.
+- 입력 (세 계열 모두 `analysis/` 아래 — `runs/` 의존 없음):
+  - platform-specific: `analysis/groupkfold_{gpu,npu}_metrics.json` (commit 475a208)
+  - zero-shot: `analysis/cross_platform_metrics.json` — **`fold_matched` 변형**
+    (`make_figures.py:187` `ZEROSHOT_VARIANT`; 2026-08-13 재생성. `asis`·`swap` 변형은
+    같은 파일에 보존)
+  - joint: **`analysis/unified_metrics.json`** — `per_platform.{gpu,npu}.ranking`
+    (`make_figures.py:194`; 2026-08-13 정본 이전, 아래 이력 참조)
+- **검증** (`make_figures.py`, 그리기 전 assert — 하나라도 어긋나면 그림을 쓰지 않고 실패):
+  - `load_joint_paired` `:196` — `unified_metrics.json`의 `n_groups == 45`
+    (90그룹 분할로 되돌아가면 즉시 실패, 실패 메시지가 `train_unified.py` 재실행을 지시)
+  - `load_joint_paired` `:200-203` — joint 4개 값을 `EXPECTED_JOINT`와 대조
+  - `fig_f2` `:218-221` — zero-shot 4개 값을 `EXPECTED_ZEROSHOT`과 대조
+  - 스크립트는 실행 시 joint 계열의 실제 출처 경로를 stdout에 찍는다 (`:225-227`)
 - figsize (5.0, 2.2)in 2패널, y축 절단을 축 레이블에 명시
   (Spearman [0.85,1.00] / Top-1 [0.5,1.0]), 막대 위 수치 7pt
 
@@ -142,6 +151,24 @@ CV 그룹 키에 **플랫폼을 포함**해 90그룹으로 나누므로, 같은 
 GPU 그룹 Spearman 은 +0.0007 올랐지만 3자리 표기에서는 **0.975 그대로**다. 따라서 그림에서
 실제로 바뀌는 라벨은 **2건**이다(사전 예상은 3건이었다).
 
+#### 후속 — 정본 경로 이전 (2026-08-13, 지시문 #21 Phase 2)
+
+**위 문단의 "`unified_metrics.json`을 읽지 않는다"는 서술은 이제 반대다.** 그때는 출하
+스크립트가 90그룹 분할을 냈기 때문에 그 파일을 쓸 수 없었지만, `train_unified.py`가
+paired 분할을 **직접** 만들도록 고쳐졌고(`:53` 그룹 키에서 플랫폼 제외, `:56-64` 45쌍이
+한 fold 안에 있는지 런타임 assert) `unified_metrics.json`이 45 paired로 재생성되어
+**다시 정본 입력이 되었다.** 논문에 인쇄되는 수치 중 `runs/` 하위에만 있던 마지막 항목이
+이것이었다.
+
+- 값 동등성: 재생성된 `unified_metrics.json`은 `run_paired.py`의 `new45`와
+  **비트 동일**하다 (ρ 0.9754979 / 0.9842105, Top-1 0.93333 / 0.86667,
+  fold별 test 창 432 / 280 / 368). 따라서 **그림에 인쇄되는 12개 값은 하나도 바뀌지 않는다.**
+- 폐기된 90그룹 산출물은 삭제하지 않고 `analysis/unified_metrics_90group_legacy.json`에
+  `_STATUS: "INVALID-FOR-PAPER"`·`_why`·`_superseded_by`를 붙여 보존했다.
+- 경로 이전 후 재생성한 `fig_transfer.pdf`는 `pdftotext` 토큰 다중집합이 **완전히 동일**
+  (차이 0건). sha256만 PDF 생성 타임스탬프 때문에 달라진다.
+- 위 "입력" 절과 "검증" 절은 이 이전을 반영한 현행 서술이다.
+
 **데이터 불변 검증** (재생성 전후):
 
 - `pdftotext` 토큰 다중집합 비교: 제거 `{0.974, 0.844}`, 추가 `{0.984, 0.867}` — **그뿐**.
@@ -154,7 +181,7 @@ GPU 그룹 Spearman 은 +0.0007 올랐지만 3자리 표기에서는 **0.975 그
 > 된다. 라벨 dodge 조건(인접 라벨 간격 < 축 범위의 3%)은 두 막대가 인접하지 않아
 > (사이에 zero-shot 0.800) 발동하지 않는다 — 겹침 없음을 재생성 결과로 확인했다.
 
-### 정확한 값 (specialized·zero-shot 은 analysis/ JSON, joint 은 paired 런)
+### 정확한 값 (세 계열 모두 `analysis/` JSON — 2026-08-13 확인)
 
 | 평가 플랫폼 | 지표 | platform-specific | zero-shot (fold-matched) | joint (paired) |
 |---|---|---|---|---|
