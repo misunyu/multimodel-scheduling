@@ -1,19 +1,26 @@
-"""P4: unified predictor — one model trained on both platforms' 1080 rows.
+"""P4: joint predictor — one model trained on both platforms' 1080 rows.
 
 Same GroupKFold protocol as P1 (3-fold, seed=42, group-aware inner CV over the
-same 4-combo grid, y3 masked per combination), with the CV group extended to
-(platform, models, rate_factor) — 90 groups. Features stay the shipped 37: the
+same 4-combo grid, y3 masked per combination), with the CV group being
+(models, rate_factor) WITHOUT the platform — 45 paired groups, so a workload's
+GPU and NPU rows always share a fold. Features stay the shipped 37: the
 views.*.view.exec_gpu / exec_npu one-hots are what lets a single model separate
 the platforms. Targets are normalized within (models, workload, rate) per
 platform, exactly as P1, so scores remain within-group comparable.
+
+History: this script previously used (platform, models, rate_factor) — 90 groups.
+That split let 27 of the 45 pairs straddle folds and does not match the paper.
+The 90-group outputs are kept as analysis/unified_metrics_90group_legacy.json
+(marked invalid-for-paper) for regression comparison only.
 
 Per-platform OOF metrics of the unified model are reported side by side with
 P1's specialized predictors. Judgement criteria are stated but NOT applied —
 that call belongs to the paper.
 
 Outputs: analysis/unified_metrics.json, analysis/unified_oof.csv,
-analysis/unified_vs_specialized.md. (No boosters are exported: nothing
-downstream consumes a unified booster.)
+analysis/unified_vs_specialized.md. These are the canonical source of the paper's
+joint numbers (Figure 2 joint bars). (No boosters are exported: nothing
+downstream consumes a joint booster.)
 """
 import json
 import sys
@@ -37,8 +44,25 @@ def main():
     M = pd.concat(Ms, ignore_index=True)
     assert len(X) == 1080
 
-    groups = ac.group_keys(M, with_platform=True)
+    # PAIRED folds: the platform is deliberately NOT in the CV group key. With it in
+    # (the original 90-group split) the GPU and NPU rows of one (models, rate) group can
+    # land in different folds -- 27 of the 45 pairs did -- so a workload seen on one
+    # platform is used to train the model that scores the same workload on the other.
+    # Dropping the platform gives 45 paired groups, which is what the paper describes and
+    # what the reported joint numbers were produced with.
+    groups = ac.group_keys(M)
     fold = ac.assign_group_folds(groups).values
+
+    # Assert the pairing rather than trusting it: every (models, rate) group must have all
+    # of its rows -- both platforms -- in exactly one fold.
+    pair_chk = pd.DataFrame({"key": groups.astype(str), "platform": M["platform"],
+                             "fold": fold})
+    straddling = [k for k, g in pair_chk.groupby("key") if g["fold"].nunique() != 1]
+    assert not straddling, f"{len(straddling)} groups straddle folds: {straddling[:5]}"
+    assert pair_chk["key"].nunique() == 45, pair_chk["key"].nunique()
+    print(f"paired folds: {pair_chk['key'].nunique()} groups, "
+          f"0 straddling, fold sizes {np.bincount(fold, minlength=ac.N_FOLDS).tolist()}")
+
     Xv = X.values
     y3_valid = M["y3_valid"].values.astype(bool)
 
@@ -74,6 +98,7 @@ def main():
                                    oof["has_gen"])
 
     res = {"n_rows": 1080, "n_groups": int(groups.nunique()),
+           "fold_key": "(models, rate_factor) — paired, platform excluded",
            "fold_row_counts": np.bincount(fold, minlength=ac.N_FOLDS).tolist(),
            "hyperparams": chosen, "per_platform": {}}
     p1 = {pl: json.loads((ac.ANALYSIS / f"groupkfold_{pl}_metrics.json").read_text())
@@ -103,8 +128,9 @@ def main():
 
     # ---- comparison md ----
     md = [ac.prov_md_header(experiment="P4 unified vs specialized")]
-    md.append("# P4 — 통합 예측기(1080행) vs 플랫폼별 예측기(P1)\n")
-    md.append("동일 프로토콜(GroupKFold 3-fold seed=42, 그룹 키에 플랫폼 포함 → 90그룹). "
+    md.append("# P4 — joint 예측기(1080행, 45 paired 그룹) vs 플랫폼별 예측기(P1)\n")
+    md.append("동일 프로토콜(GroupKFold 3-fold seed=42, 그룹 키 = (models, rate) — "
+              "플랫폼 제외 → 45 paired 그룹, 한 워크로드의 GPU/NPU 행이 항상 같은 fold). "
               "feature 37차원 그대로 — exec one-hot이 플랫폼을 구분.\n")
     md.append("| 플랫폼 | 예측기 | 점수 그룹-ρ | Top-1 | Top-5 | y1 ρ | y2 ρ | y3 ρ |")
     md.append("|---|---|---|---|---|---|---|---|")

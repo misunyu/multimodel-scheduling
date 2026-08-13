@@ -174,40 +174,34 @@ def fig_f1(basis="declared_normalized"):
     return {"basis": basis, "n_diff": n_diff, "by_n": by_n, "rates_of": rates_of}
 
 
-# The joint bars come from the PAIRED-fold retraining, not from analysis/
-# unified_metrics.json. The shipped joint run puts the platform in the CV group key, so
-# the GPU and NPU rows of one (set, rate) can land in different folds -- 27 of the 45
-# pairs actually did. The paired run drops the platform from the key (45 paired groups,
-# protocol otherwise identical) so a workload's two platforms always share a fold.
-# Numbers move only for the joint series; the other two series are untouched.
-JOINT_PAIRED_GLOB = "runs/*_checklist_r2/A_joint_paired/paired_metrics.json"
-# Guard against a silent regression: these are the paired-fold values this figure was
-# regenerated for, at the 3-decimal precision the bar labels print. GPU rho moves
-# 0.97481 -> 0.97550, which is still 0.975 on the figure, so only two labels change.
+# The joint bars come from the PAIRED-fold split: the CV group key is (models, rate)
+# with the platform deliberately left out, so a workload's GPU and NPU rows always share
+# a fold. With the platform in the key -- the split this script's source used before
+# 2026-08-13 -- 27 of the 45 pairs straddled folds. train_unified.py now produces the
+# paired split directly, so the canonical source is analysis/, not a runs/ directory.
+# The superseded 90-group output is kept as unified_metrics_90group_legacy.json.
+# Guard against a silent regression: these are the values this figure was drawn for.
 EXPECTED_JOINT = {("rho", "gpu"): 0.975, ("rho", "npu"): 0.984,
                   ("top1", "gpu"): 0.933, ("top1", "npu"): 0.867}
 
-# The zero-shot bars use the FOLD-MATCHED transfer: the source fold-f booster predicts
-# only the target's fold-f rows. The mean-of-three variant that cross_platform_transfer
-# also reports has no out-of-fold structure -- two of its three boosters have seen the
-# source-side counterpart of every evaluated group -- so the three bars would sit on
-# different prediction structures. Same guard as the joint series.
 ZEROSHOT_VARIANT = "fold_matched"
 EXPECTED_ZEROSHOT = {("rho", "gpu"): 0.927, ("rho", "npu"): 0.907,
                      ("top1", "gpu"): 0.933, ("top1", "npu"): 0.800}
 
 
 def load_joint_paired():
-    """Joint (both-platform) ranking metrics from the paired-fold run."""
-    hits = sorted(ac.ROOT.glob(JOINT_PAIRED_GLOB))
-    assert len(hits) == 1, f"expected exactly one {JOINT_PAIRED_GLOB}, got {hits}"
-    blob = json.loads(hits[0].read_text())
-    out = {pl: blob["new45"]["per_platform"][pl]["ranking"] for pl in ("gpu", "npu")}
+    """Joint (both-platform) ranking metrics from the canonical paired-fold run."""
+    src = ac.ANALYSIS / "unified_metrics.json"
+    blob = json.loads(src.read_text())
+    assert blob.get("n_groups") == 45, (
+        f"{src.name} has n_groups={blob.get('n_groups')}; expected the 45-group paired "
+        "split. Re-run scripts/train_unified.py.")
+    out = {pl: blob["per_platform"][pl]["ranking"] for pl in ("gpu", "npu")}
     for (metric, pl), want in EXPECTED_JOINT.items():
         key = "group_spearman_mean" if metric == "rho" else "top1"
         got = round(out[pl][key], 3)
         assert got == want, f"joint {metric}/{pl}: {got} != expected {want}"
-    return out, hits[0]
+    return out, src
 
 
 def fig_f2():

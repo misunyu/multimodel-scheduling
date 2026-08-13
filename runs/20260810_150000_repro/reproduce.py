@@ -166,12 +166,18 @@ with stage("2_zero_shot"):
         d = DATA[pl]
         base = P1[pl]["oof"][["group", "has_gen", "y3_valid",
                               "y1_meas", "y2_meas", "y3_meas", "s_meas"]].copy()
+        # fold-matched (paper protocol since 2026-08-13): the source fold-f booster
+        # predicts only the target's fold-f rows, so the predicting booster has seen
+        # that workload group on neither platform.
+        tfold = P1[pl]["fold"]
         for tag, _ in ac.TARGETS:
-            ps = []
+            pr = np.full(len(d["X"]), np.nan)
             for f in range(ac.N_FOLDS):
+                m = tfold == f
                 bst = ac.load_booster(OUT / f"gkf_cpu_{other[pl]}_{tag}_fold{f}.json")
-                ps.append(ac.predict_booster(bst, d["X"].values))
-            base[f"{tag}_pred"] = np.vstack(ps).mean(axis=0)
+                pr[m] = ac.predict_booster(bst, d["X"].values[m])
+            assert np.isfinite(pr).all()
+            base[f"{tag}_pred"] = pr
         base["s_pred"] = ac.scores_from(base["y1_pred"], base["y2_pred"],
                                         base["y3_pred"], base["has_gen"])
         per, agg = rank_of(base)

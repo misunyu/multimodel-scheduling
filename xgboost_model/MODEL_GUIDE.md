@@ -23,10 +23,10 @@
 | 예측 단위 | 창(window) = 하나의 (배치, rate) | 창 | **뷰(view)** = 창 안의 모델 1개 |
 | 학습 데이터 범위 | 한 플랫폼의 540창 | 두 플랫폼 1080창 합침 (`train_unified.py:35-38`) | 한 플랫폼의 vision 뷰 2220행 |
 | 학습 표본 수 | 540행 × 37 feature (플랫폼당) | 1080행 × 37 feature | 2220행 × 18 feature (플랫폼당) |
-| CV 그룹 키 | `(models, rate_factor)` → 45그룹 (`analysis_common.py:152-157`) | `(platform, models, rate_factor)` → 90그룹 (`train_unified.py:40`) | 창의 그룹을 뷰가 상속 → 45그룹 (`train_decomposed.py:121`) |
+| CV 그룹 키 | `(models, rate_factor)` → 45그룹 (`analysis_common.py:152-157`) | `(models, rate_factor)` → **45 paired 그룹**, 플랫폼 제외 (`train_unified.py:53`) | 창의 그룹을 뷰가 상속 → 45그룹 (`train_decomposed.py:121`) |
 | 부스터 산출물 | `xgboost_model/artifacts/gkf_cpu_{gpu,npu}_{y1,y2,y3}.json` + `_fold{0,1,2}.json` (`train_groupkfold.py:75,82`) | **없음** (`train_unified.py:15-16`) | **없음** (`save_model` 호출 자체가 없음) |
 | 지표 산출물 | `analysis/groupkfold_{gpu,npu}_metrics.json`, `groupkfold_{gpu,npu}_oof.csv`, `groupkfold_ranking.md` | `analysis/unified_metrics.json`, `unified_oof.csv`, `unified_vs_specialized.md` | `analysis/decomposed_metrics.json`, `decomposed_results.md`, `decomposed_view_oof.csv` |
-| 논문 대응 수치 (점수 Top-1 / 그룹 ρ) | GPU 0.933 / +0.986, NPU 0.867 / +0.972 | GPU 0.933 / +0.975, NPU 0.844 / +0.974 | GPU 0.911 / +0.931, NPU 0.622 / +0.911 |
+| 논문 대응 수치 (점수 Top-1 / 그룹 ρ) | GPU 0.933 / +0.986, NPU 0.867 / +0.972 | GPU 0.933 / +0.975, **NPU 0.867 / +0.984** | GPU 0.911 / +0.931, NPU 0.622 / +0.911 |
 | 대응 그림·표 | Fig. transfer의 `platform-specific` 막대 | Fig. transfer의 `joint (both platforms)` 막대 | 본문 decomposed 베이스라인 비교 |
 
 `analysis/`는 `xgboost_model/full_collection_540/analysis/`의 줄임. 위 수치의 원본은
@@ -43,8 +43,10 @@
    (`:121`). `assert w["fold"].notna().all()` (`:113`)로 모든 그룹이 매핑에 있는지 확인한다.
    → P6는 자체적으로 fold를 다시 나누지 않는다.
    `group_to_fold`는 `train_groupkfold.py:110-111`이 쓴다.
-   **joint은 상속하지 않는다**: 그룹 키에 플랫폼이 들어가 90그룹이 되므로
-   `assign_group_folds`를 독립적으로 다시 호출한다 (`train_unified.py:40-41`).
+   **joint은 상속하지 않는다**: 1080행에 대해 `assign_group_folds`를 독립적으로 다시
+   호출한다 (`train_unified.py:53-54`). 다만 그룹 키가 P1과 같은 `(models, rate_factor)`
+   이고 배정이 정렬된 고유 키와 seed만의 함수라, **결과 파티션은 P1과 45/45 동일**하다.
+   (2026-08-13 이전에는 키에 플랫폼이 들어가 90그룹이었고 27/45 쌍이 fold 를 가로질렀다.)
 
 2. **ŷ3 공유 (P6 ← P1)**
    뷰별 토큰 수가 보존되지 않아 y3는 분해할 수 없다 (`train_decomposed.py:2-5`).
@@ -106,8 +108,9 @@
   `analysis/groupkfold_{gpu,npu}_metrics.json`의 최상위 키 **`group_to_fold`**
   (45개 항목, `"('llama1b,qwen2_vl,resnet50,yolo11n', 1.0)": 2` 형식).
   `train_groupkfold.py:110-111`이 쓰고 `train_decomposed.py:100-112`가 읽는다.
-- 이 파일이 결정하는 범위: **P1과 P6**. joint은 그룹 키가 달라(90그룹) 같은 함수를 독립
-  호출한다(`train_unified.py:40-41`) — 즉 세 모델의 분할을 한 파일이 전부 결정하지는 **않는다**.
+- 이 파일이 결정하는 범위: **P1과 P6**. joint은 같은 함수를 독립 호출한다
+  (`train_unified.py:53-54`) — 파일을 읽지는 않지만 키가 같아 **결과 파티션은 동일**하다.
+  실행 시 45쌍이 fold 를 가로지르지 않는지 assert 로 확인한다 (`train_unified.py:58-62`).
 - 검증: 저장된 `group_to_fold`를 `assign_group_folds`로 재계산해 두 플랫폼 모두 **완전 일치**
   함을 확인했다(`measurements.json:folds.P1_{gpu,npu}_matches_stored_group_to_fold = true`).
   joint의 fold 행 수도 저장값 `[320, 352, 408]`과 재계산이 일치한다.
@@ -186,13 +189,16 @@
 그룹 수는 15/15/15로 균등하지만 창 수는 216/140/184로 불균등하다 — 그룹당 창 수가
 4~24로 다르기 때문이다. 저장값 `groupkfold_{gpu,npu}_metrics.json:fold_row_counts`와 일치.
 
-**joint (90그룹)**
+**joint (45 paired 그룹)** — P1 과 같은 파티션, 창 수만 2배
 
 | fold | test 그룹 | test 창 | train 그룹 | train 창 |
 |---|---|---|---|---|
-| 0 | 30 | 320 | 60 | 760 |
-| 1 | 30 | 352 | 60 | 728 |
-| 2 | 30 | 408 | 60 | 672 |
+| 0 | 15 | 432 | 30 | 648 |
+| 1 | 15 | 280 | 30 | 800 |
+| 2 | 15 | 368 | 30 | 712 |
+
+(폐기된 90그룹 분할의 fold 창 수는 320/352/408 이었다 —
+`analysis/unified_metrics_90group_legacy.json` 참조.)
 
 저장값 `unified_metrics.json:fold_row_counts = [320, 352, 408]`과 일치.
 
@@ -236,7 +242,7 @@ fold는 P1에서 상속하지만(§1-1) 뷰 수 비율은 창 수 비율과 다�
 | ④ featurize (37차원) | `featurize_window(w, S, infps_map=m)` → `_view_features` `:250` + `_aggregate` `:282` | `deploy_selector_xgb_suite.py:297` |
 | ⑤ 열 순서 고정 | `X.reindex(columns=FEATURE_ORDER)` | `analysis_common.py:133` (순서 원본: `artifacts/deploy_cpu_gpu_features.json`) |
 | ⑥ 타깃 정규화 | `normalize_targets(Y_raw, M)` → `_normalize_targets` | `analysis_common.py:139-148`, `deploy_selector_xgb_suite.py:425` |
-| ⑦ 그룹 키 | `group_keys(M, with_platform=?)` | `analysis_common.py:152-157` |
+| ⑦ 그룹 키 | `group_keys(M)` — 세 모델 모두 `(models, rate_factor)` | `analysis_common.py:152-157` |
 | ⑧ GroupKFold | `assign_group_folds(groups, n_folds=3, seed=42)` | `analysis_common.py:160-171` |
 | ⑨ 하이퍼파라미터 선택 | `cv_select_params(Xtr, ytr, inner_groups)` | `analysis_common.py:228-256` |
 | ⑩ 학습 | `train_booster(Xtr, ytr, params, rounds=300)` | `analysis_common.py:259-263` |
