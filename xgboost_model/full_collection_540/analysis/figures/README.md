@@ -59,10 +59,11 @@ S6, S10, S7, S8. (지시문의 서술 순서 대신 N 오름차순을 택함 —
 ## F2 — fig_transfer.{pdf,png}
 
 - **generator**: `scripts/make_figures.py --fig f2`
-- 재생성: 2026-08-09, HEAD `3d26661` (pre-commit) — **joint 계열 값만 교체** (아래)
+- 재생성: 2026-08-13 — **zero-shot 계열을 fold-matched 전이로 교체** (아래)
+- 이전 재생성: 2026-08-09, HEAD `3d26661` (pre-commit) — joint 계열 값만 교체 (아래)
 - 이전 재생성: 2026-08-04, HEAD `11fc6c6` (pre-commit) — 범례 라벨만 변경
 - 최초 생성: 2026-07-30 10:59 KST, HEAD `1ee0f8e` (pre-commit)
-- 입력: `analysis/cross_platform_metrics.json`(asis 변형, commit d0e2644),
+- 입력: `analysis/cross_platform_metrics.json` — **`fold_matched` 변형** (2026-08-13 재생성; `asis`·`swap` 변형은 같은 파일에 보존),
   **`runs/20260809_140605_checklist_r2/A_joint_paired/paired_metrics.json`의 `new45`**
   (joint 계열 — 아래 참조),
   `analysis/groupkfold_{gpu,npu}_metrics.json`(commit 475a208)
@@ -91,6 +92,33 @@ S6, S10, S7, S8. (지시문의 서술 순서 대신 N 오름차순을 택함 —
 - `pdfinfo` 페이지 크기: **326.228 × 164.499 pts로 전후 동일** — 라벨이 짧아졌으나
   `bbox_inches="tight"` 결과가 바뀌지 않았다
 - PNG 픽셀 치수: **904 × 457로 전후 동일**
+
+### zero-shot 계열의 예측 구조 변경 (2026-08-13)
+
+zero-shot 막대는 더 이상 `cross_platform_metrics.json`의 `asis`(3개 fold 부스터 예측의
+평균)를 읽지 않는다. 그 구조는 평가측에 out-of-fold 성질이 없다 — 어떤 워크로드 그룹을
+평가하든 3개 중 **2개** 부스터가 소스 플랫폼의 같은 그룹을 학습에서 본 상태다. 반면
+platform-specific과 joint는 둘 다 out-of-fold다. 세 막대가 서로 다른 예측 구조 위에 있었다.
+
+**`fold_matched` 변형**은 평가 행의 fold 번호 `f`에 대해 소스의 `fold{f}` 부스터 **하나로만**
+예측한다. 세 조건의 파티션이 fold 번호까지 동일하므로(`assign_group_folds`가 정렬된 그룹 키와
+seed만의 함수), 그 부스터는 해당 워크로드 그룹을 **어느 플랫폼에서도 본 적이 없다**.
+스크립트가 실행 시 `fold_map["gpu"] == fold_map["npu"]`를 assert 해 이 전제를 확인한다.
+
+| 평가 | 구 `asis` (3개 평균) | 신 `fold_matched` | 그림 라벨 |
+|---|---|---|---|
+| npu→gpu ρ | 0.9272 | **0.9274** | 0.927 → 0.927 (**변화 없음**) |
+| gpu→npu ρ | 0.9022 | **0.9073** | 0.902 → **0.907** |
+| Top-1 (양방향) | 0.9333 / 0.8000 | 0.9333 / 0.8000 | 변화 없음 |
+
+**데이터 불변 검증** (재생성 전후):
+
+- `pdftotext` 토큰 다중집합: 제거 `{0.902}`, 추가 `{0.907}` — **그뿐**. 총 토큰 49로 동일
+- `pdfinfo` 페이지 크기 **326.228 × 164.499 pts**, PNG **904 × 457** — 전후 동일
+- 나머지 11개 막대 값 전부 불변
+- 그리기 전 `EXPECTED_ZEROSHOT` assert 통과 (`make_figures.py`)
+
+`asis`·`swap` 변형은 같은 JSON에 그대로 남아 있어 회귀 비교가 가능하다.
 
 ### joint 계열의 fold 분할 변경 (2026-08-09)
 
@@ -128,10 +156,10 @@ GPU 그룹 Spearman 은 +0.0007 올랐지만 3자리 표기에서는 **0.975 그
 
 ### 정확한 값 (specialized·zero-shot 은 analysis/ JSON, joint 은 paired 런)
 
-| 평가 플랫폼 | 지표 | platform-specific | zero-shot | joint (paired) |
+| 평가 플랫폼 | 지표 | platform-specific | zero-shot (fold-matched) | joint (paired) |
 |---|---|---|---|---|
-| GPU | 그룹 Spearman | 0.9859 | 0.9272 (npu→gpu) | **0.9755** |
-| NPU | 그룹 Spearman | 0.9724 | 0.9022 (gpu→npu) | **0.9842** |
+| GPU | 그룹 Spearman | 0.9859 | **0.9274** (npu→gpu) | **0.9755** |
+| NPU | 그룹 Spearman | 0.9724 | **0.9073** (gpu→npu) | **0.9842** |
 | GPU | Top-1 | 0.9333 | 0.9333 (npu→gpu) | 0.9333 |
 | NPU | Top-1 | 0.8667 | 0.8000 (gpu→npu) | **0.8667** |
 
@@ -151,7 +179,7 @@ GPU 그룹 Spearman 은 +0.0007 올랐지만 3자리 표기에서는 **0.975 그
 
 - **GPU 평가의 Top-1은 세 조건 모두 0.933으로 동일** — "zero-shot 열화"는
   GPU 평가에서는 Spearman(0.986→0.927)에만 나타나고 Top-1에는 나타나지
-  않는다. NPU 평가에서는 둘 다 열화(0.972→0.902, 0.867→0.800).
+  않는다. NPU 평가에서는 둘 다 열화(0.972→0.907, 0.867→0.800).
 - joint의 NPU Spearman(0.9842)은 platform-specific(0.9724)보다 **+0.012 높다** —
   "통합은 회복"이 NPU에서는 완전 회복 이상이다. (paired fold 이전에는 +0.002였다.)
 - **NPU Top-1은 joint와 platform-specific이 0.867로 동일하다** — NPU 평가에서

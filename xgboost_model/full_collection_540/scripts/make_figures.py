@@ -187,6 +187,15 @@ JOINT_PAIRED_GLOB = "runs/*_checklist_r2/A_joint_paired/paired_metrics.json"
 EXPECTED_JOINT = {("rho", "gpu"): 0.975, ("rho", "npu"): 0.984,
                   ("top1", "gpu"): 0.933, ("top1", "npu"): 0.867}
 
+# The zero-shot bars use the FOLD-MATCHED transfer: the source fold-f booster predicts
+# only the target's fold-f rows. The mean-of-three variant that cross_platform_transfer
+# also reports has no out-of-fold structure -- two of its three boosters have seen the
+# source-side counterpart of every evaluated group -- so the three bars would sit on
+# different prediction structures. Same guard as the joint series.
+ZEROSHOT_VARIANT = "fold_matched"
+EXPECTED_ZEROSHOT = {("rho", "gpu"): 0.927, ("rho", "npu"): 0.907,
+                     ("top1", "gpu"): 0.933, ("top1", "npu"): 0.800}
+
 
 def load_joint_paired():
     """Joint (both-platform) ranking metrics from the paired-fold run."""
@@ -210,12 +219,18 @@ def fig_f2():
     vals = {}          # (metric, eval_pl) -> [specialized, transfer, joint]
     for pl in ("gpu", "npu"):
         s = spec[pl]["ranking"]
-        t = cp[f"{other[pl]}->{pl}|asis"]["ranking"]
+        t = cp[f"{other[pl]}->{pl}|{ZEROSHOT_VARIANT}"]["ranking"]
         u = joint[pl]
+        for metric, key in (("rho", "group_spearman_mean"), ("top1", "top1")):
+            got = round(t[key], 3)
+            want = EXPECTED_ZEROSHOT[(metric, pl)]
+            assert got == want, f"zero-shot {metric}/{pl}: {got} != expected {want}"
         vals[("rho", pl)] = [s["group_spearman_mean"], t["group_spearman_mean"],
                              u["group_spearman_mean"]]
         vals[("top1", pl)] = [s["top1"], t["top1"], u["top1"]]
     print(f"joint series read from {joint_src.relative_to(ac.ROOT)}")
+    print(f"zero-shot series read from cross_platform_metrics.json "
+          f"variant={ZEROSHOT_VARIANT}")
 
     fig, axes = plt.subplots(1, 2, figsize=(5.0, 2.2))
     panels = [("rho", "Group Spearman (axis from 0.85)", (0.85, 1.0), 0.05),
