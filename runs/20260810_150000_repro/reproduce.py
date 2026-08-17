@@ -602,6 +602,58 @@ with stage("8_y3_sensitivity"):
         "completions_per_180s": 180.0 / _req_s,
     }
 
+    # Sec. 3 now claims that restoring the recorded window totals "changes neither
+    # Top-1 outcomes nor divergence labels". App.B makes the same claim. Recompute both
+    # halves here from the restored labels so the two statements are checked against one
+    # reproduced source rather than against each other.
+    _rest = {}
+    for pl in ac.PLATFORMS:
+        d = DATA[pl]
+        Yr = d["Yraw"].copy()
+        tot = d["M"]["combination"].astype(str).map(wins[pl]).values
+        Yr["y3_total_tokens_per_s"] = np.where(tgt_rows[pl], tot,
+                                               Yr["y3_total_tokens_per_s"].values)
+        Yn2 = ac.normalize_targets(Yr, d["M"])
+        has_gen = d["M"]["has_gen"]
+        f = pd.DataFrame({"group": d["gstr"].values})
+        f["s_meas_pub"] = ac.scores_from(d["Yn"]["y1_total_throughput_fps"],
+                                         d["Yn"]["y2_deadline_miss_rate"],
+                                         d["Yn"]["y3_total_tokens_per_s"], has_gen)
+        f["s_meas_res"] = ac.scores_from(Yn2["y1_total_throughput_fps"],
+                                         Yn2["y2_deadline_miss_rate"],
+                                         Yn2["y3_total_tokens_per_s"], has_gen)
+        o = P1[pl]["oof"]
+        f["s_pred"] = ac.scores_from(o["y1_pred"], o["y2_pred"], o["y3_pred"], has_gen)
+        _, pub = rank_of(f.rename(columns={"s_meas_pub": "s_meas"}))
+        _, res = rank_of(f.rename(columns={"s_meas_res": "s_meas"}))
+        # tie-aware best set per group under each labelling
+        best = {}
+        for tag, col in (("pub", "s_meas_pub"), ("res", "s_meas_res")):
+            best[tag] = {}
+            for g, gg in f.groupby("group", sort=False):
+                m = gg[col].values.astype(float)
+                best[tag][str(g)] = frozenset(np.flatnonzero(np.abs(m - m.max()) < TIE))
+        _rest[pl] = {"top1_published": pub["top1"], "top1_restored": res["top1"],
+                     "top1_delta": res["top1"] - pub["top1"],
+                     "n_groups_best_set_changed":
+                         sum(1 for g in best["pub"] if best["pub"][g] != best["res"][g]),
+                     "_best_pub": best["pub"], "_best_res": best["res"]}
+    _dis_pub = sum(1 for g in _rest["gpu"]["_best_pub"]
+                   if not (_rest["gpu"]["_best_pub"][g] & _rest["npu"]["_best_pub"][g]))
+    _dis_res = sum(1 for g in _rest["gpu"]["_best_res"]
+                   if not (_rest["gpu"]["_best_res"][g] & _rest["npu"]["_best_res"][g]))
+    for pl in ac.PLATFORMS:
+        _rest[pl].pop("_best_pub"); _rest[pl].pop("_best_res")
+    R["y3_restored_invariance"] = {
+        "per_platform": _rest,
+        "n_target_windows": {pl: int(tgt_rows[pl].sum()) for pl in ac.PLATFORMS},
+        "top1_changes_total": sum(1 for pl in ac.PLATFORMS
+                                  if abs(_rest[pl]["top1_delta"]) > 1e-12),
+        "divergence_published": _dis_pub,
+        "divergence_restored": _dis_res,
+        "divergence_labels_unchanged": _dis_pub == _dis_res,
+    }
+
     R["y3_sensitivity"] = {"n_target_windows": {pl: int(tgt_rows[pl].sum())
                                                 for pl in ac.PLATFORMS},
                            "extrapolated_yhat3_range": ext, "restored": restored}

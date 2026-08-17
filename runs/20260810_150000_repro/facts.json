@@ -1,8 +1,8 @@
 {
   "manuscript": {
     "path": "manuscript/mlforsys_main.tex",
-    "sha256": "6f9f7035573fb494d72a708a8cfbfa0ee3189103d5d35b76d7ced86abba8f376",
-    "n_lines": 458,
+    "sha256": "fcf7a84ea60045c9ddfa2cc975982bf0ec36dd63a79abd05f2039dc5cce58f43",
+    "n_lines": 460,
     "revision_marker": "% REVISION: 2026-08-17 -- Methods and Experimental Setup consolidated.",
     "revision_block": "% REVISION: 2026-08-17 -- Methods and Experimental Setup consolidated.\n%   Methods Under Comparison, Testbed and Workloads, and Measurement and\n%   Evaluation Protocol are subsections of Sec. 3; the comparison figure/table\n%   remains in Results; numeric section references use labels.\n% REVISION: 2026-08-09 r18a -- y3 sensitivity findings added to App.B\n%   (approved wording, ChatGPT variant 1 with structural reason):\n%   extrapolation ranges (platform-specific OOF), restored-label bound\n%   (<=0.017/0.121, within-group maxima held by accelerator-side LLM),\n%   discrete metrics invariant (no Top-1 flip in 8 combos, same 11\n%   divergence groups), Spearman max |change| 0.013 reported as number.\n%   No Limitations addition (Sec.2/App.A/App.B suffice). r3 issue CLOSED.\n%   Pending: (iii)/conclusion decision, fit ~4 lines, deck sync,\n%   mirror/zip, co-authors."
   },
@@ -14,8 +14,8 @@
   "expected": {
     "_source": {
       "path": "manuscript/mlforsys_main.tex",
-      "sha256": "6f9f7035573fb494d72a708a8cfbfa0ee3189103d5d35b76d7ced86abba8f376",
-      "n_lines": 458,
+      "sha256": "fcf7a84ea60045c9ddfa2cc975982bf0ec36dd63a79abd05f2039dc5cce58f43",
+      "n_lines": 460,
       "revision_marker": "% REVISION: 2026-08-17 -- Methods and Experimental Setup consolidated.",
       "revision_block": "% REVISION: 2026-08-17 -- Methods and Experimental Setup consolidated.\n%   Methods Under Comparison, Testbed and Workloads, and Measurement and\n%   Evaluation Protocol are subsections of Sec. 3; the comparison figure/table\n%   remains in Results; numeric section references use labels.\n% REVISION: 2026-08-09 r18a -- y3 sensitivity findings added to App.B\n%   (approved wording, ChatGPT variant 1 with structural reason):\n%   extrapolation ranges (platform-specific OOF), restored-label bound\n%   (<=0.017/0.121, within-group maxima held by accelerator-side LLM),\n%   discrete metrics invariant (no Top-1 flip in 8 combos, same 11\n%   divergence groups), Spearman max |change| 0.013 reported as number.\n%   No Limitations addition (Sec.2/App.A/App.B suffice). r3 issue CLOSED.\n%   Pending: (iii)/conclusion decision, fit ~4 lines, deck sync,\n%   mirror/zip, co-authors."
     },
@@ -546,8 +546,12 @@
         "0.61",
         "32",
         "18",
-        "10",
         "180"
+      ],
+      "sec3_y3_restore": [
+        "12",
+        "Top-1",
+        "divergence"
       ],
       "appA_rates": [
         "26.7",
@@ -1703,6 +1707,30 @@
       "cpu_request_s": 18.161917649697855,
       "completions_per_180s": 9.91084771287874
     },
+    "y3_restored_invariance": {
+      "per_platform": {
+        "gpu": {
+          "top1_published": 0.9333333333333333,
+          "top1_restored": 0.9333333333333333,
+          "top1_delta": 0.0,
+          "n_groups_best_set_changed": 0
+        },
+        "npu": {
+          "top1_published": 0.8666666666666667,
+          "top1_restored": 0.8666666666666667,
+          "top1_delta": 0.0,
+          "n_groups_best_set_changed": 0
+        }
+      },
+      "n_target_windows": {
+        "gpu": 12,
+        "npu": 12
+      },
+      "top1_changes_total": 0,
+      "divergence_published": 11,
+      "divergence_restored": 11,
+      "divergence_labels_unchanged": true
+    },
     "y3_sensitivity": {
       "n_target_windows": {
         "gpu": 12,
@@ -1746,15 +1774,15 @@
     },
     "_timings_sec": {
       "load": 1.2,
-      "1_platform_specific_retrain": 15.1,
+      "1_platform_specific_retrain": 15.8,
       "2_zero_shot": 0.7,
       "3_joint_paired_retrain": 8.1,
-      "4_decomposed_retrain": 5.7,
+      "4_decomposed_retrain": 6.0,
       "5_greedy": 0.9,
       "6_divergence_sweep_coverage": 0.1,
       "7_bootstrap": 4.2,
       "8_y3_sensitivity": 0.0,
-      "9_determinism_spotcheck": 1.6
+      "9_determinism_spotcheck": 1.5
     }
   },
   "comparison": [
@@ -4615,14 +4643,6 @@
       "note": ""
     },
     {
-      "item": "inline appA VLM completions/180s",
-      "section": "App.A",
-      "expected": "10",
-      "reproduced": "10",
-      "verdict": "일치",
-      "note": ""
-    },
-    {
       "item": "inline appA VLM window s",
       "section": "App.A",
       "expected": "180",
@@ -4699,6 +4719,54 @@
       "section": "App.H",
       "expected": "resnet50",
       "reproduced": "resnet50",
+      "verdict": "일치",
+      "note": ""
+    },
+    {
+      "item": "inline sec3 CPU-LLM windows GPU",
+      "section": "§3",
+      "expected": "12",
+      "reproduced": "12",
+      "verdict": "일치",
+      "note": ""
+    },
+    {
+      "item": "inline sec3 CPU-LLM windows NPU",
+      "section": "§3",
+      "expected": "12",
+      "reproduced": "12",
+      "verdict": "일치",
+      "note": ""
+    },
+    {
+      "item": "inline sec3 Top-1 unchanged on restore",
+      "section": "§3",
+      "expected": "0",
+      "reproduced": "0",
+      "verdict": "일치",
+      "note": "원고: changes neither Top-1 outcomes ..."
+    },
+    {
+      "item": "inline sec3 divergence labels unchanged",
+      "section": "§3",
+      "expected": "True",
+      "reproduced": "True",
+      "verdict": "일치",
+      "note": "원고: ... nor divergence labels"
+    },
+    {
+      "item": "inline sec3/App.B divergence agree",
+      "section": "§3",
+      "expected": "11",
+      "reproduced": "11",
+      "verdict": "일치",
+      "note": "App.B 'preserves the same 11 workload groups' 와 같은 재현값에서 유도"
+    },
+    {
+      "item": "inline sec3 divergence published baseline",
+      "section": "§3",
+      "expected": "11",
+      "reproduced": "11",
       "verdict": "일치",
       "note": ""
     },
@@ -4968,8 +5036,8 @@
     }
   ],
   "summary": {
-    "n_items": 401,
-    "n_agree": 401,
+    "n_items": 406,
+    "n_agree": 406,
     "n_disagree": 0,
     "n_conditional": 0,
     "disagreements": [],
@@ -4977,15 +5045,15 @@
   },
   "timings_sec": {
     "load": 1.2,
-    "1_platform_specific_retrain": 15.1,
+    "1_platform_specific_retrain": 15.8,
     "2_zero_shot": 0.7,
     "3_joint_paired_retrain": 8.1,
-    "4_decomposed_retrain": 5.7,
+    "4_decomposed_retrain": 6.0,
     "5_greedy": 0.9,
     "6_divergence_sweep_coverage": 0.1,
     "7_bootstrap": 4.2,
     "8_y3_sensitivity": 0.0,
-    "9_determinism_spotcheck": 1.6
+    "9_determinism_spotcheck": 1.5
   },
   "determinism_spotcheck": {
     "run1": [

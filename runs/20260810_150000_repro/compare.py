@@ -328,9 +328,10 @@ for j, dev in enumerate(("cpu", "gpu", "npu")):
     chk(f"inline appA VLM prefill {dev.upper()}", "App.A", _A[j], _V["prefill_s"][dev])
 chk_eq("inline appA VLM new tokens", "App.A", int(_A[3]), _V["new_tokens"])
 chk("inline appA VLM request s", "App.A", _A[4], _V["cpu_request_s"])
-chk_eq("inline appA VLM completions/180s", "App.A", int(_A[5]),
-       round(_V["completions_per_180s"]))
-chk_eq("inline appA VLM window s", "App.A", int(_A[6]), 180)
+# 2026-08-18: 원고가 "roughly ten ... complete" 를 삭제해 완료 횟수 캡처가 사라졌다.
+# 검사 1건(inline appA VLM completions/180s)이 줄어든다 -- 인쇄되지 않는 값을 계속
+# 대조할 수는 없기 때문이다. 재현 측 계산(completions_per_180s)은 남겨 둔다.
+chk_eq("inline appA VLM window s", "App.A", int(_A[5]), 180)
 
 # 백분율 4종 — 정수 카운트 앵커와 별개로 잡고 같은 카운트에서 유도해 대조한다
 _R = I["appA_rates"]
@@ -354,6 +355,27 @@ chk_eq("inline appH what-differs same generative", "App.H", int(_WD[0]),
 chk_eq("inline appH what-differs npu offloads", "App.H", int(_WD[1]),
        _W["n_npu_offloads_resnet50_gpu_all_accel"])
 chk_eq("inline appH what-differs model name", "App.H", _WD[2].lower(), "resnet50")
+
+# ---------------------------------------- 본문 §3 y3 복원 불변 주장 (2026-08-18 신설)
+# 원고 §3: "For 12 CPU-LLM windows per platform, ... Restoring the recorded window totals
+# changes neither Top-1 outcomes nor divergence labels (Appendix~B)."
+# App.B 의 appB_sensitivity 가 같은 사실을 다른 표현으로 인쇄하므로, 두 표기를 하나의
+# 재현 소스에서 유도해 대조한다.
+_Y = R["y3_restored_invariance"]
+_S3 = I["sec3_y3_restore"]
+for pl in _PLATFORMS:
+    chk_eq(f"inline sec3 CPU-LLM windows {pl.upper()}", "§3", int(_S3[0]),
+           _Y["n_target_windows"][pl])
+chk_eq("inline sec3 Top-1 unchanged on restore", "§3", 0, _Y["top1_changes_total"],
+       "원고: changes neither Top-1 outcomes ...")
+chk_eq("inline sec3 divergence labels unchanged", "§3", True,
+       _Y["divergence_labels_unchanged"], "원고: ... nor divergence labels")
+# 본문과 App.B 가 같은 divergence 수를 가리키는지 — 두 표기의 정합성
+chk_eq("inline sec3/App.B divergence agree", "§3", int(I["appB_sensitivity"][1]),
+       _Y["divergence_restored"],
+       "App.B 'preserves the same 11 workload groups' 와 같은 재현값에서 유도")
+chk_eq("inline sec3 divergence published baseline", "§3",
+       R["divergence"]["beta_1.0"]["n_disagree"], _Y["divergence_published"])
 
 # ------------------------------------------- App.G CPU 경로 공통 모드 주장 (신설)
 # 원고: "the two measured candidate sets are identical, every candidate places the same

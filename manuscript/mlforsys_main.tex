@@ -30,6 +30,7 @@
 \usepackage{xcolor}
 \usepackage{enumitem}
 \usepackage{caption}
+\usepackage{placeins}
 
 % pack floats tightly on text pages
 \setcounter{topnumber}{3}
@@ -137,7 +138,7 @@ Nine models---YOLO11 n/s/m/l/x, ResNet50, MobileNet-v2, the LLaMA-3.2-1B LLM, an
 
 \subsection{Measurement and Evaluation Protocol}
 
-\textbf{Measurement and target construction.} Each workload--placement pair uses a 20\,s warm-up followed by a 180\,s measurement window. Each vision stream's response deadline is three times its request interval and therefore tightens as the request rate increases. For 12 windows per platform in which the LLM runs on the CPU, per-instance token attribution is unavailable, so we set $y_3=0$ for evaluation (Appendix~B).
+\textbf{Measurement and target construction.} Each workload--placement pair uses a 20\,s warm-up followed by a 180\,s measurement window. Each vision stream's response deadline is three times its request interval and therefore tightens as the request rate increases. For 12 CPU-LLM windows per platform, per-instance token attribution is unavailable, so we set $y_3=0$. Restoring the recorded window totals changes neither Top-1 outcomes nor divergence labels (Appendix~B).
 
 \textbf{Candidate sets and data collection.} We construct a feasible candidate set for each workload set. Ten sets are measured exhaustively. For the remaining five, we group candidate placements by the number of unpinned instances assigned to the accelerator and sample a prespecified number from each group.
 Both platforms evaluate the same candidate placements. Across the 15 sets, this yields 180 placement configurations. Evaluating each configuration at three request-rate levels produces 540 measurement windows and 45 workload groups per platform. Data collection required approximately 32 hours per platform. Appendix~A reports per-set coverage.
@@ -224,7 +225,7 @@ Our evaluation covers only measured candidates and excludes runtime re-placement
 \subsection*{A. Candidate-set coverage by workload set}
 This appendix characterizes candidate-placement coverage for each workload set and examines whether the observed GPU--NPU placement divergence is an artifact of incomplete sampling.
 
-The same feasibility rules apply to profiling, evaluation, and deployment. Each model may run on any device permitted by its execution constraints, while the VLM is pinned to the accelerator. In isolation its CPU time to first token is $12.3$\,s against $0.10$\,s on the GPU and $0.61$\,s on the NPU, so a single 32-token request takes about $18$\,s on the CPU and roughly ten such requests complete within a 180\,s window. Profiling subsamples the stratified sets to bound collection cost, whereas deployment enumerates the full feasible set. Evaluation uses only the profiled placements.
+The same feasibility rules apply to profiling, evaluation, and deployment. Each model may run on any device permitted by its execution constraints, while the VLM is pinned to the accelerator. Its isolated CPU time to first token is $12.3$\,s, against $0.10$\,s on the GPU and $0.61$\,s on the NPU, so a single 32-token request takes about $18$\,s on the CPU. A CPU-placed VLM would therefore run almost continuously through a 180\,s window and, because generative workers use the default thread count (Appendix~G), would hold host CPU for its duration. We exclude these placements from the candidate space. Profiling subsamples the stratified sets to bound collection cost, whereas deployment enumerates the full feasible set. Evaluation uses only the profiled placements.
 
 The five workload sets labeled base1--base5 each contain LLaMA-3.2-1B, Qwen2-VL-2B, ResNet50, and one YOLO11 detector. They differ only in the detector variant, using YOLO11 n, s, m, l, and x, respectively. The remaining sets, S1--S10, vary in concurrency, generative-model composition, and request-rate configuration.
 
@@ -356,6 +357,7 @@ NPU & speedup     & 0.333 (11/33) & 0.244 & 0.793 & 12/45 \\
 \end{tabular}
 \end{table}
 
+\FloatBarrier
 \subsection*{E. Composition error in the decomposed model}
 
 Table~\ref{tab:app_decomp} examines whether the performance loss of the decomposed model arises from per-instance prediction or from composing instance-level estimates into system-level metrics. The shared regressor predicts individual attainment accurately when all instance-level samples are pooled.

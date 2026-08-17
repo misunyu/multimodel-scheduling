@@ -145,11 +145,19 @@ E["inline"] = {
                          r"\$[\d.]+ / ([\d.]+) / [\d.]+\$", None, flags=re.S),
     # appendix A -- VLM pinning rationale (2026-08-17 신설). 정수 앵커(appA_exhaustive
     # 등)와 별개로 백분율을 따로 잡고, 재현 측에서는 같은 카운트에서 유도해 대조한다.
-    "appA_vlm_cost": grab(r"CPU time to first token is \$([\d.]+)\$\\,s against \$([\d.]+)\$"
+    # 2026-08-18: "roughly ten such requests complete" 절이 삭제되고 180\,s 창 언급이
+    # 다음 문장으로 옮겨졌다. 캡처가 7개 -> 6개가 된다 (완료 횟수 검사 1건만 소멸).
+    "appA_vlm_cost": grab(r"CPU time to first token is \$([\d.]+)\$\\,s, against \$([\d.]+)\$"
                           r"\\,s on the GPU and \$([\d.]+)\$\\,s on the NPU, so a single "
-                          r"(\d+)-token request takes about \$(\d+)\$\\,s on the CPU and "
-                          r"roughly (\w+) such requests complete within a (\d+)\\,s "
-                          r"window", None),
+                          r"(\d+)-token request takes about \$(\d+)\$\\,s on the CPU\..*?"
+                          r"run almost continuously through a (\d+)\\,s window",
+                          None, flags=re.S),
+    # 본문 §3 신규 주장 (2026-08-18). App B 가 같은 사실을 다른 표현으로 인쇄하므로
+    # 두 표기를 같은 재현값(R["y3_restored_invariance"])에서 유도해 대조한다.
+    "sec3_y3_restore": grab(r"For (\d+) CPU-LLM windows per platform, per-instance token "
+                            r"attribution is unavailable, so we set \$y_3=0\$\. Restoring "
+                            r"the recorded window totals changes neither (Top-1) outcomes "
+                            r"nor (divergence) labels", None),
     "appA_rates": grab(r"corresponding rates are \$([\d.]+)\\%\$ against \$([\d.]+)\\%\$ "
                        r"over all (\d+) groups at \$\\beta\{=\}1\.0\$, and \$([\d.]+)\\%\$ "
                        r"against \$([\d.]+)\\%\$ at \$\\beta\{=\}0\.5\$", None),
