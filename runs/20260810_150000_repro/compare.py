@@ -321,6 +321,43 @@ chk_eq("F.grid", "App.F", ("3", "0.1", "4", "0.1", "5", "0.05", "6", "0.1"),
        tuple(I["appF_grid"]))
 chk_eq("F.features 36+1=37", "App.F", ("36", "37"), tuple(I["appF_features"]))
 
+# ------------------------------------------------- 2026-08-17: 미배선이던 캡처 4건
+# extract_expected 가 뽑기만 하고 여기서 대조하지 않던 항목들 (지시문 #24 부수 발견,
+# 지시문 #25 Phase 1 에서 배선). appH_band 는 재현 측 계산이 없어서 배선할 수 없었는데,
+# reproduce.py 에 divergence_margins 를 넣어 해결했다.
+_M = R["divergence_margins"]
+chk_eq("inline appH band n_cells<0.01", "App.H", int(I["appH_band"][0]),
+       _M["n_cells_below_0.01"])
+chk_eq("inline appH band divergence", "App.H", int(I["appH_band"][1]),
+       _M["band_0.01"]["any"])
+chk_eq("inline appH band n_groups", "App.H", int(I["appH_band"][2]), _M["n_groups"])
+
+# sweep 본문 요약: beta>0 셀에서 GPU 최대 / NPU 최대 변경 세트 수
+_cells = [c for c in R["sweep"][0] if c["beta"] > 0]
+chk_eq("inline sweep claim GPU max", "§4", int(I["sweep_claim"][0]),
+       max(c["n_changed_sets_gpu"] for c in _cells))
+chk_eq("inline sweep claim NPU max", "§4", int(I["sweep_claim"][1]),
+       max(c["n_changed_sets_npu"] for c in _cells))
+
+# App.B "eight predictor--platform combinations": 이 스위트가 실제로 평가하는 예측기 수
+_PLATFORMS = ("gpu", "npu")
+_PREDICTORS = ("direct", "zero_shot", "joint", "decomposed")
+# zero_shot is keyed by direction ("npu->gpu"), the others by platform -- both are two
+# entries per predictor, one per evaluation platform.
+chk_eq("inline appB n_combinations", "App.B", int(I["appB_sensitivity"][0]),
+       sum(len(R[k]) for k in _PREDICTORS))
+chk_eq("inline appB divergence groups", "App.B", int(I["appB_sensitivity"][1]),
+       R["divergence"]["beta_1.0"]["n_disagree"])
+
+# App.H selected-placement 문단 (decomposed 쪽)
+for j, pl in enumerate(_PLATFORMS):
+    chk(f"inline appH decomp mean ratio {pl.upper()}", "App.H",
+        I["appH_ratio_decomp"][j], R["decomposed"][pl]["mean_ratio"])
+    chk(f"inline appH decomp worst ratio {pl.upper()}", "App.H",
+        I["appH_ratio_decomp"][2 + j], R["decomposed"][pl]["min_ratio"])
+    chk_eq(f"inline appH decomp n<0.9 {pl.upper()}", "App.H",
+           int(I["appH_ratio_decomp"][4 + j]), R["decomposed"][pl]["n_ratio_below_0.9"])
+
 # ------------------------------------------------------------------ 그림
 FIGREPRO = HERE / "figures"
 MIRROR = ROOT / "manuscript"

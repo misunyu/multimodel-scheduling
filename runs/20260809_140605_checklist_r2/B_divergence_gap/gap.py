@@ -114,11 +114,54 @@ for k in keys:
         if len(v) > 1:
             all_sd.append(float(v.std(ddof=1)))
 
+# ------------------------------------------------- 0.01 band 재판정 (2026-08-17 추가)
+# App H 는 "under a coarser score-equivalence band of 0.01 ... the divergence count
+# would be 9 of 45" 라고 쓰는데, 그 9 는 계산된 적이 없었다 (11 − 아래 밴드 미만 셀 2개
+# 라는 산술 역산). 규칙이 두 가지로 갈리므로 둘 다 계산해 둔다:
+#
+#   any  — 두 margin 중 하나라도 밴드 안이면 그 그룹을 agreeing 으로 되돌린다
+#   both — 양쪽 margin 이 모두 밴드 안이어야 agreeing
+#
+# any 는 관대하다: base3@3.0 은 NPU margin 0.0068 로 밴드에 들어오지만 GPU margin 은
+# 0.8648 이다. 한쪽에서 거의 무손실이라는 이유로 다른 쪽의 0.86 손실을 덮는 셈이라,
+# 두 수를 함께 보고할 수 있도록 both 도 남긴다.
+BANDS = (0.005, 0.01, 0.02, 0.05)
+N_GROUPS_TOTAL = len(keys)
+
+
+def band_recount(band):
+    """밴드 폭 `band` 에서 규칙별로 남는 divergence 수와 되돌려진 그룹."""
+    res = {}
+    for rule, agg in (("any", min), ("both", max)):
+        # any:  min(gap) < band  -> 하나라도 안에 들어옴
+        # both: max(gap) < band  -> 둘 다 안에 들어옴
+        reverted = [f"{e['set']}@{e['rate']}" for e in table
+                    if agg(e["gpu"]["gap_abs"], e["npu"]["gap_abs"]) < band]
+        res[rule] = {"n_reverted": len(reverted), "reverted_groups": sorted(reverted),
+                     "n_disagree": len(table) - len(reverted),
+                     "n_groups_total": N_GROUPS_TOTAL}
+    return res
+
+
+band_table = {f"{b:g}": band_recount(b) for b in BANDS}
+# 원고가 인용하는 값 — 여기서 어긋나면 App H 문장을 고쳐야 한다
+_a01 = band_table["0.01"]["any"]["n_disagree"]
+_b01 = band_table["0.01"]["both"]["n_disagree"]
+assert (_a01, _b01) == (9, 11), f"0.01 band: any={_a01} both={_b01}, expected (9, 11)"
+
 out = {
     "basis": {"name": "declared_normalized (원고 식 (1))", "alpha": ALPHA, "beta": BETA,
               "tie_eps": TIE,
               "score_defs_imported_from": str(AUDIT.relative_to(ROOT))},
     "n_disagree_groups": len(disagree),
+    "score_equivalence_band": {
+        "_rules": {
+            "any": "그룹의 두 margin 중 하나라도 band 미만이면 agreeing 으로 되돌린다",
+            "both": "두 margin 이 모두 band 미만이어야 agreeing 으로 되돌린다"},
+        "_manuscript_cites": {"band": 0.01, "rule": "any", "n_disagree": 9,
+                              "n_groups_total": N_GROUPS_TOTAL},
+        "by_band": band_table,
+    },
     "groups": table,
     "gap_distribution_22_cells": summ(gaps_all),
     "gap_over_group_sd": summ(ratios_sd, 4),
@@ -147,6 +190,14 @@ for e in table:
               f"| {n['gap_over_sd']} |")
 (HERE / "gap_table.md").write_text("\n".join(md) + "\n")
 
+print("== score-equivalence band 재판정 ==")
+print(f"  {'band':>7} {'any: n_div':>11} {'되돌린 그룹':>22} {'both: n_div':>12} {'되돌린 그룹':>12}")
+for b, r in band_table.items():
+    print(f"  {b:>7} {r['any']['n_disagree']:>11} "
+          f"{','.join(r['any']['reverted_groups']) or '-':>22} "
+          f"{r['both']['n_disagree']:>12} "
+          f"{','.join(r['both']['reverted_groups']) or '-':>12}")
+print()
 print(f"불일치 {len(disagree)}그룹 × 2플랫폼 = {len(gaps_all)} 셀")
 print("gap 절대값:", out["gap_distribution_22_cells"])
 print("gap / 그룹내 sd:", out["gap_over_group_sd"])

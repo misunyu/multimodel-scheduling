@@ -1,0 +1,213 @@
+{
+  "run": "20260817_170000_phase1234",
+  "task": "지시문 #25 — Phase1 0.01 밴드 재판정+배선 / Phase2 부록표 검증 / Phase3 App E 합성식 / Phase4 CPU 스레드 민감도",
+  "generated_at": "2026-08-17T17:00:00+09:00",
+  "git_commit_before": "04beb1f4d5c8dccdf5ae09c1587367aa2a67cdf3",
+  "manuscript": {
+    "path": "manuscript/mlforsys_main.tex",
+    "sha256": "2d9e288a61839759a073ba50897a65319740dad7b75592865cf3841c9f2988f0"
+  },
+  "manuscript_not_modified": true,
+  "no_recollection": true,
+  "phase1": {
+    "band_table": {
+      "0.005": {
+        "any": {
+          "n_reverted": 1,
+          "reverted_groups": [
+            "S8@2.0"
+          ],
+          "n_disagree": 10,
+          "n_groups_total": 45
+        },
+        "both": {
+          "n_reverted": 0,
+          "reverted_groups": [],
+          "n_disagree": 11,
+          "n_groups_total": 45
+        }
+      },
+      "0.01": {
+        "any": {
+          "n_reverted": 2,
+          "reverted_groups": [
+            "S8@2.0",
+            "base3@3.0"
+          ],
+          "n_disagree": 9,
+          "n_groups_total": 45
+        },
+        "both": {
+          "n_reverted": 0,
+          "reverted_groups": [],
+          "n_disagree": 11,
+          "n_groups_total": 45
+        }
+      },
+      "0.02": {
+        "any": {
+          "n_reverted": 3,
+          "reverted_groups": [
+            "S7@2.0",
+            "S8@2.0",
+            "base3@3.0"
+          ],
+          "n_disagree": 8,
+          "n_groups_total": 45
+        },
+        "both": {
+          "n_reverted": 0,
+          "reverted_groups": [],
+          "n_disagree": 11,
+          "n_groups_total": 45
+        }
+      },
+      "0.05": {
+        "any": {
+          "n_reverted": 5,
+          "reverted_groups": [
+            "S10@2.0",
+            "S7@2.0",
+            "S8@2.0",
+            "base3@3.0",
+            "base4@3.0"
+          ],
+          "n_disagree": 6,
+          "n_groups_total": 45
+        },
+        "both": {
+          "n_reverted": 0,
+          "reverted_groups": [],
+          "n_disagree": 11,
+          "n_groups_total": 45
+        }
+      }
+    },
+    "gap_facts_sha256": "89d2dd06ed7a511e58f322a349342e35ad7e7ee6bdf2855ccb48051d41906bf2",
+    "wired_captures": [
+      "appH_band",
+      "sweep_claim",
+      "appB_sensitivity",
+      "appH_ratio_decomp"
+    ],
+    "new_checks": 13,
+    "suite_total_before": 359,
+    "suite_total_after": 372,
+    "suite_disagreements": 0
+  },
+  "phase2": {
+    "premise_correction": "부록 표는 이미 기계 대조 중이었다 — runs/20260810_150000_repro 가 셀 단위로 검사한다",
+    "per_section_checks": {
+      "0": 4,
+      "Abstract": 3,
+      "App.A": 77,
+      "App.B": 103,
+      "App.C": 50,
+      "App.D": 24,
+      "App.E": 16,
+      "App.F": 2,
+      "App.H": 38,
+      "Figures": 5,
+      "Table 1": 10,
+      "Table 1 caption": 2,
+      "§4": 38
+    },
+    "table3_appB_cells": 90,
+    "check_paper_extension": "suite_verdict() — 스위트 판정을 읽고 원고 sha 기준 최신성까지 확인, --verbose 로 섹션별 건수"
+  },
+  "phase3": {
+    "y1": "yhat1 = (sum_i ahat_i * eff_i) / fmax   (eff_i = min(infps_i, cap_i), fmax = 그룹 내 측정 r1 최댓값)",
+    "y2": "miss = clip(mean_i(1 - ahat_i), 0, 1);  yhat2 = (miss - y2_lo)/(y2_hi - y2_lo), span<=1e-9 이면 0",
+    "rate_weighted": {
+      "y1": true,
+      "y2": false
+    },
+    "generative_in_composition": false,
+    "generative_in_features_only": [
+      "co.set_has_gen",
+      "co.gen_on_accel",
+      "co.other_dev_load_sum"
+    ],
+    "group_stats_stage": "정규화 단계 (fmax, y2_lo, y2_hi = 그룹 전체 측정값)",
+    "y3": "groupkfold_{platform}_oof.csv 의 y3_pred — direct predictor 와 공유",
+    "source": "xgboost_model/full_collection_540/scripts/train_decomposed.py:147-165, :50-90"
+  },
+  "phase4": {
+    "isolated_only": true,
+    "saved_to_disk": false,
+    "latency_ms": {
+      "yolo11n": {
+        "1": 56.44,
+        "4": 19.0,
+        "24": 13.16,
+        "default": 13.58
+      },
+      "yolo11s": {
+        "1": 162.69,
+        "4": 47.78,
+        "24": 21.35,
+        "default": 21.05
+      },
+      "yolo11m": {
+        "1": 489.24,
+        "4": 137.03,
+        "24": 53.99,
+        "default": 52.75
+      },
+      "yolo11l": {
+        "1": 618.66,
+        "4": 172.95,
+        "24": 67.29,
+        "default": 66.44
+      },
+      "yolo11x": {
+        "1": 1333.98,
+        "4": 365.92,
+        "24": 132.7,
+        "default": 131.54
+      },
+      "resnet50": {
+        "1": 51.15,
+        "4": 14.74,
+        "24": 5.55,
+        "default": 5.15
+      },
+      "mobilenet_v2": {
+        "1": 4.61,
+        "4": 1.43,
+        "24": 2.72,
+        "default": 1.06
+      }
+    },
+    "capacity_swing_1_vs_default": {
+      "min": 4.2,
+      "max": 10.1
+    },
+    "common_mode_proof": {
+      "cpu_side_partial_aggregates_differing_windows": 0,
+      "of": 540,
+      "identical_cpu_placements": true,
+      "cpu_instances_total": 1341
+    },
+    "divergence_driver": {
+      "all_11_groups_turn_on_a_vision_model_on_cpu": true,
+      "generative_placement_involved": 0,
+      "npu_prefers_cpu_resnet50": 7,
+      "cpu_mobilenet_v2": 3,
+      "yolo11x_vs_resnet50": 1
+    }
+  },
+  "backup": {
+    "dir": "runs/20260817_170000_phase1234/backup",
+    "files": {
+      "check_paper.py": "9acbf4d1e78bb7004570b0aa6a86a60ecb8222cc203eec8487db1885a9c06fc2",
+      "compare.py": "05667859c438f3979e02eed77e0249146ff20dd84903430cb4ba2aad1629aa18",
+      "expected.json": "e0d5e9cd4ccd56a0480a260738d1c2a48f038b61bb84ee0edf89af9b12bf09a0",
+      "extract_expected.py": "77ad1a62dd9ebe13cbf203e839b39d76ccc944205ddeb56514fc600f5cdfb0e8",
+      "facts.json": "91c9e61047834de446e3c17e4a8e45f46da9a10b9123bb833ff948ab0ae0be61",
+      "gap.py": "8a3167960de08c7d4da07b7c155d5cf247ae0274b5c7f54e5c700f448fe60bcf",
+      "gap_facts.json": "8cfe7c2ec3b69120d0d318ca4baefc3e96adc3dcf676e7269446564349a2b89a",
+      "gap_table.md": "81d0235c9116a5862b8b765f967d58fe7d4051e5ff156badf73b2e31e7be12cc"
+    }
+  }
+}

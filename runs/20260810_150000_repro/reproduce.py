@@ -75,7 +75,9 @@ def rank_of(df, meas="s_meas", pred="s_pred"):
                "top5": float(d["top5"].mean()),
                "group_spearman_mean": float(np.nanmean(d["spearman"])),
                "mean_ratio": float(np.nanmean(d["ratio"])),
-               "min_ratio": float(np.nanmin(d["ratio"]))}
+               "min_ratio": float(np.nanmin(d["ratio"])),
+               # App.H selected-placement paragraph counts the groups under 0.9
+               "n_ratio_below_0.9": int((d["ratio"] < 0.9).sum())}
 
 
 # ---------------------------------------------------------------- 데이터 로드
@@ -138,7 +140,8 @@ with stage("1_platform_specific_retrain"):
 
 R["direct"] = {pl: {k: P1[pl]["ranking"][k] for k in
                     ("n_groups", "top1", "top5", "group_spearman_mean",
-                     "mean_ratio", "min_ratio")} for pl in ac.PLATFORMS}
+                     "mean_ratio", "min_ratio", "n_ratio_below_0.9")}
+               for pl in ac.PLATFORMS}
 R["direct_targets_pooled"] = {
     pl: {t: {"pooled_spearman": P1[pl]["targets"][t]["oof_spearman_pooled"],
              "mae": P1[pl]["targets"][t]["oof_mae"],
@@ -374,6 +377,39 @@ with stage("6_divergence_sweep_coverage"):
         R["divergence"][f"exhaustive_beta_{beta}"] = {
             "n_disagree": res["n_disagree"], "n_groups": res["n_groups"],
             "gen": res["gen"], "vision": res["vision"]}
+    # Divergence margins and the App.H score-equivalence band. Recomputed from the
+    # normalized rows, not read from B_divergence_gap -- the point of this suite is an
+    # independent path. `any` reverts a group when EITHER margin is inside the band,
+    # `both` when both are; App.H quotes the `any` number.
+    from collections import defaultdict as _dd
+    _by = {pl: _dd(list) for pl in rows_pl}
+    for _pl, _rs in rows_pl.items():
+        for _r in _rs:
+            _by[_pl][(_r["sid"], _r["rate"])].append(_r)
+    _ties = {pl: ba.tie_sets(rows_pl[pl], ba.BASE_ALPHA, 1.0, "normalized")
+             for pl in rows_pl}
+    _keys = sorted(_ties["gpu"])
+    _dis = [k for k in _keys if not (_ties["gpu"][k] & _ties["npu"][k])]
+    _margins = {}
+    for k in _dis:
+        m = {}
+        for pl, other in (("gpu", "npu"), ("npu", "gpu")):
+            sc = {r["placement"]: ba.score(r, ba.BASE_ALPHA, 1.0, "normalized")
+                  for r in _by[pl][k]}
+            m[pl] = max(sc.values()) - max(sc[p] for p in _ties[other][k] if p in sc)
+        _margins[f"{k[0]}@{k[1]}"] = m
+    _flat = [v for m in _margins.values() for v in m.values()]
+    R["divergence_margins"] = {
+        "n_cells": len(_flat), "n_groups": len(_keys),
+        "n_cells_below_0.01": sum(1 for g in _flat if g < 0.01),
+        "min_margin": min(_flat), "median_margin": float(np.median(_flat)),
+        "band_0.01": {
+            "any": len(_dis) - sum(1 for m in _margins.values()
+                                   if min(m.values()) < 0.01),
+            "both": len(_dis) - sum(1 for m in _margins.values()
+                                    if max(m.values()) < 0.01)},
+    }
+
     sw = ba.sweep_setcounts(rows_pl, "normalized", ba.PRIMARY_ALPHAS, ba.PRIMARY_BETAS)
     R["sweep"] = {f"{a}/{b}": v for (a, b), v in sw.items()} if isinstance(sw, dict) else sw
     # coverage

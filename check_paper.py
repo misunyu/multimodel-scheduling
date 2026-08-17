@@ -134,9 +134,42 @@ def doc_path_drift() -> list:
     return out
 
 
+# ------------------------------------------------------- appendix tables (via suite)
+# Figure 2 and Table 1 are checked cell by cell above. The appendix tables are checked
+# by runs/20260810_150000_repro, which parses the manuscript and recomputes every value
+# from the measurement windows. Re-implementing that here would give the paper two
+# comparison paths that can silently disagree -- the exact failure this file exists to
+# catch. So read the suite's verdict instead, and refuse to call it current unless it
+# was produced against THIS manuscript.
+REPRO_FACTS = ROOT / "runs/20260810_150000_repro/facts.json"
+
+
+def suite_verdict(tex_sha: str | None) -> tuple:
+    if not REPRO_FACTS.exists():
+        return None, [f"{REPRO_FACTS.relative_to(ROOT)} missing -- run the repro suite"]
+    f = json.loads(REPRO_FACTS.read_text())
+    summ, ran_on = f.get("summary", {}), (f.get("manuscript") or {}).get("sha256")
+    per_section = {}
+    for row in f.get("comparison", []):
+        per_section[row["section"]] = per_section.get(row["section"], 0) + 1
+    out = {"n_items": summ.get("n_items"), "n_agree": summ.get("n_agree"),
+           "n_disagree": summ.get("n_disagree"), "per_section": per_section,
+           "ran_against": ran_on, "current": ran_on == tex_sha}
+    errs = []
+    if summ.get("n_disagree"):
+        errs.append(f"repro suite reports {summ['n_disagree']} disagreement(s): "
+                    f"{summ.get('disagreements')}")
+    if tex_sha and ran_on != tex_sha:
+        errs.append(f"repro suite last ran against manuscript {str(ran_on)[:16]}…, "
+                    f"not the current {tex_sha[:16]}… -- appendix tables unverified")
+    return out, errs
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--verbose", action="store_true",
+                    help="list the appendix-table check counts per manuscript section")
     args = ap.parse_args()
 
     tex = TEX.read_text() if TEX.exists() else ""
@@ -178,6 +211,8 @@ def main() -> int:
     drift = doc_path_drift()
     problems.extend(drift)
     tex_sha = sha(TEX) if TEX.exists() else None
+    suite, suite_errs = suite_verdict(tex_sha)
+    problems.extend(suite_errs)
     if tex_sha and tex_sha != EXPECTED_TEX_SHA:
         problems.append(
             f"manuscript sha256 {tex_sha[:16]}… != verified baseline "
@@ -203,6 +238,7 @@ def main() -> int:
             "python xgboost_model/full_collection_540/scripts/make_figures.py --fig f2",
         ],
         "doc_path_drift": drift,
+        "appendix_tables": suite,
         "problems": problems,
         "ok": not problems,
     }
@@ -226,6 +262,13 @@ def main() -> int:
               f"  └ {r['artifact']} : {r['field']}")
     print(f"\npaper.lock: {n_ok} files OK (exit {lock.returncode})")
     print(f"doc path drift: {len(drift)} (figures/README.md vs make_figures.py inputs)")
+    if suite:
+        print(f"appendix tables: {suite['n_agree']}/{suite['n_items']} agree via "
+              f"runs/20260810_150000_repro "
+              f"({'current' if suite['current'] else 'STALE — re-run the suite'})")
+        if args.verbose:
+            for sec, n in sorted(suite["per_section"].items()):
+                print(f"    {sec:18} {n:4d} checks")
     print(f"artifacts hashed: {len(artifacts)}, boosters hashed: {len(boosters)}")
     print("\nregenerate everything:")
     for c in out["regenerate"]:
