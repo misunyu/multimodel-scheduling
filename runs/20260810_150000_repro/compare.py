@@ -331,7 +331,8 @@ chk("inline appA VLM request s", "App.A", _A[4], _V["cpu_request_s"])
 # 2026-08-18: 원고가 "roughly ten ... complete" 를 삭제해 완료 횟수 캡처가 사라졌다.
 # 검사 1건(inline appA VLM completions/180s)이 줄어든다 -- 인쇄되지 않는 값을 계속
 # 대조할 수는 없기 때문이다. 재현 측 계산(completions_per_180s)은 남겨 둔다.
-chk_eq("inline appA VLM window s", "App.A", int(_A[5]), 180)
+# 2026-08-18: App A 재작성으로 180\,s 창 언급이 이 문단에서 사라졌다. 인쇄되지 않는
+# 값을 계속 대조할 수 없으므로 검사 1건(inline appA VLM window s)이 추가로 줄어든다.
 
 # 백분율 4종 — 정수 카운트 앵커와 별개로 잡고 같은 카운트에서 유도해 대조한다
 _R = I["appA_rates"]
@@ -395,6 +396,83 @@ chk_eq("inline appG same instances on CPU", "App.G", 0,
 chk_eq("inline appG CPU-side feature identical", "App.G", 0,
        _C["n_windows_cpu_feature_subtotal_differs"],
        "원고: the CPU-side feature contribution is identical across all 540 windows")
+
+# ================= 지시문 #30 Phase 2/3: 여태 대조되지 않던 인쇄값 8건 + 신규 1건
+# extract_expected 가 뽑기만 하고 여기서 쓰지 않던 캡처들. 원고에 인쇄된 수치가 검사망
+# 밖에 있는 상태였으므로 전부 닫는다.
+
+# --- App.A: exhaustive 30그룹 분해 (§4 와 같은 사실을 App A 가 다시 인쇄한다)
+_EX = R["divergence"]["exhaustive_beta_1.0"]
+_AE = I["appA_exhaustive"]
+chk_eq("inline appA exhaustive disagree", "App.A", int(_AE[0]), _EX["n_disagree"])
+chk_eq("inline appA exhaustive gen d", "App.A", int(_AE[1]), _EX["gen"]["d"])
+chk_eq("inline appA exhaustive gen n", "App.A", int(_AE[2]), _EX["gen"]["n"])
+chk_eq("inline appA exhaustive vision n", "App.A", int(_AE[3]), _EX["vision"]["n"])
+
+# --- App.B: 0.013 (8조합 중 최대 |group-mean Spearman 변화|)
+_BS = R["appB_spearman_change"]
+chk("inline appB max spearman change", "App.B", I["appB_max_spearman_change"][0],
+    _BS["max_abs_delta"])
+chk_eq("inline appB change n_combinations", "App.B", 8, _BS["n_combinations"])
+chk_eq("inline appB change attained by", "App.B", "decomposed/npu", _BS["attained_by"],
+       "원고: attained by the decomposed predictor on the NPU")
+
+# --- App.D: VLM 용량 소비 범위 / 누적 부하 초과 그룹 / VLM 앞 admit 수
+_GD = R["greedy_detail"]
+_VC = I["appD_vlm_capacity"]
+# 원고는 "consumes 0.13--0.40 of the estimated capacity" 처럼 **구간**을 인쇄한다.
+# 그래서 끝점을 최근접 반올림과 비교하는 것은 이 문장이 주장하는 바가 아니다.
+# 올바른 검사는 (i) 인쇄 구간이 실측 [min, max] 를 포함하는가, (ii) 인쇄 자릿수 기준으로
+# 한 칸 이상 헐겁지 않은가 이다.
+#   GPU 상한은 실측 0.064974 인데 원고가 0.07 로 **바깥쪽 반올림**을 했다
+#   (최근접이면 0.06). 아래 검사는 이를 통과시키되, 사실은 보고서에 명시한다.
+def chk_range(item, lo_s, hi_s, lo_v, hi_v):
+    step = 10 ** (-dp(lo_s))
+    chk_eq(f"{item} brackets measured range", "App.D", True,
+           num(lo_s) <= lo_v + 1e-12 and hi_v <= num(hi_s) + 1e-12)
+    chk_eq(f"{item} tight to printed precision", "App.D", True,
+           lo_v - num(lo_s) < step and num(hi_s) - hi_v < step)
+
+chk_range("inline appD VLM capacity NPU", _VC[0], _VC[1],
+          _GD["npu"]["vlm_load_factor_min"], _GD["npu"]["vlm_load_factor_max"])
+chk_range("inline appD VLM capacity GPU", _VC[2], _VC[3],
+          _GD["gpu"]["vlm_load_factor_min"], _GD["gpu"]["vlm_load_factor_max"])
+_CE = I["appD_cum_exceeds"]
+chk_eq("inline appD cum>1.0 groups", "App.D", int(_CE[0]),
+       _GD["npu"]["n_groups_cum_exceeds_1"]["load_factor"],
+       "load-factor ordering 기준 (문단이 그 ordering 을 다룬다)")
+chk_eq("inline appD cum>1.0 denominator", "App.D", int(_CE[1]), _GD["npu"]["n_groups"])
+_AB = I["appD_vlm_admit_before"]
+chk_eq("inline appD VLM admit-before GPU min", "App.D", int(_AB[0]),
+       _GD["gpu"]["vlm_admit_before_min"])
+chk_eq("inline appD VLM admit-before GPU max", "App.D", int(_AB[1]),
+       _GD["gpu"]["vlm_admit_before_max"])
+chk_eq("inline appD VLM admit-before NPU min", "App.D", int(_AB[2]),
+       _GD["npu"]["vlm_admit_before_min"])
+chk_eq("inline appD VLM admit-before NPU max", "App.D", int(_AB[3]),
+       _GD["npu"]["vlm_admit_before_max"])
+
+# --- App.H: margin 개수·최솟값·중앙값, selected-placement ratio (direct / greedy)
+_MM = R["divergence_margins"]
+_HM = I["appH_margins"]
+chk_eq("inline appH n margins", "App.H", int(_HM[0]), _MM["n_cells"])
+chk("inline appH smallest margin (x1e-3)", "App.H", _HM[1], _MM["min_margin"] * 1000.0)
+chk("inline appH median margin", "App.H", I["appH_median_margin"][0], _MM["median_margin"])
+_RD = I["appH_ratio_direct"]
+for j, pl in enumerate(_PLATFORMS):
+    chk(f"inline appH direct mean ratio {pl.upper()}", "App.H", _RD[j],
+        R["direct"][pl]["mean_ratio"])
+    chk(f"inline appH direct worst ratio {pl.upper()}", "App.H", _RD[2 + j],
+        R["direct"][pl]["min_ratio"])
+    chk_eq(f"inline appH direct none below 0.9 {pl.upper()}", "App.H", 0,
+           R["direct"][pl]["n_ratio_below_0.9"], "원고: no group below 0.9")
+_RG = I["appH_ratio_greedy"]
+for j, pl in enumerate(_PLATFORMS):
+    _g = R["greedy"][f"{pl}/speedup"]
+    chk(f"inline appH greedy ratio {pl.upper()}", "App.H", _RG[j], _g["oracle_ratio"])
+    # "unmeasured outputs count as zero" -> 측정 그룹 평균 x (측정수/45)
+    chk(f"inline appH greedy ratio zero-filled {pl.upper()}", "App.H", _RG[2 + j],
+        _g["oracle_ratio"] * _g["n_measured"] / 45.0)
 
 # App.F (설정값 — 코드 상수와 대조)
 chk_eq("F.grid", "App.F", ("3", "0.1", "4", "0.1", "5", "0.05", "6", "0.1"),

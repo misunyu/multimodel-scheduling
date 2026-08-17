@@ -147,17 +147,18 @@ E["inline"] = {
     # 등)와 별개로 백분율을 따로 잡고, 재현 측에서는 같은 카운트에서 유도해 대조한다.
     # 2026-08-18: "roughly ten such requests complete" 절이 삭제되고 180\,s 창 언급이
     # 다음 문장으로 옮겨졌다. 캡처가 7개 -> 6개가 된다 (완료 횟수 검사 1건만 소멸).
-    "appA_vlm_cost": grab(r"CPU time to first token is \$([\d.]+)\$\\,s, against \$([\d.]+)\$"
-                          r"\\,s on the GPU and \$([\d.]+)\$\\,s on the NPU, so a single "
-                          r"(\d+)-token request takes about \$(\d+)\$\\,s on the CPU\..*?"
-                          r"run almost continuously through a (\d+)\\,s window",
-                          None, flags=re.S),
+    # 2026-08-18: App A 가 다시 재작성되어 180\,s 창 언급이 이 문단에서 사라졌다.
+    # 캡처 5개 (12.3 / 0.10 / 0.61 / 32 / 18). 창 길이 검사 1건이 추가로 소멸한다.
+    "appA_vlm_cost": grab(r"isolated time to first token is \$([\d.]+)\$\\,s on the CPU, "
+                          r"compared with \$([\d.]+)\$\\,s on the GPU and \$([\d.]+)\$\\,s "
+                          r"on the NPU, and a single (\d+)-token CPU request takes about "
+                          r"\$(\d+)\$\\,s", None),
     # 본문 §3 신규 주장 (2026-08-18). App B 가 같은 사실을 다른 표현으로 인쇄하므로
     # 두 표기를 같은 재현값(R["y3_restored_invariance"])에서 유도해 대조한다.
-    "sec3_y3_restore": grab(r"For (\d+) CPU-LLM windows per platform, per-instance token "
-                            r"attribution is unavailable, so we set \$y_3=0\$\. Restoring "
-                            r"the recorded window totals changes neither (Top-1) outcomes "
-                            r"nor (divergence) labels", None),
+    "sec3_y3_restore": grab(r"For (\d+) CPU-side LLM windows per platform, per-instance "
+                            r"token attribution is unavailable, so we set \$y_3=0\$\. Using "
+                            r"renormalized window totals instead changes neither (Top-1) "
+                            r"outcomes nor (divergence) labels", None),
     "appA_rates": grab(r"corresponding rates are \$([\d.]+)\\%\$ against \$([\d.]+)\\%\$ "
                        r"over all (\d+) groups at \$\\beta\{=\}1\.0\$, and \$([\d.]+)\\%\$ "
                        r"against \$([\d.]+)\\%\$ at \$\\beta\{=\}0\.5\$", None),
@@ -183,6 +184,11 @@ E["inline"] = {
                               None),
     # appendix D
     "appD_vlm_capacity": grab(r"VLM consumes ([\d.]+)--([\d.]+) of the estimated capacity, compared with ([\d.]+)--([\d.]+) on the GPU", None),
+    # App.D 의 VLM admit-before 범위 (지시문 #30 Phase 3 신설).
+    # "already been admitted" 이므로 스캔 순서가 아니라 admit 수를 센다.
+    "appD_vlm_admit_before": grab(r"the VLM is considered only after (\w+) to (\w+) instances "
+                                  r"on the GPU and (\w+) to (\w+) instances on the NPU have "
+                                  r"already been admitted", None),
     "appD_cum_exceeds": grab(r"cumulative estimated load exceeds 1\.0 in (\d+) of the (\d+) NPU workload groups", None),
     # appendix E
     "appE_top5": grab(r"Top-5 accuracy[^$]*is \$([\d.]+)\$ on both platforms", None),

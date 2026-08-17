@@ -31,7 +31,7 @@ TEX = ROOT / "manuscript/mlforsys_main.tex"
 # against, all 359 checks agreeing. When the manuscript moves, that verification is
 # stale until the suite is re-run -- twice now the anchors silently stopped matching
 # the reworded prose. Refresh this together with the suite, never on its own.
-EXPECTED_TEX_SHA = "fcf7a84ea60045c9ddfa2cc975982bf0ec36dd63a79abd05f2039dc5cce58f43"
+EXPECTED_TEX_SHA = "813d0901a80a8b99aee08af0cafcb4e5ba43febd2627206a6ee1345f0994b952"
 
 
 def sha(p: Path) -> str:

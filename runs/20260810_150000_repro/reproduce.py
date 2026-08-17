@@ -658,6 +658,98 @@ with stage("8_y3_sensitivity"):
                                                 for pl in ac.PLATFORMS},
                            "extrapolated_yhat3_range": ext, "restored": restored}
 
+# ------------------------------- 8b. 여태 대조되지 않던 인쇄값들의 재현 (지시문 #30)
+# extract_expected 가 뽑기만 하고 compare 가 쓰지 않던 캡처 8건을 닫는다. 대부분은 이미
+# R 에 대응값이 있었고, App.D 의 두 건과 App.B 의 0.013 만 새 계산이 필요하다.
+with stage("8b_uncompared_printed_values"):
+    import importlib.util as _ilu
+    _sp = _ilu.spec_from_file_location(
+        "gb", ROOT / "xgboost_model/full_collection_540/scripts/greedy_baseline.py")
+    gb = _ilu.module_from_spec(_sp); _sp.loader.exec_module(gb)
+    from xgboost_model.deploy_selector_xgb_suite import load_static_profiles as _lsp
+    _S = _lsp(ac.STATIC_JSON)
+
+    # --- App.D: VLM 용량 소비 범위, cum>1.0 그룹 수, load-factor 에서 VLM 앞 admit 수
+    gd = {}
+    for pl in ac.PLATFORMS:
+        M = DATA[pl]["M"]
+        imap = ac.infps_map_for(pl)
+        lf_vlm, admit_before, cum_over = [], [], {v: 0 for v in gb.VARIANTS}
+        n_groups = 0
+        for (models_str, rate), g in M.groupby([M["models"], M["rate_factor"]], sort=False):
+            models = models_str.split(",")
+            infps_of = {}
+            for m in models:
+                vals = {v for (mm, dev), v in imap[g["combination"].iloc[0]].items() if mm == m}
+                infps_of[m] = max(vals) if vals else 0.0
+            n_groups += 1
+            for var in gb.VARIANTS:
+                _, order, cum = gb.greedy_place(models, infps_of, _S, pl, var)
+                if cum > 1.0:
+                    cum_over[var] += 1
+                if var == "load_factor" and "qwen2_vl" in models:
+                    names = [r["model"] for r in order]
+                    i = names.index("qwen2_vl")
+                    lf_vlm.append(order[i]["load_factor"])
+                    # 원고는 "already been admitted" 라고 쓴다 -- 스캔 순서가 아니라
+                    # 실제로 가속기에 admit 된 수를 센다 (거부된 인스턴스는 제외).
+                    admit_before.append(
+                        sum(1 for r in order[:i] if r["decision"].startswith("accel")))
+        gd[pl] = {"n_groups": n_groups,
+                  "vlm_load_factor_min": min(lf_vlm), "vlm_load_factor_max": max(lf_vlm),
+                  "n_groups_cum_exceeds_1": cum_over,
+                  "vlm_admit_before_min": min(admit_before),
+                  "vlm_admit_before_max": max(admit_before),
+                  "n_groups_with_vlm": len(admit_before)}
+    R["greedy_detail"] = gd
+
+    # --- App.B: 외삽 yhat3 를 0 으로 두는 개입의 group-mean Spearman 변화 (8조합 최대)
+    tgt = {pl: (DATA[pl]["M"]["has_gen"].values.astype(bool)
+                & ~DATA[pl]["M"]["y3_valid"].values.astype(bool)) for pl in ac.PLATFORMS}
+    jo = pd.read_csv(OUT / "joint_oof_paired.csv")
+    cells = {}
+    for pl in ac.PLATFORMS:
+        d = DATA[pl]
+        gstr, has_gen = d["gstr"].values, d["M"]["has_gen"]
+        s_meas = ac.scores_from(d["Yn"]["y1_total_throughput_fps"],
+                                d["Yn"]["y2_deadline_miss_rate"],
+                                d["Yn"]["y3_total_tokens_per_s"], has_gen)
+        cand = {}
+        o = P1[pl]["oof"]
+        cand["platform-specific"] = (o["y1_pred"].values, o["y2_pred"].values,
+                                     o["y3_pred"].values)
+        # zero-shot: 저장된 소스 부스터를 fold-matched 로 다시 태운다 (2단계와 같은 경로)
+        _other = {"gpu": "npu", "npu": "gpu"}   # 상위 `other` 는 이 시점에 재사용됨
+        tfold, zp = P1[pl]["fold"], {}
+        for tag, _ in ac.TARGETS:
+            pr = np.full(len(d["X"]), np.nan)
+            for f in range(ac.N_FOLDS):
+                m = tfold == f
+                bst = ac.load_booster(OUT / f"gkf_cpu_{_other[pl]}_{tag}_fold{f}.json")
+                pr[m] = ac.predict_booster(bst, d["X"].values[m])
+            zp[tag] = pr
+        cand["zero-shot"] = (zp["y1"], zp["y2"], zp["y3"])
+        j = jo[jo["platform"] == pl].reset_index(drop=True)
+        cand["joint"] = (j["y1_pred"].values, j["y2_pred"].values, j["y3_pred"].values)
+        dc = pd.read_csv(OUT / f"decomposed_comp_{pl}.csv")
+        dc = dc.set_index(dc["combination"].astype(str)).loc[
+            d["M"]["combination"].astype(str)]
+        cand["decomposed"] = (dc["y1d_pred"].values, dc["y2d_pred"].values,
+                              dc["y3_pred"].values)
+        for name, (p1_, p2_, p3_) in cand.items():
+            rho = {}
+            for tag, y3v in (("A1", p3_), ("A2", np.where(tgt[pl], 0.0, p3_))):
+                sp = ac.scores_from(pd.Series(p1_), pd.Series(p2_), pd.Series(y3v), has_gen)
+                fr = pd.DataFrame({"group": gstr, "s_meas": s_meas, "s_pred": sp})
+                rho[tag] = rank_of(fr)[1]["group_spearman_mean"]
+            cells[f"{name}/{pl}"] = {"A1": rho["A1"], "A2": rho["A2"],
+                                     "abs_delta": abs(rho["A2"] - rho["A1"])}
+    _arg = max(cells, key=lambda k: cells[k]["abs_delta"])
+    R["appB_spearman_change"] = {
+        "n_combinations": len(cells), "per_cell": cells,
+        "max_abs_delta": cells[_arg]["abs_delta"], "attained_by": _arg,
+        "rounded_3dp": round(cells[_arg]["abs_delta"], 3)}
+
 # ------------------------------------------------------- 9. 결정론 스팟체크
 with stage("9_determinism_spotcheck"):
     pl = "gpu"

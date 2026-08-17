@@ -1,0 +1,124 @@
+{
+  "run": "20260818_010000_realign_and_wire",
+  "task": "지시문 #30 — 앵커 재정합(Phase1) + 미대조 캡처 8건 배선(Phase2) + VLM admit-before 신규(Phase3)",
+  "generated_at": "2026-08-18T01:00:00+09:00",
+  "git_commit_before": "f012f62f7366f1f79f3a6015eba9dfe00f2063df",
+  "manuscript": {
+    "sha256_before": "fcf7a84ea60045c9ddfa2cc975982bf0ec36dd63a79abd05f2039dc5cce58f43",
+    "sha256_after": "813d0901a80a8b99aee08af0cafcb4e5ba43febd2627206a6ee1345f0994b952",
+    "n_lines": 462,
+    "note": "지시문은 f437a053 이후 미반영이라 했으나 fcf7a84e 까지 커밋돼 있었다 (f012f62). 실제 diff 는 7 hunk."
+  },
+  "manuscript_modified_by_this_run": false,
+  "phase1": {
+    "unmatched_before": [
+      "appA_vlm_cost",
+      "sec3_y3_restore"
+    ],
+    "realigned": 2
+  },
+  "phase2": {
+    "wired": 8,
+    "detail": {
+      "appA_exhaustive": 4,
+      "appB_max_spearman_change": 3,
+      "appD_vlm_capacity": 4,
+      "appD_cum_exceeds": 2,
+      "appH_margins": 2,
+      "appH_median_margin": 1,
+      "appH_ratio_direct": 6,
+      "appH_ratio_greedy": 4
+    },
+    "reproduce_addition": "stage 8b — greedy_detail + appB_spearman_change"
+  },
+  "phase3": {
+    "new_anchor": "appD_vlm_admit_before",
+    "checks": 4,
+    "reproduced": {
+      "gpu": {
+        "vlm_admit_before_min": 1,
+        "vlm_admit_before_max": 3
+      },
+      "npu": {
+        "vlm_admit_before_min": 1,
+        "vlm_admit_before_max": 2
+      }
+    }
+  },
+  "appB_spearman_change": {
+    "n_combinations": 8,
+    "max_abs_delta": 0.012698412698412653,
+    "attained_by": "decomposed/npu",
+    "rounded_3dp": 0.013
+  },
+  "retired_checks": [
+    {
+      "check": "inline appA VLM completions/180s",
+      "reason": "원고가 'roughly ten such requests complete' 를 삭제 (이전 라운드)"
+    },
+    {
+      "check": "inline appA VLM window s",
+      "reason": "App A 재작성으로 180\\,s 창 언급이 이 문단에서 사라짐. App A 전체에 180 없음."
+    }
+  ],
+  "finding_outward_rounding": {
+    "where": "App D 'VLM consumes 0.13--0.40 ... compared with 0.02--0.07 on the GPU'",
+    "measured": {
+      "gpu": [
+        0.021657902,
+        0.064973706
+      ],
+      "npu": [
+        0.133189826,
+        0.39956947800000003
+      ]
+    },
+    "issue": "GPU 상한 실측 0.064974 -> 최근접 반올림은 0.06 인데 원고는 0.07 (바깥쪽 반올림). 저장소 greedy_summary.md:43 도 0.0650 으로 기록. 나머지 세 끝점은 최근접과 일치.",
+    "resolution": "구간 포함(bracket) + 인쇄 자릿수 밀착(tight) 두 조건으로 검사. 구간 서술의 의미에 맞는 검사이며 느슨하게 만든 것이 아니다.",
+    "manuscript_decision_pending": true
+  },
+  "checks": {
+    "before": 401,
+    "after": 435,
+    "delta": "-2 (appA 2건 소멸) +30 (Phase2 26 + Phase3 4)"
+  },
+  "unwired_captures_after": 0,
+  "gate": {
+    "tables_unchanged": true,
+    "paper_lock": "18/18 OK",
+    "inline_value_changes": "appA_vlm_cost 캡처 6->5, 남은 5개 값 동일"
+  },
+  "per_section_checks": {
+    "0": 4,
+    "Abstract": 3,
+    "App.A": 91,
+    "App.B": 106,
+    "App.C": 50,
+    "App.D": 34,
+    "App.E": 16,
+    "App.F": 4,
+    "App.G": 6,
+    "App.H": 60,
+    "Figures": 5,
+    "Table 1": 10,
+    "Table 1 caption": 2,
+    "§3": 6,
+    "§4": 38
+  },
+  "baseline_updated": {
+    "EXPECTED_TEX_SHA": "813d0901a80a8b99aee08af0cafcb4e5ba43febd2627206a6ee1345f0994b952"
+  },
+  "backup": {
+    "dir": "runs/20260818_010000_realign_and_wire/backup",
+    "files": {
+      "check_paper.py": "2947b52249ab84aa16188bf6d30d1ad0afd9a33bb1cd81ef42dcc8ffcb211fa4",
+      "compare.py": "bc21298c16c7b144f744b1b0a4517b65cf72437f210b7b7dbfb26438249f4477",
+      "expected.json": "a0bd2f8c4370b5ff643fdc7768938ef2173ee95387c2912559744d8284d995fa",
+      "extract_expected.py": "b557406aedc8153b79df528b088ba11b4829fc5d1b02669faca15b7be36c6b62",
+      "facts.json": "37e7be1f7c06775f1cf6d1467e04aa11819c479b9b471fdb224e8b71315176a7",
+      "paper.lock": "4ce4526ae746bb7f24709c2e9e606b46001604511520980dfc94aef9a9fe7f40",
+      "reproduce.py": "1b38c778f3ff4acee4c30fa23c8434d3351f5c154b6bea2b678b8589a8783a5d",
+      "reproduced.json": "a9f268b23b1842dde039266a097e595180d7633d8e9392d9341ac24fa47e57dd"
+    }
+  }
+}
