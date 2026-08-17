@@ -148,7 +148,8 @@ E["inline"] = {
     "appA_vlm_cost": grab(r"CPU time to first token is \$([\d.]+)\$\\,s against \$([\d.]+)\$"
                           r"\\,s on the GPU and \$([\d.]+)\$\\,s on the NPU, so a single "
                           r"(\d+)-token request takes about \$(\d+)\$\\,s on the CPU and "
-                          r"roughly (\w+) complete within a (\d+)\\,s window", None),
+                          r"roughly (\w+) such requests complete within a (\d+)\\,s "
+                          r"window", None),
     "appA_rates": grab(r"corresponding rates are \$([\d.]+)\\%\$ against \$([\d.]+)\\%\$ "
                        r"over all (\d+) groups at \$\\beta\{=\}1\.0\$, and \$([\d.]+)\\%\$ "
                        r"against \$([\d.]+)\\%\$ at \$\\beta\{=\}0\.5\$", None),
@@ -163,16 +164,15 @@ E["inline"] = {
     "appB_window_totals": grab(r"recorded window totals range from \$([\d.]+)\$ to \$([\d.]+)\$ tok/s", None),
     "appB_extrap": grab(r"range from \$([\d.]+)\$ to \$([\d.]+)\$ on the GPU and from \$([\d.]+)\$ to \$([\d.]+)\$ on the NPU", None),
     "appB_restored": grab(r"remain at most \$([\d.]+)\$ on the GPU and \$([\d.]+)\$ on the NPU", None),
-    "appB_sensitivity": grab(r"across the (\w+) predictor--platform combinations.*?"
+    "appB_sensitivity": grab(r"yielding (\w+) predictor--platform combinations\..*?"
                              r"preserves the same (\d+) workload groups", None, flags=re.S),
     "appB_max_spearman_change": grab(r"largest absolute change in group-mean Spearman "
                                      r"correlation is \$([\d.]+)\$", None),
     # appendix G -- CPU 경로의 공통 모드 주장 (2026-08-17 신설).
     # "identical across all 540 windows" 의 540 과, 그 앞의 두 동일성 주장을 함께 잡는다.
-    "appG_cpu_identity": grab(r"the two measured candidate sets are identical, every "
-                              r"candidate places the same instances on the CPU, and the "
-                              r"CPU-side feature contribution is identical across all "
-                              r"(\d+) windows", None),
+    "appG_cpu_identity": grab(r"across all (\d+) paired windows the CPU-assigned instance "
+                              r"sets and the CPU-side feature contributions are identical",
+                              None),
     # appendix D
     "appD_vlm_capacity": grab(r"VLM consumes ([\d.]+)--([\d.]+) of the estimated capacity, compared with ([\d.]+)--([\d.]+) on the GPU", None),
     "appD_cum_exceeds": grab(r"cumulative estimated load exceeds 1\.0 in (\d+) of the (\d+) NPU workload groups", None),
@@ -189,12 +189,12 @@ E["inline"] = {
     # (n_cells<0.01, n_margins, any: div/total, both: div/total, 상한 밴드)
     "appH_band": grab(r"Only (\w+) of the (\d+) margins fall below \$0\.01\$.*?"
                       r"divergence count would be (\d+) of (\d+)\..*?"
-                      r"leaves the count unchanged at (\d+) of (\d+), and that remains "
-                      r"true for bands up to \$([\d.]+)\$", None, flags=re.S),
+                      r"leaves the count unchanged at (\d+) of (\d+)\. That holds for every "
+                      r"band we examined up to \$([\d.]+)\$", None, flags=re.S),
     "appH_ratio_direct": grab(r"averages \$([\d.]+)\$/\$([\d.]+)\$ \(GPU/NPU\) for direct regression, with a worst case of \$([\d.]+)\$/\$([\d.]+)\$", None),
-    "appH_ratio_decomp": grab(r"decomposed baseline averages \$([\d.]+)\$/\$([\d.]+)\$ but with "
-                              r"more low-ratio cases, with a worst case of \$([\d.]+)\$/\$([\d.]+)\$ "
-                              r"and (\w+) GPU group and (\w+) NPU groups falling below", None),
+    "appH_ratio_decomp": grab(r"decomposed baseline averages \$([\d.]+)\$/\$([\d.]+)\$ but has "
+                              r"more low-ratio cases: its worst is \$([\d.]+)\$/\$([\d.]+)\$, and "
+                              r"(\w+) GPU group and (\w+) NPU groups fall below", None),
     "appH_ratio_greedy": grab(r"Greedy averages \$([\d.]+)\$/\$([\d.]+)\$ over measured outputs under speedup ordering, and \$([\d.]+)\$/\$([\d.]+)\$ when unmeasured", None),
     # appendix F
     "appF_grid": grab(r"four candidate pairs: \$\((\d), ([\d.]+)\)\$, \$\((\d), ([\d.]+)\)\$, "
@@ -202,7 +202,7 @@ E["inline"] = {
     # subsample 과 column-sample 이 별도 값으로 분리되어 캡처가 5개 -> 6개가 되었다
     "appF_fixed": grab(r"fixed to the (squared-error) objective, (\d+) boosting rounds, "
                        r"a subsampling rate of \$([\d.]+)\$, a column-sampling rate of "
-                       r"\$([\d.]+)\$, a minimum child weight of \$(\d)\$, and seed~\$(\d+)\$",
+                       r"\$([\d.]+)\$, a minimum child weight of \$(\d)\$, and seed~(\d+)",
                        None),
     "appF_features": grab(r"yields (\d+) features, and the instance count \$N\$ completes "
                           r"the (\d+)-dimensional", None),
