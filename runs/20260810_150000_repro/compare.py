@@ -61,7 +61,7 @@ PL = ("gpu", "npu")
 for k, v in E["anchors"].items():
     chk_eq(f"anchor:{k}", "0", True, v)
 chk_eq("revision_marker_is_r18a", "0", True,
-       "r18a" in E["_source"]["revision_marker"],
+       "r18a" in E["_source"].get("revision_block", E["_source"]["revision_marker"]),
        "지시문은 r19 이상을 요구했으나 시스템 최신본이 r18a")
 
 # ------------------------------------------------------------------ Table 1

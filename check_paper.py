@@ -27,6 +27,11 @@ ROOT = Path(__file__).resolve().parent
 AN = ROOT / "xgboost_model/full_collection_540/analysis"
 ART = ROOT / "xgboost_model/artifacts"
 TEX = ROOT / "manuscript/mlforsys_main.tex"
+# The manuscript revision the repro suite (runs/20260810_150000_repro) was last run
+# against, all 359 checks agreeing. When the manuscript moves, that verification is
+# stale until the suite is re-run -- twice now the anchors silently stopped matching
+# the reworded prose. Refresh this together with the suite, never on its own.
+EXPECTED_TEX_SHA = "2d9e288a61839759a073ba50897a65319740dad7b75592865cf3841c9f2988f0"
 
 
 def sha(p: Path) -> str:
@@ -172,9 +177,17 @@ def main() -> int:
                         "Re-run scripts/cross_platform_transfer.py")
     drift = doc_path_drift()
     problems.extend(drift)
+    tex_sha = sha(TEX) if TEX.exists() else None
+    if tex_sha and tex_sha != EXPECTED_TEX_SHA:
+        problems.append(
+            f"manuscript sha256 {tex_sha[:16]}… != verified baseline "
+            f"{EXPECTED_TEX_SHA[:16]}…; re-run runs/20260810_150000_repro "
+            "(extract_expected -> reproduce -> compare) and update EXPECTED_TEX_SHA")
 
     out = {
-        "manuscript": {"path": str(TEX.relative_to(ROOT)), "sha256": sha(TEX)}
+        "manuscript": {"path": str(TEX.relative_to(ROOT)), "sha256": tex_sha,
+                       "verified_baseline": EXPECTED_TEX_SHA,
+                       "matches_baseline": tex_sha == EXPECTED_TEX_SHA}
         if TEX.exists() else None,
         "rows": ROWS,
         "paper_lock": {"checked": n_ok, "exit": lock.returncode},
@@ -198,7 +211,9 @@ def main() -> int:
         print(json.dumps(out, indent=2, ensure_ascii=False))
         return 0 if out["ok"] else 1
 
-    print(f"manuscript  {TEX.name}  sha256 {sha(TEX)[:16]}…\n" if TEX.exists() else "")
+    print(f"manuscript  {TEX.name}  sha256 {tex_sha[:16]}…  "
+          f"({'matches' if tex_sha == EXPECTED_TEX_SHA else 'DIFFERS FROM'} verified "
+          f"baseline)\n" if TEX.exists() else "")
     print(f"{'figure/table':16} {'series':18} {'plat':5} {'metric':9} "
           f"{'value':>8} {'in tex':7} script")
     print("-" * 100)

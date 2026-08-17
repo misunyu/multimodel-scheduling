@@ -1,0 +1,89 @@
+{
+  "run": "20260817_120000_anchor_realign",
+  "task": "지시문 #24 — Phase 1 미검증 주장 확인(읽기 전용) + Phase 2 재현 스위트 앵커 재정합",
+  "generated_at": "2026-08-17T12:00:00+09:00",
+  "git_commit_before": "959cd76b6ba43875dd573078389a91c5b16cccab",
+  "manuscript": {
+    "path": "manuscript/mlforsys_main.tex",
+    "sha256": "2d9e288a61839759a073ba50897a65319740dad7b75592865cf3841c9f2988f0",
+    "note": "지시문이 언급한 d58d1249…(부록 재작성본)은 저장소에 없음. 대상은 2d9e288a…"
+  },
+  "phase1_readonly_findings": {
+    "1A_band_rule_implemented": false,
+    "1A_code": "runs/20260809_140605_checklist_r2/B_divergence_gap/gap.py:130 은 n_cells_with_gap_below_1e-2=2 (셀 수)만 센다. 0.01 밴드로 divergence를 재계산하는 코드는 없다.",
+    "1A_margins": 22,
+    "1A_groups": 11,
+    "1A_below_0.01": [
+      {
+        "group": "S8@2.0",
+        "platform": "gpu",
+        "margin": 0.002628
+      },
+      {
+        "group": "base3@3.0",
+        "platform": "npu",
+        "margin": 0.006773
+      }
+    ],
+    "1A_same_or_different_group": "different",
+    "1A_divergence_under_rule_a_either": 9,
+    "1A_divergence_under_rule_b_both": 11,
+    "1A_counter_margins": {
+      "S8@2.0 npu": 0.080564,
+      "base3@3.0 gpu": 0.864813
+    },
+    "1B_target_cells": 11,
+    "1B_changed_sets_gpu_alpha_ge_0.3_beta_gt_0": [
+      "S8"
+    ],
+    "1B_only_S8_holds": true,
+    "1B_caveat": "beta=0 을 포함하면 (0.3, 0) 은 S7;S8 로 2개. 'only S8' 은 beta>0 범위에서만 성립.",
+    "1C_cpu_infer_definition": "prefill_ms (TTFT) — generate(max_new_tokens=1) 시간. profile_models.py:238 이 generative 행의 {dev}_infer 에 prefill_ms 를 넣는다.",
+    "1C_isolated": true,
+    "1C_qwen2_vl": {
+      "cpu_prefill_ms": 12302.185,
+      "gpu_prefill_ms": 99.806,
+      "npu_prefill_ms": 613.778,
+      "cpu_tokens_per_s": 5.461,
+      "gpu_tokens_per_s": 116.816,
+      "npu_tokens_per_s": 16.014
+    },
+    "1C_123x_is_prefill_vs_prefill": true,
+    "1C_confound": "CPU FP32 vs GPU FP16 (llm_engine.py:72), CPU torch 스레드 미제한",
+    "1C_end_to_end_32tok_s": {
+      "cpu": 18.16,
+      "gpu": 0.374,
+      "ratio": 49
+    },
+    "1C_completions_per_180s_window": 9.9,
+    "1C_stalls_claim_unsupported": true
+  },
+  "phase2": {
+    "before": "compare.py 가 TypeError 로 중단 (inline 25/38 캡처, 13건 None)",
+    "after": "총 359건 — 일치 359, 불일치 0, 조건부 0",
+    "anchors_updated": 14,
+    "values_changed": 0,
+    "paper_lock": "18/18 OK, exit 0"
+  },
+  "backup": {
+    "dir": "runs/20260817_120000_anchor_realign/backup/",
+    "files": {
+      "check_paper.py": "52e5094bc89e76f4afe1cab54870e8bcbca6b6ec5da4a547063584083cc043d1",
+      "expected.json": "08455521fb60ed8e5c3ece7dc9f630c2ccdd5e90835a2b01f9b6dae8186dfb0e",
+      "extract_expected.py": "9f56ff3567e50a95cd56c9feefd34cc936123ce5c9828f675f359a9383873da7",
+      "facts.json": "2f13300fb25d9483dd0d3b61d67d7bab5b00d8530f081de06bc2bc30766eac49",
+      "paper.lock": "adb6fd449f39e6c1ca1989d0404dea7df68d428016873b847dfb26e259dfc95d",
+      "reproduced.json": "5c2b9b3ee59118ad72dab5029325e63389bee77d45b8a4396cdbdd316a4f0762"
+    }
+  },
+  "outputs_after": {
+    "extract_expected.py": "77ad1a62dd9ebe13cbf203e839b39d76ccc944205ddeb56514fc600f5cdfb0e8",
+    "expected.json": "e0d5e9cd4ccd56a0480a260738d1c2a48f038b61bb84ee0edf89af9b12bf09a0",
+    "reproduced.json": "5c2b9b3ee59118ad72dab5029325e63389bee77d45b8a4396cdbdd316a4f0762",
+    "facts.json": "91c9e61047834de446e3c17e4a8e45f46da9a10b9123bb833ff948ab0ae0be61"
+  },
+  "check_paper_py_sha256": "9acbf4d1e78bb7004570b0aa6a86a60ecb8222cc203eec8487db1885a9c06fc2",
+  "paper_lock_sha256": "c594eea6beb76cbb0654e34c2046f2e5a59fd4003fd711e39b24cfdfb9a31164",
+  "manuscript_not_modified": true,
+  "no_retraining": true
+}

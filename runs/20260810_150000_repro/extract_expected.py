@@ -19,7 +19,12 @@ lines = src.splitlines()
 E = {"_source": {"path": str(TEX.relative_to(ROOT)),
                  "sha256": hashlib.sha256(TEX.read_bytes()).hexdigest(),
                  "n_lines": len(lines),
-                 "revision_marker": lines[0]}}
+                 "revision_marker": lines[0],
+                 # 2026-08-17: a newer REVISION line was prepended, so the r18a marker is
+                 # no longer lines[0]. Keep the whole leading comment block -- the marker
+                 # check reads this, not just the first line.
+                 "revision_block": "\n".join(
+                     l for l in lines[:20] if l.startswith("%"))}}
 
 # ------------------------------------------------------------------ 0. 앵커
 E["anchors"] = {
@@ -91,36 +96,58 @@ E["tables"]["appH_bootstrap"] = [c for c in num_rows("tab:app_boot")
                                  if c[0] not in ("Quantity",)]
 
 # ------------------------------------------------------------- 인라인 수치
-def grab(pattern, name, group=None):
-    m = re.search(pattern, src)
+# 2026-08-17: the body prose was rewritten (Sec. 3 consolidation), so several anchors
+# now have to span a sentence boundary -- hence `flags`. Anchors stay pinned to the
+# NUMBERS plus one identifying noun phrase; they are deliberately not loosened to `.*`.
+_WORDNUM = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+            "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10"}
+
+
+def grab(pattern, name, group=None, flags=0):
+    m = re.search(pattern, src, flags)
     if not m:
         return None
-    return m.groups() if group is None else m.group(group)
+    if group is not None:
+        return _WORDNUM.get(m.group(group), m.group(group))
+    return tuple(_WORDNUM.get(g, g) for g in m.groups())
 
 
 E["inline"] = {
     # abstract / results
     "abstract_divergence": grab(r"select different best measured placements in (\d+) of (\d+) workload groups, including (\d+) involving generative", None),
-    "abstract_joint_top1": grab(r"Top-1 accuracies of ([\d.]+)\\% on the GPU and ([\d.]+)\\% on the NPU", None),
+    "abstract_joint_top1": grab(r"Top-1 accuracy at ([\d.]+)\\% on the GPU and ([\d.]+)\\% on the NPU", None),
     "direct_rho_top1": grab(r"group-mean Spearman \$([\d.]+)/([\d.]+)\$ and Top-1 \$([\d.]+)/([\d.]+)\$", None),
-    "selected_ratio_sec4": grab(r"at least \$(\d+)\\%\$ of the best measured score in every group \(mean \$([\d.]+)\\%/([\d.]+)\\%\$\)", None),
-    "divergence_main": grab(r"disagree on the best measured placement in (\d+) of (\d+) groups, including (\d+) of (\d+) generative groups and (\d+) of (\d+) vision-only", None),
-    "divergence_beta05": grab(r"Reducing the generative weight to \$\\beta\{=\}0\.5\$ increases the number of disagreements to (\d+) of (\d+)", None),
-    "divergence_exhaustive": grab(r"The pattern persists among the (\d+) exhaustively measured groups: (\d+) disagree", None),
-    "divergence_exhaustive_split": grab(r"corresponding to (\d+) of (\d+) generative groups and none of the (\d+) vision-only", None),
-    "sweep_claim": grab(r"changes in at most (\d+) of (\d+) workload sets across the sweep in Appendix~C, whereas the NPU best measured placement changes in up to (\d+)", None),
+    "selected_ratio_sec4": grab(r"at least \$(\d+)\\%\$ of the best measured score\..*?"
+                                r"mean ratios are \$([\d.]+)\\%\$ on the GPU and \$([\d.]+)\\%\$ on the NPU",
+                                None, flags=re.S),
+    "divergence_main": grab(r"differs between the GPU and NPU in (\d+) of (\d+) workload groups, "
+                            r"including (\d+) of (\d+) generative groups and (\w+) of (\d+) vision-only", None),
+    "divergence_beta05": grab(r"\\beta\{=\}0\.5\$, the number of disagreements increases to (\d+) of (\d+)", None),
+    "divergence_exhaustive": grab(r"Among the (\d+) exhaustively measured groups, (\d+) of \d+ generative groups differ", None),
+    "divergence_exhaustive_split": grab(r"groups, (\d+) of (\d+) generative groups differ, while no divergence "
+                                       r"occurs in the (\d+) vision-only", None),
+    # NOTE: captured but not consumed by compare.py (was already unused before this
+    # realignment). The counts are now spelled out in the body, so they are normalized
+    # to digits by grab().
+    "sweep_claim": grab(r"differs from the baseline in at most (\w+) workload sets on the GPU "
+                        r"but in as many as (\w+) on the NPU", None),
     "zero_shot_npu": grab(r"reduces Spearman correlation from \$([\d.]+)\$ to \$([\d.]+)\$ and Top-1 accuracy from \$([\d.]+)\$ to \$([\d.]+)\$", None),
     "zero_shot_gpu": grab(r"Spearman correlation decreases from \$([\d.]+)\$ to \$([\d.]+)\$, while Top-1 accuracy remains \$([\d.]+)\$", None),
     "joint_reach": grab(r"reaching Spearman \$([\d.]+)/([\d.]+)\$ and Top-1 \$([\d.]+)/([\d.]+)\$", None),
-    "greedy_main": grab(r"Top-1 accuracies of \$([\d.]+)\$ on the GPU and \$([\d.]+)\$ on the NPU among outputs present", None),
-    "greedy_bounds_caption": grab(r"its 45-group lower bounds are ([\d.]+) and ([\d.]+)", None),
-    "decomp_pooled": grab(r"pooled Spearman correlations of \$([\d.]+)\$ on the GPU and \$([\d.]+)\$ on the NPU for individual attainment", None),
-    "decomp_top1": grab(r"Top-1 accuracies fall to \$([\d.]+)\$ and \$([\d.]+)\$", None),
-    "decomp_recon": grab(r"group-mean Spearman reaches only \$([\d.]+)\$ on the GPU and \$([\d.]+)\$ on the NPU", None),
+    "greedy_main": grab(r"Top-1 accuracies of \$([\d.]+)\$ on the GPU and \$([\d.]+)\$ on the NPU when evaluated", None),
+    "greedy_bounds_caption": grab(r"45-group lower bounds are ([\d.]+) \(GPU\) and ([\d.]+) \(NPU\)", None),
+    "decomp_pooled": grab(r"pooled instance-level Spearman correlations of \$([\d.]+)/([\d.]+)\$", None),
+    "decomp_top1": grab(r"placement-level Top-1 accuracies of \$([\d.]+)/([\d.]+)\$", None),
+    # Moved: the Sec.4 sentence that printed these was dropped in the Sec.3 rewrite.
+    # The values still appear in the App.E table, so the check follows them there
+    # rather than being deleted.
+    "decomp_recon": grab(r"Measured-attainment.*?\$[\d.]+ / ([\d.]+) / [\d.]+\$\s*&\s*"
+                         r"\$[\d.]+ / ([\d.]+) / [\d.]+\$", None, flags=re.S),
     # appendix A
     "appA_exhaustive": grab(r"the GPU and NPU disagree on the best measured placement in (\d+) groups: (\d+) of (\d+) generative groups and none of the (\d+) vision-only", None),
     "appA_beta05_exhaustive": grab(r"At \$\\beta\{=\}0\.5\$, (\d+) of the (\d+) exhaustive groups diverge", None),
-    "appA_counts": grab(r"this procedure produces (\d+) placement configurations. Evaluating each configuration at three request-rate levels yields (\d+) measurement windows and (\d+) workload groups", None),
+    "appA_counts": grab(r"yields (\d+) placement configurations\..*?produces (\d+) measurement "
+                        r"windows and (\d+) workload groups", None, flags=re.S),
     # appendix B (y3)
     "appB_masking": grab(r"trained only on the (\d+) windows per platform[^.]*\. The remaining (\d+) windows comprise (\d+) windows from vision-only workloads and (\d+) in which the LLM", None),
     "appB_window_totals": grab(r"recorded window totals range from \$([\d.]+)\$ to \$([\d.]+)\$ tok/s", None),
