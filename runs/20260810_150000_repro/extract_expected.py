@@ -143,34 +143,63 @@ E["inline"] = {
     # rather than being deleted.
     "decomp_recon": grab(r"Measured-attainment.*?\$[\d.]+ / ([\d.]+) / [\d.]+\$\s*&\s*"
                          r"\$[\d.]+ / ([\d.]+) / [\d.]+\$", None, flags=re.S),
-    # appendix A
+    # appendix A -- VLM pinning rationale (2026-08-17 신설). 정수 앵커(appA_exhaustive
+    # 등)와 별개로 백분율을 따로 잡고, 재현 측에서는 같은 카운트에서 유도해 대조한다.
+    "appA_vlm_cost": grab(r"CPU time to first token is \$([\d.]+)\$\\,s against \$([\d.]+)\$"
+                          r"\\,s on the GPU and \$([\d.]+)\$\\,s on the NPU, so a single "
+                          r"(\d+)-token request takes about \$(\d+)\$\\,s on the CPU and "
+                          r"roughly (\w+) complete within a (\d+)\\,s window", None),
+    "appA_rates": grab(r"corresponding rates are \$([\d.]+)\\%\$ against \$([\d.]+)\\%\$ "
+                       r"over all (\d+) groups at \$\\beta\{=\}1\.0\$, and \$([\d.]+)\\%\$ "
+                       r"against \$([\d.]+)\\%\$ at \$\\beta\{=\}0\.5\$", None),
     "appA_exhaustive": grab(r"the GPU and NPU disagree on the best measured placement in (\d+) groups: (\d+) of (\d+) generative groups and none of the (\d+) vision-only", None),
     "appA_beta05_exhaustive": grab(r"At \$\\beta\{=\}0\.5\$, (\d+) of the (\d+) exhaustive groups diverge", None),
     "appA_counts": grab(r"yields (\d+) placement configurations\..*?produces (\d+) measurement "
                         r"windows and (\d+) workload groups", None, flags=re.S),
     # appendix B (y3)
-    "appB_masking": grab(r"trained only on the (\d+) windows per platform[^.]*\. The remaining (\d+) windows comprise (\d+) windows from vision-only workloads and (\d+) in which the LLM", None),
+    "appB_masking": grab(r"trained only on the (\d+) windows per platform[^.]*\. "
+                         r"The remaining (\d+) windows consist of (\d+) vision-only windows,"
+                         r".*?and (\d+) windows in which the LLM", None, flags=re.S),
     "appB_window_totals": grab(r"recorded window totals range from \$([\d.]+)\$ to \$([\d.]+)\$ tok/s", None),
     "appB_extrap": grab(r"range from \$([\d.]+)\$ to \$([\d.]+)\$ on the GPU and from \$([\d.]+)\$ to \$([\d.]+)\$ on the NPU", None),
     "appB_restored": grab(r"remain at most \$([\d.]+)\$ on the GPU and \$([\d.]+)\$ on the NPU", None),
-    "appB_sensitivity": grab(r"does not change any Top-1 outcome across the (\w+) evaluated predictor--platform combinations and leaves the same (\d+) workload groups", None),
-    "appB_max_spearman_change": grab(r"maximum absolute change in group-mean Spearman correlation is \$([\d.]+)\$", None),
+    "appB_sensitivity": grab(r"across the (\w+) predictor--platform combinations.*?"
+                             r"preserves the same (\d+) workload groups", None, flags=re.S),
+    "appB_max_spearman_change": grab(r"largest absolute change in group-mean Spearman "
+                                     r"correlation is \$([\d.]+)\$", None),
     # appendix D
     "appD_vlm_capacity": grab(r"VLM consumes ([\d.]+)--([\d.]+) of the estimated capacity, compared with ([\d.]+)--([\d.]+) on the GPU", None),
     "appD_cum_exceeds": grab(r"cumulative estimated load exceeds 1\.0 in (\d+) of the (\d+) NPU workload groups", None),
     # appendix E
     "appE_top5": grab(r"Top-5 accuracy[^$]*is \$([\d.]+)\$ on both platforms", None),
+    # appendix H -- "What differs." 문단 (2026-08-17 신설)
+    "appH_what_differs": grab(r"In all (\d+) disagreeing groups the two platforms place the "
+                              r"same generative instances.*?In (\w+) of them the NPU offloads "
+                              r"(\w+) to the CPU while the GPU keeps every instance on the "
+                              r"accelerator", None, flags=re.S),
     # appendix H
     "appH_margins": grab(r"smallest of the (\d+) margins is \$([\d.]+)\\times10\^\{-3\}\$", None),
     "appH_median_margin": grab(r"the median is \$([\d.]+)\$\.", None),
-    "appH_band": grab(r"Only (\w+) cells fall below \$?0\.01\$?.*?divergence count would be (\d+) of (\d+)", None),
+    # (n_cells<0.01, n_margins, any: div/total, both: div/total, 상한 밴드)
+    "appH_band": grab(r"Only (\w+) of the (\d+) margins fall below \$0\.01\$.*?"
+                      r"divergence count would be (\d+) of (\d+)\..*?"
+                      r"leaves the count unchanged at (\d+) of (\d+), and that remains "
+                      r"true for bands up to \$([\d.]+)\$", None, flags=re.S),
     "appH_ratio_direct": grab(r"averages \$([\d.]+)\$/\$([\d.]+)\$ \(GPU/NPU\) for direct regression, with a worst case of \$([\d.]+)\$/\$([\d.]+)\$", None),
-    "appH_ratio_decomp": grab(r"decomposed baseline averages \$([\d.]+)\$/\$([\d.]+)\$ but with heavier tails \(worst \$([\d.]+)\$/\$([\d.]+)\$; (\w+) and (\w+) groups below", None),
+    "appH_ratio_decomp": grab(r"decomposed baseline averages \$([\d.]+)\$/\$([\d.]+)\$ but with "
+                              r"more low-ratio cases, with a worst case of \$([\d.]+)\$/\$([\d.]+)\$ "
+                              r"and (\w+) GPU group and (\w+) NPU groups falling below", None),
     "appH_ratio_greedy": grab(r"Greedy averages \$([\d.]+)\$/\$([\d.]+)\$ over measured outputs under speedup ordering, and \$([\d.]+)\$/\$([\d.]+)\$ when unmeasured", None),
     # appendix F
-    "appF_grid": grab(r"four-point grid---\$\((\d), ([\d.]+)\)\$, \$\((\d), ([\d.]+)\)\$, \$\((\d), ([\d.]+)\)\$, \$\((\d), ([\d.]+)\)\$", None),
-    "appF_fixed": grab(r"\((squared-error) objective, (\d+) boosting rounds, subsample and column-sample \$([\d.]+)\$, minimum child weight \$(\d)\$, seed \$(\d+)\$\)", None),
-    "appF_features": grab(r"yields (\d+) features; the instance count \$N\$ completes the (\d+)-dimensional", None),
+    "appF_grid": grab(r"four candidate pairs: \$\((\d), ([\d.]+)\)\$, \$\((\d), ([\d.]+)\)\$, "
+                      r"\$\((\d), ([\d.]+)\)\$, and \$\((\d), ([\d.]+)\)\$", None),
+    # subsample 과 column-sample 이 별도 값으로 분리되어 캡처가 5개 -> 6개가 되었다
+    "appF_fixed": grab(r"fixed to the (squared-error) objective, (\d+) boosting rounds, "
+                       r"a subsampling rate of \$([\d.]+)\$, a column-sampling rate of "
+                       r"\$([\d.]+)\$, a minimum child weight of \$(\d)\$, and seed~\$(\d+)\$",
+                       None),
+    "appF_features": grab(r"yields (\d+) features, and the instance count \$N\$ completes "
+                          r"the (\d+)-dimensional", None),
 }
 
 missing = [k for k, v in E["inline"].items() if v is None]

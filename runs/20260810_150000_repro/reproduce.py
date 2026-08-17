@@ -398,6 +398,28 @@ with stage("6_divergence_sweep_coverage"):
                   for r in _by[pl][k]}
             m[pl] = max(sc.values()) - max(sc[p] for p in _ties[other][k] if p in sc)
         _margins[f"{k[0]}@{k[1]}"] = m
+    # App.H "What differs." -- what actually distinguishes the two best placements in
+    # each disagreeing group. GEN_MODELS are the generative ones; the claim is that they
+    # sit identically in every disagreeing group and only the CPU-side vision model moves.
+    _GEN = ("llama1b", "qwen2_vl")
+    _same_gen, _npu_offloads_resnet = 0, 0
+    _labels = {}
+    for k in _dis:
+        lab = {pl: sorted(ba.cpu_label(p_) for p_ in _ties[pl][k]) for pl in rows_pl}
+        _labels[f"{k[0]}@{k[1]}"] = lab
+        gen_side = {pl: {(m, d) for p_ in _ties[pl][k] for m, d in p_ if m in _GEN}
+                    for pl in rows_pl}
+        if gen_side["gpu"] == gen_side["npu"]:
+            _same_gen += 1
+        if lab["gpu"] == ["all-accel"] and lab["npu"] == ["cpu:resnet50"]:
+            _npu_offloads_resnet += 1
+    R["divergence_what_differs"] = {
+        "n_groups": len(_dis),
+        "n_same_generative_placement": _same_gen,
+        "n_npu_offloads_resnet50_gpu_all_accel": _npu_offloads_resnet,
+        "labels": _labels,
+    }
+
     _flat = [v for m in _margins.values() for v in m.values()]
     R["divergence_margins"] = {
         "n_cells": len(_flat), "n_groups": len(_keys),
@@ -520,6 +542,21 @@ with stage("8_y3_sensitivity"):
         restored[pl] = {"r3_max": float(tot[tgt_rows[pl]].max()),
                         "y3_norm_max": float(
                             Yn2["y3_total_tokens_per_s"].values[tgt_rows[pl]].max())}
+    # App.A now prints the VLM's isolated CPU cost as the reason for pinning it to the
+    # accelerator. Recompute those numbers from the static profile so they are checked
+    # like every other printed value rather than being asserted in prose only.
+    _S = json.loads(ac.STATIC_JSON.read_text())
+    _q = {r["model"]: r for r in _S["total_data"]}["qwen2_vl"]
+    _VLM_NEW_TOKENS = 32          # model_processors.run_vlm_process default
+    _req_s = _q["cpu_prefill_ms"] / 1000.0 + _VLM_NEW_TOKENS / _q["cpu_tokens_per_s"]
+    R["vlm_cpu_cost"] = {
+        "prefill_s": {d: _q[f"{d}_prefill_ms"] / 1000.0 for d in ("cpu", "gpu", "npu")},
+        "cpu_tokens_per_s": _q["cpu_tokens_per_s"],
+        "new_tokens": _VLM_NEW_TOKENS,
+        "cpu_request_s": _req_s,
+        "completions_per_180s": 180.0 / _req_s,
+    }
+
     R["y3_sensitivity"] = {"n_target_windows": {pl: int(tgt_rows[pl].sum())
                                                 for pl in ac.PLATFORMS},
                            "extrapolated_yhat3_range": ext, "restored": restored}

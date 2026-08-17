@@ -316,21 +316,82 @@ for j, pl in enumerate(PL):
 chk_eq("inline appB divergence unchanged", "App.B", 11,
        R["divergence"]["beta_1.0"]["n_disagree"])
 
+# ---------------------------------------------- App.A VLM pinning rationale (신설)
+# 원고가 새로 인쇄하는 12.3 / 0.10 / 0.61 s, 18 s, "roughly ten" 을 정적 프로파일에서
+# 유도해 대조한다. 앞의 셋은 측정값이고 뒤의 둘은 그 측정값에서 나온 산술이다.
+_V = R["vlm_cpu_cost"]
+_A = I["appA_vlm_cost"]
+for j, dev in enumerate(("cpu", "gpu", "npu")):
+    chk(f"inline appA VLM prefill {dev.upper()}", "App.A", _A[j], _V["prefill_s"][dev])
+chk_eq("inline appA VLM new tokens", "App.A", int(_A[3]), _V["new_tokens"])
+chk("inline appA VLM request s", "App.A", _A[4], _V["cpu_request_s"])
+chk_eq("inline appA VLM completions/180s", "App.A", int(_A[5]),
+       round(_V["completions_per_180s"]))
+chk_eq("inline appA VLM window s", "App.A", int(_A[6]), 180)
+
+# 백분율 4종 — 정수 카운트 앵커와 별개로 잡고 같은 카운트에서 유도해 대조한다
+_R = I["appA_rates"]
+_d = R["divergence"]
+chk("inline appA rate exh b=1.0", "App.A", _R[0],
+    100 * _d["exhaustive_beta_1.0"]["n_disagree"] / _d["exhaustive_beta_1.0"]["n_groups"])
+chk("inline appA rate all b=1.0", "App.A", _R[1],
+    100 * _d["beta_1.0"]["n_disagree"] / _d["beta_1.0"]["n_groups"])
+chk_eq("inline appA rate n_groups", "App.A", int(_R[2]), _d["beta_1.0"]["n_groups"])
+chk("inline appA rate exh b=0.5", "App.A", _R[3],
+    100 * _d["exhaustive_beta_0.5"]["n_disagree"] / _d["exhaustive_beta_0.5"]["n_groups"])
+chk("inline appA rate all b=0.5", "App.A", _R[4],
+    100 * _d["beta_0.5"]["n_disagree"] / _d["beta_0.5"]["n_groups"])
+
+# --------------------------------------------- App.H "What differs." 문단 (신설)
+_W = R["divergence_what_differs"]
+_WD = I["appH_what_differs"]
+chk_eq("inline appH what-differs n_groups", "App.H", int(_WD[0]), _W["n_groups"])
+chk_eq("inline appH what-differs same generative", "App.H", int(_WD[0]),
+       _W["n_same_generative_placement"], "원고는 11 그룹 전부에서 동일하다고 주장")
+chk_eq("inline appH what-differs npu offloads", "App.H", int(_WD[1]),
+       _W["n_npu_offloads_resnet50_gpu_all_accel"])
+chk_eq("inline appH what-differs model name", "App.H", _WD[2].lower(), "resnet50")
+
 # App.F (설정값 — 코드 상수와 대조)
 chk_eq("F.grid", "App.F", ("3", "0.1", "4", "0.1", "5", "0.05", "6", "0.1"),
        tuple(I["appF_grid"]))
 chk_eq("F.features 36+1=37", "App.F", ("36", "37"), tuple(I["appF_features"]))
+# appF_fixed 는 추출만 되고 대조되지 않던 다섯 번째 캡처 (#25 에서 네 건 배선). 원고가
+# subsample/column-sample 을 두 값으로 분리해 쓰면서 캡처가 6개가 되었으므로 함께 배선한다.
+sys.path.insert(0, str(ROOT))
+from xgboost_model.deploy_selector_xgb_suite import _PARAMS as _XP  # noqa: E402
+chk_eq("F.fixed settings", "App.F",
+       ("squared-error", "300", "0.8", "0.8", "3", "42"),
+       tuple(I["appF_fixed"]))
+chk_eq("F.fixed matches code constants", "App.F",
+       (_XP["objective"], _XP["subsample"], _XP["colsample_bytree"],
+        _XP["min_child_weight"], _XP["seed"]),
+       ("reg:squarederror", float(I["appF_fixed"][2]), float(I["appF_fixed"][3]),
+        float(I["appF_fixed"][4]), int(I["appF_fixed"][5])))
 
 # ------------------------------------------------- 2026-08-17: 미배선이던 캡처 4건
 # extract_expected 가 뽑기만 하고 여기서 대조하지 않던 항목들 (지시문 #24 부수 발견,
 # 지시문 #25 Phase 1 에서 배선). appH_band 는 재현 측 계산이 없어서 배선할 수 없었는데,
 # reproduce.py 에 divergence_margins 를 넣어 해결했다.
 _M = R["divergence_margins"]
-chk_eq("inline appH band n_cells<0.01", "App.H", int(I["appH_band"][0]),
-       _M["n_cells_below_0.01"])
-chk_eq("inline appH band divergence", "App.H", int(I["appH_band"][1]),
-       _M["band_0.01"]["any"])
-chk_eq("inline appH band n_groups", "App.H", int(I["appH_band"][2]), _M["n_groups"])
+# 2026-08-17: 원고가 두 규칙(any/both)과 상한 밴드를 모두 인쇄하도록 확장되어
+# 캡처도 (n_cells, n_margins, any_div, any_total, both_div, both_total, max_band) 로 늘었다.
+_B = I["appH_band"]
+chk_eq("inline appH band n_cells<0.01", "App.H", int(_B[0]), _M["n_cells_below_0.01"])
+chk_eq("inline appH band n_margins", "App.H", int(_B[1]), _M["n_cells"])
+chk_eq("inline appH band any divergence", "App.H", int(_B[2]), _M["band_0.01"]["any"])
+chk_eq("inline appH band any n_groups", "App.H", int(_B[3]), _M["n_groups"])
+chk_eq("inline appH band both divergence", "App.H", int(_B[4]), _M["band_0.01"]["both"])
+chk_eq("inline appH band both n_groups", "App.H", int(_B[5]), _M["n_groups"])
+# "that remains true for bands up to 0.05" -- gap.py 의 밴드 스윕에서 both 가 상한까지 불변인지
+_GAP = json.loads((ROOT / "runs/20260809_140605_checklist_r2/B_divergence_gap/"
+                   "gap_facts.json").read_text())["score_equivalence_band"]["by_band"]
+_upto = float(_B[6])
+chk_eq("inline appH band both unchanged up to max band", "App.H", True,
+       all(v["both"]["n_disagree"] == _M["band_0.01"]["both"]
+           for k, v in _GAP.items() if float(k) <= _upto))
+chk_eq("inline appH band max band swept", "App.H", True,
+       any(abs(float(k) - _upto) < 1e-12 for k in _GAP))
 
 # sweep 본문 요약: beta>0 셀에서 GPU 최대 / NPU 최대 변경 세트 수
 _cells = [c for c in R["sweep"][0] if c["beta"] > 0]
