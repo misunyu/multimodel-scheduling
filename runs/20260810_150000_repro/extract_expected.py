@@ -167,6 +167,12 @@ E["inline"] = {
                              r"preserves the same (\d+) workload groups", None, flags=re.S),
     "appB_max_spearman_change": grab(r"largest absolute change in group-mean Spearman "
                                      r"correlation is \$([\d.]+)\$", None),
+    # appendix G -- CPU 경로의 공통 모드 주장 (2026-08-17 신설).
+    # "identical across all 540 windows" 의 540 과, 그 앞의 두 동일성 주장을 함께 잡는다.
+    "appG_cpu_identity": grab(r"the two measured candidate sets are identical, every "
+                              r"candidate places the same instances on the CPU, and the "
+                              r"CPU-side feature contribution is identical across all "
+                              r"(\d+) windows", None),
     # appendix D
     "appD_vlm_capacity": grab(r"VLM consumes ([\d.]+)--([\d.]+) of the estimated capacity, compared with ([\d.]+)--([\d.]+) on the GPU", None),
     "appD_cum_exceeds": grab(r"cumulative estimated load exceeds 1\.0 in (\d+) of the (\d+) NPU workload groups", None),

@@ -434,6 +434,51 @@ with stage("6_divergence_sweep_coverage"):
 
     sw = ba.sweep_setcounts(rows_pl, "normalized", ba.PRIMARY_ALPHAS, ba.PRIMARY_BETAS)
     R["sweep"] = {f"{a}/{b}": v for (a, b), v in sw.items()} if isinstance(sw, dict) else sw
+    # App.G: "the two measured candidate sets are identical, every candidate places the
+    # same instances on the CPU, and the CPU-side feature contribution is identical
+    # across all 540 windows". The last clause is what carries the common-mode argument
+    # against the thread-setting objection, so recompute it rather than assert it.
+    # CPU-side contribution = the part of the 37 features that comes from CPU-placed
+    # instances: their count, the sum of their isolated CPU latencies, and the sum of
+    # their capacities (1000/latency). Those are identical by construction only if the
+    # placements themselves are -- which is exactly what is being checked.
+    _S_cpu = {r["model"]: r.get("cpu_infer")
+              for r in json.loads(ac.STATIC_JSON.read_text())["total_data"]}
+
+    def _cpu_side(pl):
+        out = {}
+        for w in ac.load_windows(pl):
+            on_cpu = sorted(v["model"] for v in w["models"].values()
+                            if _norm_exec(v["execution"]) == "cpu")
+            lat = [_S_cpu[m] for m in on_cpu if _S_cpu.get(m)]
+            out[str(w["combination"])] = {
+                "models": tuple(on_cpu),
+                "n": len(on_cpu),
+                "sum_static_infer": round(sum(lat), 9),
+                "sum_capacity": round(sum(1000.0 / v for v in lat), 9),
+            }
+        return out
+
+    _cs = {pl: _cpu_side(pl) for pl in ac.PLATFORMS}
+    _combos = sorted(set(_cs["gpu"]) | set(_cs["npu"]))
+    _diff_place = [c for c in _combos
+                   if _cs["gpu"].get(c, {}).get("models") != _cs["npu"].get(c, {}).get("models")]
+    _diff_feat = [c for c in _combos
+                  if tuple(_cs["gpu"].get(c, {}).get(k) for k in
+                           ("n", "sum_static_infer", "sum_capacity"))
+                  != tuple(_cs["npu"].get(c, {}).get(k) for k in
+                           ("n", "sum_static_infer", "sum_capacity"))]
+    R["cpu_side_identity"] = {
+        "n_windows": {pl: len(_cs[pl]) for pl in ac.PLATFORMS},
+        "n_windows_compared": len(_combos),
+        "combination_keys_identical": sorted(_cs["gpu"]) == sorted(_cs["npu"]),
+        "n_windows_cpu_placement_differs": len(_diff_place),
+        "n_windows_cpu_feature_subtotal_differs": len(_diff_feat),
+        "differing_combinations": (_diff_place + _diff_feat)[:10],
+        "n_cpu_instances_total": sum(v["n"] for v in _cs["gpu"].values()),
+        "n_windows_with_no_cpu_instance": sum(1 for v in _cs["gpu"].values() if v["n"] == 0),
+    }
+
     # coverage
     cov = []
     for sid, models in SETS.items():

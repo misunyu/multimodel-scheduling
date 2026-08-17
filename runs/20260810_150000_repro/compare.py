@@ -22,6 +22,9 @@ R = json.loads((HERE / "reproduced.json").read_text())
 results = []          # {item, section, expected, reproduced, verdict, note}
 
 
+_PLATFORMS = ("gpu", "npu")
+
+
 def dp(s):
     """표기 소수 자리수."""
     m = re.search(r"\.(\d+)", str(s))
@@ -352,6 +355,25 @@ chk_eq("inline appH what-differs npu offloads", "App.H", int(_WD[1]),
        _W["n_npu_offloads_resnet50_gpu_all_accel"])
 chk_eq("inline appH what-differs model name", "App.H", _WD[2].lower(), "resnet50")
 
+# ------------------------------------------- App.G CPU 경로 공통 모드 주장 (신설)
+# 원고: "the two measured candidate sets are identical, every candidate places the same
+# instances on the CPU, and the CPU-side feature contribution is identical across all
+# 540 windows". 세 절을 각각 대조한다 — 540 이라는 수 자체도 앵커다.
+_C = R["cpu_side_identity"]
+chk_eq("inline appG n_windows", "App.G", int(I["appG_cpu_identity"][0]),
+       _C["n_windows_compared"])
+for pl in _PLATFORMS:
+    chk_eq(f"inline appG n_windows {pl.upper()}", "App.G",
+           int(I["appG_cpu_identity"][0]), _C["n_windows"][pl])
+chk_eq("inline appG candidate sets identical", "App.G", True,
+       _C["combination_keys_identical"])
+chk_eq("inline appG same instances on CPU", "App.G", 0,
+       _C["n_windows_cpu_placement_differs"],
+       "원고: every candidate places the same instances on the CPU")
+chk_eq("inline appG CPU-side feature identical", "App.G", 0,
+       _C["n_windows_cpu_feature_subtotal_differs"],
+       "원고: the CPU-side feature contribution is identical across all 540 windows")
+
 # App.F (설정값 — 코드 상수와 대조)
 chk_eq("F.grid", "App.F", ("3", "0.1", "4", "0.1", "5", "0.05", "6", "0.1"),
        tuple(I["appF_grid"]))
@@ -401,7 +423,6 @@ chk_eq("inline sweep claim NPU max", "§4", int(I["sweep_claim"][1]),
        max(c["n_changed_sets_npu"] for c in _cells))
 
 # App.B "eight predictor--platform combinations": 이 스위트가 실제로 평가하는 예측기 수
-_PLATFORMS = ("gpu", "npu")
 _PREDICTORS = ("direct", "zero_shot", "joint", "decomposed")
 # zero_shot is keyed by direction ("npu->gpu"), the others by platform -- both are two
 # entries per predictor, one per evaluation platform.
