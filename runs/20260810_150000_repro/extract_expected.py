@@ -149,10 +149,13 @@ E["inline"] = {
     # 다음 문장으로 옮겨졌다. 캡처가 7개 -> 6개가 된다 (완료 횟수 검사 1건만 소멸).
     # 2026-08-18: App A 가 다시 재작성되어 180\,s 창 언급이 이 문단에서 사라졌다.
     # 캡처 5개 (12.3 / 0.10 / 0.61 / 32 / 18). 창 길이 검사 1건이 추가로 소멸한다.
-    "appA_vlm_cost": grab(r"isolated time to first token is \$([\d.]+)\$\\,s on the CPU, "
-                          r"compared with \$([\d.]+)\$\\,s on the GPU and \$([\d.]+)\$\\,s "
-                          r"on the NPU, and a single (\d+)-token CPU request takes about "
-                          r"\$(\d+)\$\\,s", None),
+    # 2026-08-18: App A VLM 문단이 두 문장으로 재작성됐다 ("When run in isolation, ...
+    # A request that generates the full 32-token budget of Appendix~G then takes ...").
+    # 180\,s 창 언급은 이 문단에 없다 -> 캡처 5개.
+    "appA_vlm_cost": grab(r"time to first token is \$([\d.]+)\$\\,s on the CPU, compared "
+                          r"with \$([\d.]+)\$\\,s on the GPU and \$([\d.]+)\$\\,s on the "
+                          r"NPU\..*?full (\d+)-token budget of Appendix~G then takes about "
+                          r"\$(\d+)\$\\,s", None, flags=re.S),
     # 본문 §3 신규 주장 (2026-08-18). App B 가 같은 사실을 다른 표현으로 인쇄하므로
     # 두 표기를 같은 재현값(R["y3_restored_invariance"])에서 유도해 대조한다.
     "sec3_y3_restore": grab(r"For (\d+) CPU-side LLM windows per platform, per-instance "
