@@ -401,6 +401,21 @@ chk_eq("inline appG CPU-side feature identical", "App.G", 0,
 # extract_expected 가 뽑기만 하고 여기서 쓰지 않던 캡처들. 원고에 인쇄된 수치가 검사망
 # 밖에 있는 상태였으므로 전부 닫는다.
 
+# --- App.A: 층화 표집 총량과 양 끝 층 (2026-08-18 신설)
+_SQ = R["sampling_quota"]
+_Q = I["appA_sampling_quota"]
+for j in range(3):
+    n_free, target = int(_Q[2 * j + 1]), int(_Q[2 * j])
+    chk_eq(f"inline appA quota free={n_free}", "App.A", target,
+           _SQ["target_by_free"][str(n_free)],   # JSON 왕복으로 키가 문자열이 된다
+           "working_sets.yaml:stratified_target_by_free")
+_ES = I["appA_extreme_strata"]
+chk_eq("inline appA extreme strata count", "App.A", int(_ES[0]), 2)
+chk_eq("inline appA extreme stratum size", "App.A", int(_ES[1]), 1)
+chk_eq("inline appA extreme strata all size 1", "App.A", True,
+       _SQ["extreme_strata_all_size_one"], "다섯 층화 세트 전부에서 양 끝 층 조합 수 = 1")
+chk_eq("inline appA n stratified sets", "App.A", 5, len(_SQ["stratified_sets"]))
+
 # --- App.A: exhaustive 30그룹 분해 (§4 와 같은 사실을 App A 가 다시 인쇄한다)
 _EX = R["divergence"]["exhaustive_beta_1.0"]
 _AE = I["appA_exhaustive"]

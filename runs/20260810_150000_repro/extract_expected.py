@@ -165,6 +165,13 @@ E["inline"] = {
     "appA_rates": grab(r"corresponding rates are \$([\d.]+)\\%\$ against \$([\d.]+)\\%\$ "
                        r"over all (\d+) groups at \$\\beta\{=\}1\.0\$, and \$([\d.]+)\\%\$ "
                        r"against \$([\d.]+)\\%\$ at \$\\beta\{=\}0\.5\$", None),
+    # App.A 층화 표집 절차 (2026-08-18 신설). 총량 3개 + 자유 인스턴스 수 3개 +
+    # "양 끝 층은 각각 배치 1개" 주장. 값의 정본은 working_sets.yaml 이다.
+    "appA_sampling_quota": grab(r"we fix the total sample size at (\d+) placements for sets "
+                                r"with (\w+) non-pinned instances, (\d+) for sets with (\w+), "
+                                r"and (\d+) for sets with (\w+)", None),
+    "appA_extreme_strata": grab(r"The (\w+) extreme strata each contain (\w+) placement and "
+                                r"are always included", None),
     "appA_exhaustive": grab(r"the GPU and NPU disagree on the best measured placement in (\d+) groups: (\d+) of (\d+) generative groups and none of the (\d+) vision-only", None),
     "appA_beta05_exhaustive": grab(r"At \$\\beta\{=\}0\.5\$, (\d+) of the (\d+) exhaustive groups diverge", None),
     "appA_counts": grab(r"yields (\d+) placement configurations\..*?produces (\d+) measurement "

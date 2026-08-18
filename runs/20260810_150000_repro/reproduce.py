@@ -668,6 +668,21 @@ with stage("8b_uncompared_printed_values"):
     gb = _ilu.module_from_spec(_sp); _sp.loader.exec_module(gb)
     from xgboost_model.deploy_selector_xgb_suite import load_static_profiles as _lsp
     _S = _lsp(ac.STATIC_JSON)
+    import itertools as _it
+    import model_registry as _reg
+
+    def gcs_free(models):
+        """비고정(=CPU 배치 허용) 모델. gen_collection_schedules.free_models 와 동일 정의."""
+        return [m for m in models if "cpu" in _reg.allowed_devices(m)]
+
+    def _all_placements(models, free):
+        out = []
+        for combo in _it.product(["cpu", "accel"], repeat=len(free)):
+            p_ = dict(zip(free, combo))
+            for m in models:
+                p_.setdefault(m, "accel")
+            out.append(p_)
+        return out
 
     # --- App.D: VLM 용량 소비 범위, cum>1.0 그룹 수, load-factor 에서 VLM 앞 admit 수
     gd = {}
@@ -702,6 +717,30 @@ with stage("8b_uncompared_printed_values"):
                   "vlm_admit_before_max": max(admit_before),
                   "n_groups_with_vlm": len(admit_before)}
     R["greedy_detail"] = gd
+
+    # --- App.A 표집 총량 (지시문 #30 Phase 3-2). 원고가 16/20/24 를 새로 인쇄한다.
+    # 값의 정본은 working_sets.yaml:stratified_target_by_free 이며, 그 파일은 이미
+    # paper.lock 엔트리다. 상수 대조 + 양 끝 층 크기가 1 이라는 주장도 함께 확인한다.
+    _W = yaml.safe_load((ROOT / "working_sets.yaml").read_text())
+    _tgt = {int(k): int(v) for k, v in _W["stratified_target_by_free"].items()}
+    _strat = {}
+    for sid in sorted(_W["stratified_sets"]):
+        models = _W["sets"][sid]
+        free = gcs_free(models)
+        sizes = {}
+        for p_ in _all_placements(models, free):
+            k = sum(1 for m in free if p_[m] == "accel")
+            sizes[k] = sizes.get(k, 0) + 1
+        _strat[sid] = {"n_free": len(free), "target": _tgt[len(free)],
+                       "stratum_sizes": dict(sorted(sizes.items())),
+                       "extreme_sizes": [sizes[min(sizes)], sizes[max(sizes)]]}
+    R["sampling_quota"] = {
+        "target_by_free": _tgt,
+        "stratified_sets": sorted(_W["stratified_sets"]),
+        "per_set": _strat,
+        "extreme_strata_all_size_one": all(v["extreme_sizes"] == [1, 1]
+                                           for v in _strat.values()),
+    }
 
     # --- App.B: 외삽 yhat3 를 0 으로 두는 개입의 group-mean Spearman 변화 (8조합 최대)
     tgt = {pl: (DATA[pl]["M"]["has_gen"].values.astype(bool)
