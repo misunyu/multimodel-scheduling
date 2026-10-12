@@ -17,13 +17,27 @@ class ModelSignals(QObject):
     update_view2_display = pyqtSignal(QPixmap)
     update_view3_display = pyqtSignal(QPixmap)
     update_view4_display = pyqtSignal(QPixmap)
+    # Supporting tiles (every running model that is not one of the four leads), keyed
+    # by view name. One signal for all of them: their number varies with the set.
+    update_support_display = pyqtSignal(str, QPixmap)
+
+
+class SupportEmitter:
+    """Gives a supporting view the same `.emit(pixmap)` a lead's signal has."""
+
+    def __init__(self, model_signals, view_name):
+        self._signal = model_signals.update_support_display
+        self._view_name = view_name
+
+    def emit(self, pixmap):
+        self._signal.emit(self._view_name, pixmap)
 
 class ViewHandler:
     """Base class for handling model views."""
     
     def __init__(self, view_name, model_settings, frame_queue, result_queue,
                  shutdown_flag, model_signals, views_without_model=None,
-                 display_slot=None):
+                 display_slot=None, support=False):
         """
         Initialize the view handler.
         
@@ -58,14 +72,27 @@ class ViewHandler:
         self.wait_count = 0
         self.avg_wait_ms = 0.0
         
-        # Display signal for this view. `display_slot` is the UI tile this view was
-        # assigned (view1..view4), or None when the model is not visualizable or no
-        # tile was left. A view without a slot runs headless: it still executes and
-        # still contributes to the statistics, it is just not drawn.
+        # Where this view is drawn. A LEAD has a `display_slot` (view1..view4) and
+        # always renders. A SUPPORTING view (`support=True`) has a small tile that is
+        # only drawn while the display is in exhibition mode: `render_enabled` is the
+        # switch, flipped at runtime. A view with neither runs headless. In every case
+        # it executes and feeds the statistics identically -- this decides drawing only.
         self.display_slot = display_slot
+        self.is_support = False
         self.update_signal = (getattr(model_signals, f"update_{display_slot}_display", None)
                               if display_slot else None)
-        self.headless = self.update_signal is None
+        if self.update_signal is None and support:
+            self.update_signal = SupportEmitter(model_signals, view_name)
+            self.is_support = True
+        self.render_enabled = not self.is_support
+        # Lead tiles carry a metric strip under the header; the viewer refreshes these
+        # segments from the per-view statistics once a second.
+        self.strip_segments = None
+        # Counters the display test reads. `frames_emitted` only ever grows, so a
+        # restart or a stall of this view's rendering is visible in it.
+        self.frames_emitted = 0
+        self.msg_count = 0          # items received from the worker (proof it loaded)
+        self.last_error = None
         
         # Get model type and execution mode
         self.model_type = model_settings.get(view_name, {}).get("model", "")
@@ -90,11 +117,25 @@ class ViewHandler:
         # Count of completed requests whose latency exceeded the deadline.
         self.late_count = 0
 
+    @property
+    def headless(self):
+        """True while nothing should be drawn for this view."""
+        return self.update_signal is None or not self.render_enabled
+
     def start_display_thread(self):
         """Start the display thread for this view."""
         thread = threading.Thread(target=self.display_frames, daemon=True)
+        self.thread = thread
         thread.start()
         return thread
+
+    def render_now(self):
+        """Draw the current state immediately (a supporting tile that just became
+        visible must not wait for its model's next result). Subclasses override."""
+        if not self.headless:
+            self._last_wait_paint = 0.0
+            self._got_frame = False
+            self.show_waiting()
         
     def display_frames(self):
         """Display frames from the result queue. To be implemented by subclasses."""
@@ -130,13 +171,16 @@ class ViewHandler:
         Timed as the pipeline's 4th stage: this runs on the CPU in the GUI process no
         matter where the model was placed, so it is a cost the placement cannot remove.
         """
-        if self.update_signal is None or bgr is None:
+        if self.headless or bgr is None:
             return
         t0 = time.time()
         try:
+            bgr = (dr.support_thumb(bgr) if self.is_support
+                   else dr.insert_metric_strip(bgr, self.strip_segments))
             pixmap = convert_cv_to_qt(bgr)
             if not pixmap.isNull():
                 self.update_signal.emit(pixmap)
+                self.frames_emitted += 1
         except Exception as e:
             print(f"[{self.view_name} render ERROR] {e}")
             return
@@ -237,6 +281,7 @@ class YoloViewHandler(ViewHandler):
             try:
                 # (frame, infer_time, wait_ms, latency_ms)
                 item = self.result_queue.get(timeout=1)
+                self.msg_count += 1
                 if self.handle_control(item):
                     continue
                 latency_ms = None
@@ -270,14 +315,24 @@ class YoloViewHandler(ViewHandler):
                     self.total_wait_ms += float(wait_ms)
                     self.wait_count += 1
                     self.avg_wait_ms = self.total_wait_ms / self.wait_count if self.wait_count > 0 else 0.0
+                self._last_frame = frame
                 if self.headless:
                     continue
-                # The worker already drew the boxes; add the model/device/FPS header.
-                self._got_frame = True
-                self.emit_image(dr.draw_header(frame, self.model_type,
-                                               self.execution_mode, self.metric_text()))
+                self._render(frame)
             except Exception as e:
                 print(f"[{self.view_name} Display ERROR] {e}")
+
+    def _render(self, frame):
+        # The worker already drew the boxes; add the model/device/FPS header.
+        self._got_frame = True
+        self.emit_image(dr.draw_header(frame, self.model_type,
+                                       self.execution_mode, self.metric_text()))
+
+    def render_now(self):
+        frame = getattr(self, '_last_frame', None)
+        if frame is None or self.headless:
+            return super().render_now()
+        self._render(frame.copy())
 
 class ResNetViewHandler(ViewHandler):
     """Handler for ResNet model views."""
@@ -299,6 +354,7 @@ class ResNetViewHandler(ViewHandler):
             try:
                 # (frame, top5, infer_time, latency_ms) -- top5: [(label, prob), ...]
                 item = self.result_queue.get(timeout=1)
+                self.msg_count += 1
                 if self.handle_control(item):
                     continue
                 latency_ms = None
@@ -327,13 +383,23 @@ class ResNetViewHandler(ViewHandler):
             try:
                 self.update_stats(self.model_type, infer_time)
                 self.note_latency(latency_ms)
+                self._last_result = (frame, top5)
                 if self.headless:
                     continue
-                self._got_frame = True
-                self.emit_image(dr.top5_panel(frame, top5, self.model_type,
-                                              self.execution_mode, self.metric_text()))
+                self._render(frame, top5)
             except Exception as e:
                 print(f"[{self.view_name} Display ERROR] {e}")
+
+    def _render(self, frame, top5):
+        self._got_frame = True
+        self.emit_image(dr.top5_panel(frame, top5, self.model_type,
+                                      self.execution_mode, self.metric_text()))
+
+    def render_now(self):
+        last = getattr(self, '_last_result', None)
+        if last is None or self.headless:
+            return super().render_now()
+        self._render(*last)
 
 class LLMViewHandler(ViewHandler):
     """Handler for LLM / VLM views: renders the generation as it streams.
@@ -381,6 +447,9 @@ class LLMViewHandler(ViewHandler):
                                      self.metric_text(), image=self.image,
                                      generating=self.generating, prompt=self.prompt))
 
+    def render_now(self):
+        self._paint(force=True)
+
     def display_frames(self):
         if self.view_name in self.views_without_model:
             return
@@ -403,6 +472,7 @@ class LLMViewHandler(ViewHandler):
                 print(f"[{self.view_name} LLM ERROR] {e}")
                 continue
             try:
+                self.msg_count += 1
                 if self.handle_control(item):
                     continue
                 tag = (item[0] if isinstance(item, tuple) and item

@@ -7,9 +7,9 @@ import time
 import signal
 import yaml
 from datetime import datetime
-from PyQt5.QtWidgets import (QMainWindow, QLabel, QWidget, QVBoxLayout, QFileDialog,
-                             QPushButton)
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QPushButton, QFrame,
+                             QGridLayout, QSizePolicy)
+from PyQt5.QtCore import QTimer, Qt, QEvent
 from PyQt5 import uic
 from multiprocessing import Process, Queue, Event
 
@@ -55,6 +55,7 @@ from model_processors import (
     run_vlm_process,
 )
 import model_registry as reg
+import demo_render as dr
 
 # Repo root, resolved from this file rather than the cwd. The .ui files and the
 # sample video live here; resolving them relatively meant that launching the app
@@ -72,16 +73,22 @@ DEMO_VLM_PROMPT = os.environ.get("DEMO_VLM_PROMPT") or None
 
 def _asset(name: str) -> str:
     return name if os.path.isabs(name) else os.path.join(_HERE, name)
+# Lead whitelist: the four models the demo is built around. Whichever of these are
+# running take the 2x2 grid first; the single source of truth, so do not test model
+# names for "lead-ness" anywhere else. Cells still free after that are filled with the
+# largest of the other running models (model_registry.PARAMS_M), so the grid shows
+# four live tiles whenever four models are running.
+LEAD_WHITELIST = ("qwen2_vl", "resnet50", "yolo11s", "llama1b")
 
-# Only these models are rendered. Everything else in the deployment still loads,
-# infers and is measured exactly as before -- it simply gets no view. The single
-# source of truth: do not test model names for "renderability" anywhere else.
-VISUALIZABLE_MODELS = {"qwen2_vl", "resnet50", "yolo11s", "llama1b"}
-
-# The .ui provides four QLabel slots and four display signals. A schedule may
-# activate more concurrent models than that; the extra views run headless —
-# they execute and contribute to the statistics, they just aren't rendered.
+# The .ui provides four QLabel slots and four display signals: the leads. Every other
+# running model is a SUPPORTING view -- it executes and is measured exactly the same,
+# and is drawn (small, in the right-hand column) only in exhibition mode.
 DISPLAY_SLOTS = ["view1", "view2", "view3", "view4"]
+
+# The right-hand column is this fraction of the window width, whatever the mode or the
+# number of models. The left 2x2 gets the rest, so nothing but a window resize can
+# change the size of a lead tile.
+RIGHT_COL_RATIO = 0.21
 
 # Seconds discarded before measurement starts. 5s was not enough: llama1b's first
 # inference lands at 13.4s in the 8-model set, so the window opened while it was still
@@ -89,277 +96,158 @@ DISPLAY_SLOTS = ["view1", "view2", "view3", "view4"]
 # deadline-miss rate. Measured in DURATION_CONVERGENCE_REPORT.md.
 WARMUP_SECONDS = float(os.environ.get("WARMUP_SECONDS", "20"))
 MAX_VIEWS = 8
-# Colors cycled through when rendering the per-view performance summary.
-VIEW_COLORS = ["gray", "purple", "green", "blue", "darkorange", "brown", "teal", "magenta"]
 
-class InfoWindow(QWidget):
-    """Main window for displaying system and model information."""
-    
-    def __init__(self, parent=None):
-        """Initialize the InfoWindow."""
-        super().__init__()
-        # Load UI from file instead of creating components programmatically
-        uic.loadUi(_asset("info_window.ui"), self)
-        # Set window flags to make it behave like a main window and always stay on top of other app windows
-        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
-        
-        # Store parent reference for callbacks
-        self.parent = parent
-        
-        # Add black borders to all labels
-        border_style = "border: 1px solid black;"
-        self.schedule_name_label.setStyleSheet(border_style)
-        try:
-            self.metrics_label.setStyleSheet(border_style)
-        except Exception:
-            pass
-        # Trigger text under metrics: left aligned; keep border for consistency
-        try:
-            self.trigger_below_metrics_label.setStyleSheet(border_style)
-        except Exception:
-            pass
-        self.model_performance_label.setStyleSheet(border_style)
-        self.cpu_info_label.setStyleSheet(border_style)
-        try:
-            self.npu_info_label.setStyleSheet(border_style)
-        except Exception:
-            pass
-        
-        # Initialize the start button
-        self.start_button.clicked.connect(self.on_start_button_clicked)
-        
-        # Initialize the stop button
-        self.stop_button.clicked.connect(self.on_stop_button_clicked)
 
-        # Initialize the best button (open JSON file dialog)
-        try:
-            self.best_button.clicked.connect(self.load_best_schedule)
-        except Exception:
-            # If best_button is not present for some reason, ignore gracefully
-            pass
+def select_leads(view_models):
+    """Pick the (at most four) lead views for a running set.
 
-        # Connect the Browse... button to select a schedule folder
-        try:
-            self.browse_schedule_folder_button.clicked.connect(self.on_browse_schedule_folder_clicked)
-        except Exception:
-            # If the button is not present, ignore gracefully
-            pass
-        
-        # Default execution duration is 60 seconds
-        self.duration_edit.setText("10")
-        
-    def on_start_button_clicked(self):
-        """Handle the start button click event."""
-        try:
-            duration = int(self.duration_edit.text())
-            if duration <= 0:
-                print("Duration must be a positive number")
-                return
-            
-            # Call the parent's start_execution method if available
-            if self.parent and hasattr(self.parent, 'start_execution'):
-                self.parent.start_execution(duration)
-            else:
-                print(f"Starting execution with duration: {duration} seconds")
-        except ValueError:
-            print("Please enter a valid number for duration")
-            
-    def on_stop_button_clicked(self):
-        """Handle the stop button click event."""
-        # Call the parent's stop_execution method if available
-        if self.parent and hasattr(self.parent, 'stop_execution'):
-            try:
-                self.parent.stop_execution()
-            except Exception:
-                pass
-            # Also close the viewer window so it disappears immediately on Ubuntu
-            try:
-                if hasattr(self.parent, 'close'):
-                    self.parent.close()
-            except Exception:
-                pass
-        else:
-            print("Stopping execution")
+    `view_models` is [(view_name, model_name), ...] in view order. Returns
+    (whitelisted, fill): the whitelisted views in view order, then -- only if fewer
+    than four -- the remaining views largest-model-first until four are chosen. Ties
+    keep view order. Purely a rendering decision.
+    """
+    n = len(DISPLAY_SLOTS)
+    whitelisted = [v for v, m in view_models if m in LEAD_WHITELIST][:n]
+    rest = [(v, m) for v, m in view_models if v not in whitelisted]
+    rest.sort(key=lambda vm: -reg.params_m(vm[1]))
+    fill = [v for v, _ in rest[:n - len(whitelisted)]]
+    return whitelisted, fill
 
-    def load_best_schedule(self):
-        """Open a file dialog to select a .json schedule and load it. If canceled, do nothing."""
-        try:
-            # Open file dialog restricted to JSON files
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select Best Schedule JSON",
-                "",
-                "JSON Files (*.json);;All Files (*)"
-            )
-            # If the dialog was canceled or closed (e.g., ESC), do nothing
-            if not file_path:
-                return
-            # Remember selection and show in the schedule name label
-            self.selected_best_json = file_path
-            try:
-                self.update_schedule_name(f"Best schedule: {os.path.basename(file_path)}")
-            except Exception:
-                # Fallback: set text directly
-                self.schedule_name_label.setText(f"Best schedule: {os.path.basename(file_path)}")
-            
-            # If parent viewer can handle it, notify parent
-            if self.parent and hasattr(self.parent, 'load_best_schedule'):
-                try:
-                    self.parent.load_best_schedule(file_path)
-                except Exception as e:
-                    print(f"[InfoWindow] load_best_schedule failed: {e}")
-        except Exception as e:
-            print(f"[InfoWindow] Failed to open file dialog: {e}")
-        
-    def on_browse_schedule_folder_clicked(self):
-        """Open a directory selection dialog and set the chosen path into schedule_folder_input."""
-        try:
-            try:
-                start_dir = self.schedule_folder_input.text().strip()
-            except Exception:
-                start_dir = ""
-            if not start_dir:
-                start_dir = os.getcwd()
-            folder = QFileDialog.getExistingDirectory(self, "Select Schedule Folder", start_dir)
-            if folder:
-                try:
-                    self.schedule_folder_input.setText(folder)
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"[InfoWindow] Failed to open select folder dialog: {e}")
-        
-    def get_execution_duration(self):
-        """Get the execution duration from the input field."""
-        try:
-            return int(self.duration_edit.text())
-        except ValueError:
-            return 60  # Default value if input is invalid
-    
-    def update_model_performance(self, text):
-        """Update the model performance label."""
-        self.model_performance_label.setText(text)
-    
-    def update_trigger_below_metrics(self, text):
-        """Update the trigger status text placed under metrics (left-aligned)."""
-        try:
-            self.trigger_below_metrics_label.setStyleSheet("border: 1px solid black;")
-        except Exception:
-            pass
-        self.trigger_below_metrics_label.setText(text)
-    
-    def update_cpu_info(self, text):
-        """Update the CPU info label."""
-        self.cpu_info_label.setText(text)
-    
-    def update_npu_info(self, text):
-        """Update the NPU info label."""
-        self.npu_info_label.setText(text)
-        
-    def update_schedule_name(self, text):
-        """Update the schedule name label."""
-        self.schedule_name_label.setText(text)
-        
-    def update_metrics(self, text):
-        """Update the compact metrics label below the schedule name."""
-        try:
-            self.metrics_label.setText(text)
-        except Exception:
-            pass
-        
-    def closeEvent(self, event):
-        """Handle window close event - terminate the application."""
-        print("[InfoWindow] Close event triggered - terminating application")
-        event.accept()
-        
-        # If we have a parent (UnifiedViewer), call its shutdown method
-        if self.parent and hasattr(self.parent, 'shutdown_all'):
-            self.parent.shutdown_all()
-        else:
-            # If no parent, exit directly
-            print("[InfoWindow] Closing application directly")
-            os._exit(0)
+
+def _fmt_ms(ms):
+    """Latency for a strip: milliseconds, or seconds once it stops fitting."""
+    try:
+        ms = float(ms)
+    except Exception:
+        return "--"
+    return f"{ms / 1000.0:.1f} s" if ms >= 1000.0 else f"{ms:.1f} ms"
+
+
+class SupportTile(QFrame):
+    """A supporting model's small tile: caption (model, device badge, one figure) over
+    a scaled-down live rendering."""
+
+    CAPTION_H = 38
+    BODY_ASPECT = (dr.VIEW_H - 34) / float(dr.VIEW_W)   # body height / width
+
+    def __init__(self, view_name, model, device, parent=None):
+        super().__init__(parent)
+        self.view_name = view_name
+        self.model = model
+        self.device = str(device or "?")
+        self.setObjectName(f"support_{view_name}")
+        self.setStyleSheet("SupportTile { background-color: #202020; border: 1px solid #555555; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(2)
+        self.caption = QLabel(self)
+        self.caption.setTextFormat(Qt.RichText)
+        self.caption.setFixedHeight(self.CAPTION_H)
+        self.caption.setStyleSheet("font-size: 12px; color: #eeeeee; border: none;")
+        self.image = QLabel(self)
+        self.image.setScaledContents(True)
+        self.image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.image.setStyleSheet("border: none;")
+        lay.addWidget(self.caption)
+        lay.addWidget(self.image, 1)
+        self.set_metric("--")
+
+    def set_metric(self, text):
+        self.caption.setText(
+            f"<b>{self.model}</b> "
+            f"<span style='background-color:{dr.device_color_hex(self.device)}; color:#ffffff;'>"
+            f"&nbsp;{self.device.upper()}&nbsp;</span><br>{text}")
+
+    @classmethod
+    def height_for_width(cls, w):
+        return cls.CAPTION_H + 6 + int(round((w - 4) * cls.BODY_ASPECT))
+
 
 class UnifiedViewer(QMainWindow):
-    """Main viewer class for the multimodel scheduling application."""
-    
-    def __init__(self, schedule_file='model_schedules.yaml', combination_name=None, info_window=None):
+    """The Schedule Executor Display: four lead tiles, Stop All, and the right column.
+
+    Everything the old "System and Model Information" window showed lives here now:
+    per-view figures in a strip on each lead tile, the overall figures in the right
+    column. The right column has two modes, switchable while the run is going:
+
+      measure (default)  the overall panel; only the four leads are drawn.
+      exhibition         compact overall + a small live tile for every other model.
+
+    The mode changes what is DRAWN and nothing else. Every scheduled model is loaded,
+    runs and is measured identically in both.
+    """
+
+    def __init__(self, schedule_file='model_schedules.yaml', combination_name=None,
+                 show_all=False):
         """Initialize the UnifiedViewer.
-        
+
         Args:
             schedule_file (str): Path to the model scheduling information file.
             combination_name (str|None): Specific combination key to use from the YAML. If None, default logic applies.
+            show_all (bool): Start in exhibition mode (render the supporting views too).
         """
         super().__init__()
         uic.loadUi(_asset("schedule_executor_display.ui"), self)
-        
+
         # Set up signal handler for SIGINT (Ctrl+C)
         signal.signal(signal.SIGINT, self.signal_handler)
 
         # Store the schedule file path and requested combination
         self.schedule_file = schedule_file
         self.requested_combination = combination_name
-        
-        # Create or reuse the info window as the main window (persistent across runs)
-        if info_window is not None:
-            self.info_window = info_window
-            # Rebind controller so buttons control this viewer instance
-            try:
-                self.info_window.parent = self
-            except Exception:
-                pass
-        else:
-            self.info_window = InfoWindow(parent=self)
-        # Show the info window only when not marked as headless/hidden
-        try:
-            if not getattr(self.info_window, 'hidden_headless', False):
-                self.info_window.show()
-        except Exception:
-            # Fallback to show to preserve legacy behavior if attribute missing
-            try:
-                self.info_window.show()
-            except Exception:
-                pass
-        
-        # Set window title to indicate it's a secondary window
-        self.setWindowTitle("Schedule Executor Display (Secondary Window)")
+
+        # Hook the owner (the executor) sets to hear about mode changes, Stop All and
+        # window moves: notify(event_name, **fields). Default: nobody is listening.
+        self.notify = lambda _event, **_fields: None
+
+        self.rendering_enabled = os.environ.get("DISABLE_VISUALIZATION", "0") != "1"
+        self.show_all = bool(show_all) and self.rendering_enabled
+        self._live = None                 # last overall/per-view snapshot (1 s tick)
+        self._exh_accum = 0.0             # exhibition seconds inside the measured window
+        self._exh_since = None
+        self._run_t0 = None
+        self._await_paint = None          # mode switch waiting for its first repaint
+        self._await_support = None
+
+        self.setWindowTitle("Schedule Executor Display")
 
         # Initialize model settings and views
         self.initialize_model_settings()
         self.initialize_ui_components()
         self.initialize_state_variables()
         # Don't start processes and threads automatically
-        # They will be started when the Start Execution button is clicked
-        
-        # CPU/NPU monitoring
+        # They will be started when start_execution() is called
+
+        # CPU monitoring + the once-a-second refresh of every figure on screen
         self.cpu_timer = QTimer()
         self.cpu_timer.timeout.connect(self.update_cpu_npu_usage)
         self.cpu_timer.start(1000)
-    
+
+        # Display test probe: a machine-readable snapshot of what is on screen.
+        if os.environ.get("DISPLAY_PROBE", "0") == "1":
+            self._probe_timer = QTimer(self)
+            self._probe_timer.timeout.connect(self._emit_probe)
+            self._probe_timer.start(500)
+
     def initialize_model_settings(self):
         """Initialize model settings from YAML configuration."""
         self.model_settings = {}
         self.views_without_model = set()  # Track views without specified models
         # Default combination, can be overridden by requested_combination
         self.current_combination = self.requested_combination or "combination1"
-        
-        # Update the schedule name label
-        self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
-        
+
         try:
             # Load configuration from the specified schedule file
             with open(self.schedule_file, "r") as f:
                 config = yaml.safe_load(f) or {}
-                
+
             # Create a mapping from views to model configurations based on the display field
             view_to_model_map = {}
-            
+
             # If a specific combination was not requested or not found, choose the first available
             if (self.current_combination not in config) and config:
                 self.current_combination = next(iter(config))
-                # Update the schedule name label with the actual combination being used
-                self.info_window.update_schedule_name(f"Current Schedule: {self.current_combination}")
-                
+
             # Use the selected combination configuration
             if self.current_combination in config:
                 for model_config_name, model_config in (config[self.current_combination] or {}).items():
@@ -371,7 +259,7 @@ class UnifiedViewer(QMainWindow):
                                 "execution": model_config.get("execution", "cpu"),
                                 "infps": model_config.get("infps", None)
                             }
-            
+
             # Views actually scheduled, in numeric order (view1..viewN, N <= MAX_VIEWS).
             def _view_index(v):
                 digits = ''.join(ch for ch in v if ch.isdigit())
@@ -402,48 +290,49 @@ class UnifiedViewer(QMainWindow):
             self._assign_display_slots()
 
     def _assign_display_slots(self):
-        """Decide which scheduled views get a display slot: whitelist only, max four.
+        """Cast the run: which views are leads (2x2 grid), which are supporting.
+
+        Decided once, here, when the run starts; switching the display mode never
+        recasts. Leads are the whitelisted models that are running, topped up to four
+        with the largest of the others. Every remaining view is supporting.
 
         This is purely a rendering decision. Every scheduled view still gets a worker
-        process, still runs inference and still feeds the throughput / drop-rate /
-        score figures -- a model that is not visualizable is not excluded from the
-        deployment, it just has no tile.
+        process, still runs inference and still feeds the throughput / deadline-miss /
+        score figures, whichever group it lands in.
         """
         self.display_slot_of = {}
-        skipped = []
+        self.support_views = []
 
         # Data collection runs with rendering off: drawing costs CPU in the same
-        # process that feeds the workers, and the whitelist means only some models in
-        # a set pay it -- so leaving it on puts a per-model rendering cost into the
-        # training labels that has nothing to do with placement. The demo keeps it on.
-        if os.environ.get("DISABLE_VISUALIZATION", "0") == "1":
+        # process that feeds the workers, and only some models in a set pay it -- so
+        # leaving it on puts a per-model rendering cost into the training labels that
+        # has nothing to do with placement. The demo keeps it on.
+        if not self.rendering_enabled:
             print("[UnifiedViewer] DISABLE_VISUALIZATION=1 -- rendering off; "
                   "all views run headless (execution and measurement unchanged).")
             return
 
-        for view in self.view_names:
-            model = (self.model_settings.get(view, {}) or {}).get("model", "")
-            if model in VISUALIZABLE_MODELS:
-                if len(self.display_slot_of) < len(DISPLAY_SLOTS):
-                    self.display_slot_of[view] = DISPLAY_SLOTS[len(self.display_slot_of)]
-                else:
-                    skipped.append(f"{model} ({view}, no slot left)")
-            else:
-                skipped.append(f"{model} ({view}, not visualizable)")
+        def _model(v):
+            return (self.model_settings.get(v, {}) or {}).get("model", "")
 
-        shown = [f"{self.model_settings[v]['model']} -> {slot}"
-                 for v, slot in self.display_slot_of.items()]
-        print(f"[UnifiedViewer] Visualizing {len(shown)}/{len(self.view_names)} views: "
-              f"{', '.join(shown) or 'none'}")
-        if skipped:
-            print(f"[UnifiedViewer] Running without a view (still executed and measured): "
-                  f"{', '.join(skipped)}")
-        if not self.display_slot_of:
-            running = ", ".join((self.model_settings.get(v, {}) or {}).get('model', '?')
-                                for v in self.view_names)
-            print(f"[UnifiedViewer] No visualizable models in this deployment. "
-                  f"Running: {running}. Execution and measurement continue as normal; "
-                  f"the whitelist is: {', '.join(sorted(VISUALIZABLE_MODELS))}.")
+        whitelisted, fill = select_leads([(v, _model(v)) for v in self.view_names])
+        for view in whitelisted + fill:
+            self.display_slot_of[view] = DISPLAY_SLOTS[len(self.display_slot_of)]
+        self.support_views = [v for v in self.view_names if v not in self.display_slot_of]
+
+        print(f"[UnifiedViewer] Leads {len(self.display_slot_of)}/{len(self.view_names)}: "
+              + (", ".join(f"{_model(v)} -> {slot}" for v, slot in self.display_slot_of.items())
+                 or "none"))
+        if fill:
+            print("[UnifiedViewer] Lead cells filled by model size (largest first, "
+                  "model_registry.PARAMS_M, millions of parameters): "
+                  + ", ".join(f"{_model(v)}={reg.params_m(_model(v)):g}M" for v in fill)
+                  + (". Passed over: " + ", ".join(
+                      f"{_model(v)}={reg.params_m(_model(v)):g}M" for v in self.support_views)
+                     if self.support_views else "."))
+        if self.support_views:
+            print(f"[UnifiedViewer] Supporting views (executed and measured; drawn only in "
+                  f"exhibition mode): {', '.join(_model(v) for v in self.support_views)}")
 
     def initialize_ui_components(self):
         """Initialize UI components."""
@@ -451,6 +340,8 @@ class UnifiedViewer(QMainWindow):
         self.view2 = self.findChild(QLabel, "view2")
         self.view3 = self.findChild(QLabel, "view3")
         self.view4 = self.findChild(QLabel, "view4")
+        for slot in DISPLAY_SLOTS:
+            getattr(self, slot).setStyleSheet("background-color: #181818; border: 1px solid #444444;")
 
         # Stop All: the demo needs one obvious way to halt everything on stage.
         self.stop_all_button = self.findChild(QPushButton, "stop_all_button")
@@ -465,73 +356,448 @@ class UnifiedViewer(QMainWindow):
         self.model_signals.update_view2_display.connect(self.update_view2_display)
         self.model_signals.update_view3_display.connect(self.update_view3_display)
         self.model_signals.update_view4_display.connect(self.update_view4_display)
-    
+        self.model_signals.update_support_display.connect(self.update_support_display)
+
+        self._build_support_tiles()
+
+        # Right column: the mode toggle, the exhibition badge, and the two pages.
+        self.schedule_name_label.setText(str(self.current_combination))
+        self.show_all_toggle.setChecked(self.show_all)
+        self.show_all_toggle.setEnabled(self.rendering_enabled)
+        self.show_all_toggle.toggled.connect(self._on_toggle_clicked)
+        self.rightStack.setCurrentIndex(1 if self.show_all else 0)
+        self.exhibition_badge.setVisible(self.show_all)
+        for page in (self.measurePage, self.exhibitionPage):
+            page.installEventFilter(self)
+        self._refresh_panels()
+
     def _layout_visible_views(self):
-        """Always show the .ui's fixed 2x2 grid: fill the used tiles, cross out the rest.
+        """Always show the .ui's fixed 2x2 grid: fill the lead tiles, cross out the rest.
 
         The display grid is FIXED at the four cells schedule_executor_display.ui defines
-        (view1..view4). The first M cells hold the visualizable models (M = the
-        whitelist intersection of the running set, at most four) and receive live
-        frames; the remaining 4-M cells get the X placeholder, so an unused cell reads
-        as deliberately empty and never as a black blank. M == 0 crosses out all four
-        and logs why. The grid is NEVER reflowed to M -- a two-model set shows two live
-        tiles plus two X, not a 1x2 strip.
+        (view1..view4). The first M cells hold the leads (M = min(4, running models))
+        and receive live frames; the remaining 4-M cells get the X placeholder, so an
+        unused cell reads as deliberately empty and never as a black blank. The grid is
+        NEVER reflowed to M, and its cells are size-policy Ignored with equal stretch,
+        so neither their content nor the display mode can resize them.
         """
-        from PyQt5.QtWidgets import QGridLayout
         from utils import create_x_image, convert_cv_to_qt
         grid = self.findChild(QGridLayout, "videoLayout")
         if grid is None:
             print("[UnifiedViewer] videoLayout not found; leaving the .ui layout as-is.")
             return
+        for i in range(2):
+            grid.setRowStretch(i, 1)
+            grid.setColumnStretch(i, 1)
 
-        # display_slot_of maps whitelist views -> DISPLAY_SLOTS[0..M-1], so the used
+        # display_slot_of maps lead views -> DISPLAY_SLOTS[0..M-1], so the used
         # display widgets are exactly the first M of DISPLAY_SLOTS.
         used = set(DISPLAY_SLOTS[i]
                    for i in range(len(getattr(self, 'display_slot_of', {}) or {})))
-        COLS = 2  # fixed 2x2, matching schedule_executor_display.ui's default layout
-
-        # Defensive: whitelist yields at most 4, but if more views ever map in, warn and
-        # keep only the first four cells (the .ui has exactly four).
-        if len(used) > len(DISPLAY_SLOTS):
-            print(f"[UnifiedViewer] {len(used)} display slots requested but the grid has "
-                  f"{len(DISPLAY_SLOTS)}; showing the first {len(DISPLAY_SLOTS)}.")
 
         x_pixmap = None
         filled = 0
-        for i, slot in enumerate(DISPLAY_SLOTS):   # always lay out all four cells
+        for slot in DISPLAY_SLOTS:
             widget = getattr(self, slot, None)
             if widget is None:
                 continue
-            try:
-                grid.removeWidget(widget)
-            except Exception:
-                pass
-            widget.setVisible(True)
-            grid.addWidget(widget, i // COLS, i % COLS)
             if slot in used:
                 filled += 1  # live model tile; frames arrive via display_slot_of
                 continue
             # Inactive cell: explicit X placeholder -- never a black blank.
             try:
                 if x_pixmap is None:
-                    x_pixmap = convert_cv_to_qt(create_x_image(label="No display"))
+                    x_pixmap = convert_cv_to_qt(create_x_image(
+                        dr.VIEW_W, dr.TILE_H, label="No display"))
                 if x_pixmap is not None and not x_pixmap.isNull():
                     widget.setPixmap(x_pixmap)
                     widget.setScaledContents(True)
             except Exception as e:
                 print(f"[Layout] X placeholder for {slot}: {e}")
 
-        if filled == 0:
-            # All four crossed out. The screen already shows four X tiles; also state the
-            # reason in the log. Execution and measurement continue regardless.
+        if filled == 0 and self.rendering_enabled:
             running = ", ".join(sorted(
                 (self.model_settings.get(v, {}) or {}).get('model', '?') for v in self.view_names))
-            print(f"[UnifiedViewer] No visualizable models in this deployment -- all four "
-                  f"slots crossed out. Running (executed and measured): {running or 'nothing'}. "
-                  f"Whitelist: {', '.join(sorted(VISUALIZABLE_MODELS))}. "
-                  f"Throughput, drop rate and score are unaffected.")
+            print(f"[UnifiedViewer] Nothing to show -- all four slots crossed out. "
+                  f"Running: {running or 'nothing'}.")
         print(f"[UnifiedViewer] Display grid fixed 2x2: {filled} model tile(s) + "
               f"{len(DISPLAY_SLOTS) - filled} X slot(s).")
+
+    # ---- supporting tiles and the right column ---------------------------------
+
+    def _build_support_tiles(self):
+        """Create one tile per supporting view, up front, for the whole run.
+
+        They exist (hidden, not rendering) in measure mode, so switching to exhibition
+        is a show + "start drawing", never a construction: no delay, no flicker.
+        """
+        self.support_tiles = {}
+        self.supportGrid = QGridLayout(self.supportContainer)
+        self.supportGrid.setContentsMargins(0, 0, 0, 0)
+        self.supportGrid.setSpacing(6)
+        self.supportGrid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self._support_cols = None
+        self.support_empty_label = QLabel("No supporting views — every running model is "
+                                          "one of the four leads.", self.supportContainer)
+        self.support_empty_label.setWordWrap(True)
+        self.support_empty_label.setStyleSheet("color: #666666; font-size: 13px;")
+        self.support_empty_label.setVisible(not self.support_views)
+        if not self.support_views:
+            self.supportGrid.addWidget(self.support_empty_label, 0, 0)
+        from utils import convert_cv_to_qt
+        for view in self.support_views:
+            cfg = self.model_settings.get(view, {}) or {}
+            tile = SupportTile(view, cfg.get("model", "?"), cfg.get("execution", "?"),
+                               self.supportContainer)
+            try:
+                # Something to look at before the first frame: never a black tile.
+                tile.image.setPixmap(convert_cv_to_qt(dr.support_thumb(dr.placeholder(
+                    cfg.get("model", "-"), cfg.get("execution", "-"), "Starting..."))))
+            except Exception as e:
+                print(f"[Layout] placeholder for {view}: {e}")
+            self.support_tiles[view] = tile
+
+    def _reflow_support(self):
+        """Lay the supporting tiles out in the right column: one column if they all
+        fit at that size, else two; if two still overflow, the tile area scrolls."""
+        tiles = [self.support_tiles[v] for v in getattr(self, 'support_views', [])
+                 if v in getattr(self, 'support_tiles', {})]
+        if not tiles:
+            return
+        sp = self.supportGrid.spacing()
+        width = max(80, self.rightPanel.width() - 6)
+        # Height left for tiles: the column minus what sits above the tile area.
+        above = (self.show_all_toggle.sizeHint().height() + self.exhibition_badge.sizeHint().height()
+                 + 2 * self.compact_summary_label.sizeHint().height() + 48)
+        avail = max(120, self.rightPanel.height() - above)
+        choice = None
+        for cols in (1, 2):
+            tw = (width - sp * (cols - 1)) // cols
+            th = SupportTile.height_for_width(tw)
+            rows = -(-len(tiles) // cols)
+            if rows * th + sp * (rows - 1) <= avail:
+                choice = (cols, tw, th)
+                break
+        if choice is None:                      # overflow: two columns, scrolling
+            sb = self.supportScroll.verticalScrollBar().sizeHint().width()
+            tw = (width - sb - sp) // 2
+            choice = (2, tw, SupportTile.height_for_width(tw))
+        cols, tw, th = choice
+        for tile in tiles:
+            tile.setFixedSize(tw, th)
+        if cols != self._support_cols:
+            for tile in tiles:
+                self.supportGrid.removeWidget(tile)
+            for i, tile in enumerate(tiles):
+                self.supportGrid.addWidget(tile, i // cols, i % cols)
+            self._support_cols = cols
+
+    def _apply_right_width(self):
+        """Pin the right column to RIGHT_COL_RATIO of the window. The left 2x2 gets
+        what remains, so its size is a function of the window size and nothing else."""
+        try:
+            cw = self.centralWidget().width()
+            right = max(1, int(round(cw * RIGHT_COL_RATIO)))
+            # Give the grid an even width, so its two columns come out pixel-identical.
+            m = self.mainLayout.contentsMargins()
+            grid_w = (cw - m.left() - m.right() - self.mainLayout.spacing() - right
+                      - self.videoLayout.spacing())
+            if grid_w % 2:
+                right += 1
+            self.rightPanel.setFixedWidth(right)
+            self._reflow_support()
+        except Exception as e:
+            print(f"[Layout] right column sizing failed: {e}")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_right_width()
+        self._geometry_changed()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._geometry_changed()
+
+    def _geometry_changed(self):
+        """Tell the owner where the window is (debounced), so a relaunched display can
+        come back in the same place at the same size."""
+        if not hasattr(self, '_geom_timer'):
+            self._geom_timer = QTimer(self)
+            self._geom_timer.setSingleShot(True)
+            self._geom_timer.timeout.connect(self._report_geometry)
+        self._geom_timer.start(300)
+
+    def _report_geometry(self):
+        if self.isVisible():
+            self.notify("geometry", x=self.x(), y=self.y(), w=self.width(), h=self.height())
+
+    # ---- display mode: measure <-> exhibition, switchable mid-run -----------------
+
+    def _on_toggle_clicked(self, checked):
+        self.set_show_all(checked, source="display")
+
+    def set_show_all(self, value, source="main", t_sent=None):
+        """Switch the display mode. Safe to call at any point of a run.
+
+        Touches only what is drawn: the supporting views' rendering switch and the
+        right column's page. The leads -- widgets, handlers, threads, worker processes
+        -- are not touched, nothing is loaded or unloaded, and no widget is created or
+        destroyed. If anything here fails the previous mode is restored and the run
+        carries on.
+        """
+        value = bool(value) and self.rendering_enabled
+        prev = self.show_all
+        now = time.time()
+        try:
+            if value != prev:
+                self._account_exhibition(now, value)
+                self.show_all = value
+                # Supporting views: start (or stop) drawing. Inference never stopped.
+                for view in self.support_views:
+                    handler = getattr(self, f"{view}_handler", None)
+                    if handler is not None:
+                        handler.render_enabled = value
+                self.rightStack.setCurrentIndex(1 if value else 0)
+                self.exhibition_badge.setVisible(value)
+                self._await_paint = {"value": value, "source": source, "t_sent": t_sent,
+                                     "t_recv": now, "t_applied": time.time()}
+                self._await_support = None
+                if value:
+                    self._reflow_support()
+                    self._await_support = {"t0": now, "pending": set(
+                        v for v in self.support_views
+                        if getattr(self, f"{v}_handler", None) is not None), "first": None}
+                    for view in self.support_views:
+                        handler = getattr(self, f"{view}_handler", None)
+                        if handler is not None:
+                            handler.render_now()     # do not wait for its next result
+                self._refresh_panels()
+                print(f"[Display] Mode -> {'exhibition' if value else 'measure'} "
+                      f"(from {source}); leads untouched, "
+                      f"{len(self.support_views)} supporting view(s) "
+                      f"{'rendering' if value else 'hidden'}.", flush=True)
+        except Exception as e:
+            print(f"[Display] Mode switch failed; staying in "
+                  f"{'exhibition' if prev else 'measure'} mode: {type(e).__name__}: {e}", flush=True)
+            try:
+                if self.show_all != prev:
+                    self._account_exhibition(time.time(), prev)
+                self.show_all = prev
+                for view in self.support_views:
+                    handler = getattr(self, f"{view}_handler", None)
+                    if handler is not None:
+                        handler.render_enabled = prev
+                self.rightStack.setCurrentIndex(1 if prev else 0)
+                self.exhibition_badge.setVisible(prev)
+            except Exception as e2:
+                print(f"[Display] Mode rollback incomplete: {e2}", flush=True)
+            self._await_paint = self._await_support = None
+        finally:
+            # The toggle mirrors the mode whichever side asked, without re-triggering.
+            try:
+                if self.show_all_toggle.isChecked() != self.show_all:
+                    self.show_all_toggle.blockSignals(True)
+                    self.show_all_toggle.setChecked(self.show_all)
+                    self.show_all_toggle.blockSignals(False)
+            except Exception:
+                pass
+            # Always report the mode actually in force, so the main window's checkbox
+            # ends up agreeing with the display even when a switch was refused.
+            self.notify("show_all", value=self.show_all, source=source,
+                        t_sent=t_sent, t_recv=now, t_applied=time.time())
+
+    def _account_exhibition(self, now, entering):
+        """Keep the running total of exhibition time (see _display_mode_record)."""
+        if entering:
+            self._exh_since = now
+        elif self._exh_since is not None:
+            self._exh_accum += max(0.0, now - self._exh_since)
+            self._exh_since = None
+
+    def _display_mode_record(self):
+        """How much of the saved window was spent in exhibition mode.
+
+        Exhibition mode draws the supporting views too, which costs CPU in this
+        process, so figures gathered with it on are not comparable to the profiled
+        ones. A run can switch modes part-way; this ratio is the marker that says how
+        much of the window the saved figures were contaminated for.
+        """
+        t0 = getattr(self, '_measure_t0', None) or self._run_t0
+        end = getattr(self, '_measure_t_end', None) or time.time()
+        window = max(0.0, end - t0) if t0 else 0.0
+        seconds = self._exh_accum
+        if self._exh_since is not None:
+            seconds += max(0.0, end - self._exh_since)
+        seconds = min(seconds, window)
+        return {
+            "mode_at_end": "exhibition" if self.show_all else "measure",
+            "exhibition_seconds": round(seconds, 2),
+            "window_seconds": round(window, 2),
+            "exhibition_ratio": round(seconds / window, 4) if window > 0 else 0.0,
+            "note": ("exhibition mode renders the supporting views as well; figures from a "
+                     "window with exhibition_ratio > 0 are for reference, not measurements"),
+        }
+
+    def eventFilter(self, obj, event):
+        """Time a mode switch to the first repaint of the page it switched to."""
+        try:
+            pending = self._await_paint
+            if (pending is not None and event.type() == QEvent.Paint
+                    and obj is self.rightStack.currentWidget()):
+                self._await_paint = None
+                self.notify("mode_painted", t_painted=time.time(), **pending)
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def update_support_display(self, view_name, pixmap):
+        """A supporting view's frame: show it, unless its tile is hidden or frozen."""
+        tile = self.support_tiles.get(view_name)
+        if tile is None or getattr(self, '_frozen', False) or not self.show_all:
+            return
+        tile.image.setPixmap(pixmap)
+        pending = self._await_support
+        if pending is not None and view_name in pending["pending"]:
+            now = time.time()
+            pending["pending"].discard(view_name)
+            pending["first"] = pending["first"] or now
+            if not pending["pending"]:
+                self._await_support = None
+                self.notify("support_rendering", t_first=pending["first"], t_all=now,
+                            t_recv=pending["t0"], n=len(self.support_views))
+
+    def _refresh_panels(self):
+        """Write the last snapshot into the strips, the overall panel, the compact line
+        and (in exhibition mode) the supporting captions. Display only: every number
+        comes out of `self._live`, computed by update_cpu_npu_usage."""
+        live = self._live or {}
+        per_view = live.get("views", {})
+
+        for view in getattr(self, 'display_slot_of', {}) or {}:
+            handler = getattr(self, f"{view}_handler", None)
+            st = per_view.get(view)
+            if handler is None or st is None:
+                continue
+            if not st["count"] and not st["offered"]:
+                handler.strip_segments = [("lat --", None), ("miss --", None), ("wait --", None)]
+            else:
+                handler.strip_segments = [
+                    (f"lat {_fmt_ms(st['infer_ms'])}", None),
+                    (f"miss {st['miss_rate'] * 100:.1f}%", dr.miss_color(st['miss_rate'])),
+                    (f"wait {_fmt_ms(st['wait_ms'])}", None),
+                ]
+
+        self.schedule_name_label.setText(str(self.current_combination))
+        if not live:
+            self.score_value_label.setText("--")
+            self.aggregate_label.setText("waiting for the first results…")
+            self.compact_summary_label.setText("Score -- / -- FPS")
+            return
+        miss = live["miss_rate"]
+        miss_css = ("#c62828" if miss >= dr.MISS_ALERT else
+                    "#ef6c00" if miss >= dr.MISS_WARN else "inherit")
+        score = f"{live['score']:.2f}".replace("-", "−")
+        self.score_value_label.setText(score)
+        self.score_value_label.setStyleSheet(
+            "font-size: 54px; font-weight: bold; color: %s;"
+            % ("#c62828" if live["score"] < 0 else "#1a7f37"))
+        rows = [
+            ("Throughput", f"{live['total_fps']:.1f} FPS", "inherit"),
+            ("Avg", f"{live['avg_fps']:.1f} FPS", "inherit"),
+            ("Miss", f"{miss * 100:.1f}%", miss_css),
+            ("q95", f"{live['q95_ms']:.0f} ms", "inherit"),
+            ("CPU", f"{live['cpu_percent']:.0f}%", "inherit"),
+        ]
+        self.aggregate_label.setText(
+            "<table cellspacing='0' cellpadding='3'>" + "".join(
+                f"<tr><td style='color:#666666;'>{k}</td>"
+                f"<td style='font-weight:bold; color:{c}; padding-left:14px;'>{v}</td></tr>"
+                for k, v, c in rows) + "</table>")
+        self.compact_summary_label.setText(
+            f"Score {live['score']:.1f} / {live['total_fps']:.1f} FPS".replace("-", "−"))
+
+        if self.show_all:
+            for view, tile in self.support_tiles.items():
+                handler = getattr(self, f"{view}_handler", None)
+                if handler is not None:
+                    tile.set_metric(handler.metric_text())
+
+    def _emit_probe(self):
+        """One line of machine-readable display state (DISPLAY_PROBE=1 only)."""
+        try:
+            def geom(w):
+                g = w.geometry()
+                p = w.mapTo(self, w.rect().topLeft())
+                return [p.x(), p.y(), g.width(), g.height()]
+
+            def view_info(view):
+                h = getattr(self, f"{view}_handler", None)
+                proc = getattr(self, f"{view}_process", None)
+                cfg = self.model_settings.get(view, {}) or {}
+                th = getattr(h, 'thread', None)
+                return {
+                    "view": view, "model": cfg.get("model"), "device": str(cfg.get("execution")),
+                    "handler_id": id(h) if h is not None else None,
+                    "thread": th.ident if th is not None else None,
+                    "thread_alive": bool(th.is_alive()) if th is not None else False,
+                    "pid": getattr(proc, 'pid', None),
+                    "alive": bool(proc.is_alive()) if proc is not None else False,
+                    "count": int(getattr(h, 'infer_count', 0) or 0),
+                    "msgs": int(getattr(h, 'msg_count', 0) or 0),
+                    "frames": int(getattr(h, 'frames_emitted', 0) or 0),
+                    "render_enabled": bool(getattr(h, 'render_enabled', False)),
+                    "error": getattr(h, 'last_error', None),
+                }
+
+            leads = []
+            for view, slot in (getattr(self, 'display_slot_of', {}) or {}).items():
+                info = view_info(view)
+                widget = getattr(self, slot)
+                h = getattr(self, f"{view}_handler", None)
+                pm = widget.pixmap()
+                info.update({
+                    "slot": slot, "widget_id": id(widget), "geom": geom(widget),
+                    "strip": " | ".join(t for t, _ in (getattr(h, 'strip_segments', None) or [])),
+                    "pixmap_key": int(pm.cacheKey()) if pm is not None else None,
+                })
+                leads.append(info)
+            support = []
+            for view in getattr(self, 'support_views', []):
+                info = view_info(view)
+                tile = self.support_tiles.get(view)
+                pm = tile.image.pixmap() if tile is not None else None
+                info.update({
+                    "tile_id": id(tile), "visible": bool(tile is not None and tile.isVisible()),
+                    "geom": geom(tile) if tile is not None else None,
+                    "caption": tile.caption.text() if tile is not None else None,
+                    "pixmap_key": int(pm.cacheKey()) if pm is not None else None,
+                })
+                support.append(info)
+            status = {
+                "t": time.time(), "pid": os.getpid(), "combination": self.current_combination,
+                "mode": "exhibition" if self.show_all else "measure",
+                "measuring": bool(getattr(self, '_measure_t0', None)),
+                "stopped": bool(getattr(self, '_already_stopped', False)),
+                "window": [self.x(), self.y(), self.width(), self.height()],
+                "left": geom(self.leftPanel), "right_w": self.rightPanel.width(),
+                "central_w": self.centralWidget().width(),
+                "x_slots": len(DISPLAY_SLOTS) - len(leads),
+                "leads": leads, "support": support,
+                "panel": {
+                    "page": self.rightStack.currentIndex(),
+                    "toggle": self.show_all_toggle.isChecked(),
+                    "badge": self.exhibition_badge.isVisible(),
+                    "schedule": self.schedule_name_label.text(),
+                    "score": self.score_value_label.text(),
+                    "compact": self.compact_summary_label.text(),
+                    "live": {k: v for k, v in (self._live or {}).items() if k != "views"},
+                },
+                "video_reader_alive": bool(getattr(self, 'video_reader_proc', None) is not None
+                                           and self.video_reader_proc.is_alive()),
+            }
+            print("@@STATUS " + json.dumps(status), flush=True)
+        except Exception as e:
+            print(f"[Probe] {type(e).__name__}: {e}", flush=True)
 
     def initialize_state_variables(self):
         """Initialize state variables."""
@@ -703,7 +969,10 @@ class UnifiedViewer(QMainWindow):
                 self.model_signals,
                 self.views_without_model,
                 display_slot=(getattr(self, 'display_slot_of', {}) or {}).get(view_name),
+                support=view_name in self.support_views,
             )
+            if handler.is_support:
+                handler.render_enabled = self.show_all   # drawn in exhibition mode only
             setattr(self, f"{view_name}_handler", handler)
             handler.start_display_thread()
     
@@ -782,6 +1051,11 @@ class UnifiedViewer(QMainWindow):
         """The Stop All button: same cleanup path as closing the window."""
         print("[Stop All] Requested by the user.")
         self.shutdown_views(close_after=False)
+        # Stopped means stopped: the owner must not start the next cycle behind a
+        # frozen screen the presenter is still talking over.
+        alive = [v for v in self.view_names
+                 if getattr(getattr(self, f"{v}_process", None), 'is_alive', lambda: False)()]
+        self.notify("stopped", workers_alive=len(alive))
 
     def shutdown_views(self, close_after: bool):
         """THE cleanup path. Both Stop All and the window's X come through here.
@@ -855,11 +1129,6 @@ class UnifiedViewer(QMainWindow):
 
         if getattr(self, 'executor_only', False):
             print("[UnifiedViewer] Close in executor-only mode - terminating application")
-            try:
-                if self.info_window:
-                    self.info_window.close()
-            except Exception as e:
-                print(f"[Shutdown] info window close failed (continuing): {e}")
             self.shutdown_all()
         else:
             print("[UnifiedViewer] Close event triggered - closing viewer window")
@@ -923,6 +1192,11 @@ class UnifiedViewer(QMainWindow):
         # Reset idempotent stop flag for new run
         self._already_stopped = False
 
+        # Exhibition-time bookkeeping starts with the run (restarted at warmup end).
+        self._run_t0 = time.time()
+        self._exh_accum = 0.0
+        self._exh_since = self._run_t0 if self.show_all else None
+
         # Create a run_id and export to environment so child processes can log it
         try:
             self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -962,6 +1236,9 @@ class UnifiedViewer(QMainWindow):
         import time as _t
         self._measure_t0 = _t.time()
         self._measure_t_end = None
+        # The saved window starts now, so the exhibition share is counted from now.
+        self._exh_accum = 0.0
+        self._exh_since = self._measure_t0 if self.show_all else None
         print(f"[UnifiedViewer] Warmup over ({WARMUP_SECONDS}s); measurement window open.")
         try:
             for name in [f"{v}_handler" for v in self.view_names]:
@@ -1103,6 +1380,23 @@ class UnifiedViewer(QMainWindow):
                 q.close()
             except Exception as e:
                 print(f"[Cleanup] queue close failed (continuing): {e}")
+
+        def _close_writer(q):
+            """Drop OUR copy of the write end of a queue only a worker writes to.
+
+            A worker that had to be terminated can die half-way through writing a
+            result, leaving a truncated message in the pipe. Reading it blocks until
+            the rest arrives -- and while this process still holds the write end open
+            the kernel never reports EOF, so `get_nowait()` below would wait forever
+            (Stop All froze the window exactly here). With every writer gone the
+            truncated read ends in EOFError instead, which the drain treats as empty.
+            """
+            try:
+                writer = getattr(q, '_writer', None)
+                if writer is not None:
+                    writer.close()
+            except Exception as e:
+                print(f"[Cleanup] writer close failed (continuing): {e}")
         # Give local feeders a moment to observe shutdown_flag
         try:
             _t.sleep(0.05)
@@ -1116,6 +1410,10 @@ class UnifiedViewer(QMainWindow):
             q = getattr(self, name, None)
             try:
                 _cancel(q)
+                # Written by a worker process, read here: the video reader's frames
+                # and every view's results. (The per-view frame queues go the other way.)
+                if q and (name == 'video_frame_queue' or name.endswith('_result_queue')):
+                    _close_writer(q)
                 _drain(q)
                 _close(q)
             finally:
@@ -1125,132 +1423,85 @@ class UnifiedViewer(QMainWindow):
                     pass
         
     def update_cpu_npu_usage(self):
-        """Update CPU and NPU usage information."""
+        """The once-a-second tick: snapshot every figure, then refresh the display.
+
+        All figures are the ones the per-view handlers and the feeder already keep
+        (avg_fps, avg_infer_time, infer_count, late_count, avg_wait_ms, drop/offered
+        counts); nothing is measured here. The snapshot covers EVERY scheduled view,
+        leads and supporting alike, in either display mode.
+        """
         current = get_cpu_metrics(interval=0)
-        prev = self.prev_cpu_stats
-        delta_ctx = current["Context_Switches"] - prev["Context_Switches"]
-        delta_int = current["Interrupts"] - prev["Interrupts"]
-        load1, load5, load15 = current["Load_Average"]
-        
-        # Per-view stats for every scheduled view (any N, not just the 4 display slots).
+
         views = list(self.view_names)
+        feeder = getattr(self, 'video_feeder', None)
+        fdrop = getattr(feeder, 'drop_counts', {}) or {}
+        foffered = getattr(feeder, 'offered_counts', {}) or {}
         stats = {}
+        miss = offered = 0
         for v in views:
             cfg = self.model_settings.get(v, {}) or {}
             h = getattr(self, f"{v}_handler", None)
+            count = int(getattr(h, 'infer_count', 0) or 0)
+            # Deadline misses: late completions + queue-full drops, over what was offered.
+            late = int(getattr(h, 'late_count', 0) or 0)
+            dropped = int(fdrop.get(v, 0) or 0)
+            off = int(foffered.get(v, 0) or 0) or (count + dropped)
             stats[v] = {
                 "fps": getattr(h, 'avg_fps', 0.0),
                 "infer_ms": getattr(h, 'avg_infer_time', 0.0),
-                "count": getattr(h, 'infer_count', 0),
+                "count": count,
                 "model": cfg.get("model", ""),
                 "mode": str(cfg.get("execution", "cpu")).upper(),
                 "wait_ms": getattr(h, 'avg_wait_ms', 0.0),
+                "dropped": dropped,
+                "offered": off,
+                "miss_rate": ((late + dropped) / off) if off > 0 else 0.0,
             }
+            miss += late + dropped
+            offered += off
 
-        # Calculate total / average FPS (total throughput)
+        # Total / average FPS (total throughput)
         total_fps = sum(st["fps"] for st in stats.values())
         total_avg_fps = total_fps / len(views) if views else 0.0
+        miss_rate = (miss / offered) if offered > 0 else 0.0
+        score = total_fps - 100.0 * miss_rate
 
-        # Create performance text and append reallocation trigger status based on recent results
-        # NOTE: Reallocation trigger condition checks are disabled per requirement.
-        # The UI will display a fixed message to indicate triggers are disabled.
-        name1 = "drop-rate surge"
-        name2 = "Queueing-delay pressure"
-        line1 = f"Reallocation trigger [{name1}]: Disabled"
-        line2 = f"[{name2}]: Disabled"
-        self.info_window.update_trigger_below_metrics(line1 + "\n" + line2)
-        trigger_text = ""
-
-        lines = [
-            f"<b>Total Throughput: {total_fps:.1f} FPS</b><br>",
-            f"<b>Total Average Throughput: {total_avg_fps:.1f} FPS</b><br><br>",
-        ]
-        for idx, v in enumerate(views):
-            st = stats[v]
-            color = VIEW_COLORS[idx % len(VIEW_COLORS)]
-            suffix = "" if v in DISPLAY_SLOTS else " [headless]"
-            lines.append(
-                f"<b><span style='color: {color};'>{v.capitalize()} ({st['model']} {st['mode']}){suffix}</span></b> "
-                f"Avg FPS: <span style='color: {color};'>{st['fps']:.1f}</span> "
-                f"(<span style='color: {color};'>{st['infer_ms']:.1f} ms</span>)<br>"
-            )
-        performance_text = "".join(lines)
-
-        # Create CPU info text
-        cpu_info_text = (
-            f"<b><span style='color: blue;'>CPU</span></b><br>"
-            f"Usage: {current['CPU_Usage_percent']:.1f} %<br>"
-            f"LoadAvg: {load1:.2f} / {load5:.2f} / {load15:.2f}<br>"
-            f"CtxSwitches/sec: {delta_ctx} | Int/sec: {delta_int}"
-        )
-        
-        # Create NPU info text
-        npu_info_text = (
-            f"<b><span style='color: green;'>NPU</span></b><br>"
-            f"Usage: 42.0 %<br>"
-            f"LoadAvg: 0.12 / 0.10 / 0.08<br>"
-            f"CtxSwitches/sec: 12 | Int/sec: 3"
-        )
-
-        # Update info window labels
-        self.info_window.update_model_performance(performance_text)
-        self.info_window.update_cpu_info(cpu_info_text)
-        # NPU panel removed from UI; skip updating NPU info label
-
-        # Compute compact metrics line
+        # q95: max queue_wait_ms_p95 across the devices in use
+        max_q_wait = 0.0
         try:
-            scheduled_views = views
-            drop_map = getattr(getattr(self, 'video_feeder', None), 'drop_counts', {}) or {}
             # per_view_stats fields aligned with _get_device_metrics_default expectations
             per_view_stats = {
                 v: (stats[v]["fps"], stats[v]["infer_ms"], stats[v]["count"],
                     stats[v]["model"], stats[v]["mode"], stats[v]["wait_ms"],
-                    int(drop_map.get(v, 0) or 0))
-                for v in scheduled_views
+                    stats[v]["dropped"])
+                for v in views
             }
-            devices_used = set(self.model_settings.get(v, {}).get('execution', 'CPU').upper() for v in scheduled_views)
-            dev_metrics = self._get_device_metrics_default(devices_used, per_view_stats, scheduled_views)
-            # choose max queue_wait_ms_p95 across devices
+            devices_used = set(st["mode"] for st in stats.values())
+            dev_metrics = self._get_device_metrics_default(devices_used, per_view_stats, views)
             q_waits = []
-            for k, val in (dev_metrics or {}).items():
+            for val in (dev_metrics or {}).values():
                 try:
                     q_waits.append(float(val.get('queue_wait_ms_p95', 0.0) or 0.0))
                 except Exception:
                     pass
             max_q_wait = max(q_waits) if q_waits else 0.0
-            # Deadline miss rate: (late completions + queue-full drops) / offered
-            feeder = getattr(self, 'video_feeder', None)
-            fdrop = getattr(feeder, 'drop_counts', {}) or {}
-            foffered = getattr(feeder, 'offered_counts', {}) or {}
-            miss = offered = 0
-            for v in scheduled_views:
-                h = getattr(self, f"{v}_handler", None)
-                late = int(getattr(h, 'late_count', 0) or 0)
-                dropped = int(fdrop.get(v, 0) or 0)
-                off = int(foffered.get(v, 0) or 0) or (int(getattr(h, 'infer_count', 0) or 0) + dropped)
-                miss += late + dropped
-                offered += off
-            miss_rate = (miss / offered) if offered > 0 else 0.0
-            score = total_fps - 100.0 * miss_rate
-            # Show each metric on its own line
-            metrics_line = (
-                f"Total: {total_fps:.2f} FPS\n"
-                f"q95: {max_q_wait:.1f} ms\n"
-                f"Deadline miss: {miss_rate*100:.1f}%\n"
-                f"Score: {score:.2f}"
-            )
-            try:
-                self.info_window.update_metrics(metrics_line)
-            except Exception:
-                pass
-        except Exception as e:
-            # Don't crash UI updates due to metrics calculation
-            # print(f"[Viewer] metrics label update failed: {e}")
+        except Exception:
+            # Don't let a metrics hiccup take the display refresh down with it.
             pass
-        
+
+        self._live = {
+            "total_fps": total_fps, "avg_fps": total_avg_fps, "miss_rate": miss_rate,
+            "score": score, "q95_ms": max_q_wait,
+            "cpu_percent": current['CPU_Usage_percent'], "views": stats,
+        }
+        try:
+            self._refresh_panels()
+        except Exception as e:
+            print(f"[Display] panel refresh failed (continuing): {e}")
+
         # Update previous stats for next calculation
         self.prev_cpu_stats = current
-    
+
     def save_throughput_data(self):
         """Save the current throughput of each model and the total throughput to a unique JSON under results/ starting with performance_."""
         try:
@@ -1338,6 +1589,13 @@ class UnifiedViewer(QMainWindow):
                     "deadline_miss_rate": round(total_miss_rate, 4)
                 }
             }
+
+            # Mark how much of this window was spent in exhibition mode (extra rendering
+            # load): figures from such a window are for reference, not measurements.
+            try:
+                throughput_data["display_mode"] = self._display_mode_record()
+            except Exception as e:
+                print(f"[Save Throughput] Warning: display mode record failed: {e}")
 
             # Add all scheduled views to the models dictionary (include zeros if no inferences)
             devices_used = set()
@@ -1582,29 +1840,6 @@ class UnifiedViewer(QMainWindow):
         except Exception as e:
             print(f"[Device Metrics] Failed to compute device metrics: {e}")
             return {}
-
-    def _evaluate_drop_rate_trigger(self, threshold_fps=30.0, min_windows=2):
-        """
-        Evaluate the drop rate trigger condition at runtime every fixed redeploy window.
-        NOTE: Disabled per requirement; returns (None, 'disabled').
-        Rules:
-        - redeploy_window_sec is fixed to 3 seconds.
-        - Do NOT read any files. Use in-memory drop counters from VideoFeeder.
-        - Condition: in two consecutive 3-second windows, total drop rate (drops/sec) > threshold_fps.
-        Returns:
-            (status, details)
-            - status: True if trigger satisfied, False if not, None if insufficient data.
-            - details: short text with computed rates for the last two windows.
-        """
-        # Disabled: immediate no-decision
-        return None, "disabled"
-
-    def _evaluate_queue_delay_trigger(self, threshold_val=35.0, min_windows=2):
-        """
-        Evaluate Queueing-delay pressure at runtime per 3s window.
-        NOTE: Disabled per requirement; returns (None, 'disabled').
-        """
-        return None, "disabled"
 
     def save_pre_post_time_average(self):
         """Compute averages for the last run_id and insert a summary line at the top of result_pre_post_time.json (JSON Lines)."""

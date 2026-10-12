@@ -154,3 +154,75 @@ def top5_panel(frame, top5, model, device, metric="", w=VIEW_W, h=VIEW_H):
                     (225, 225, 225), 1, cv2.LINE_AA)
         y += 21
     return draw_header(img, model, device, metric)
+
+
+# ---- metric strip (lead tiles) and thumbnails (supporting tiles) -----------------
+
+STRIP_H = 24
+# Lead-tile image height once the strip is in: header + strip + the unchanged body.
+TILE_H = VIEW_H + STRIP_H
+# Miss-rate thresholds (fraction) at which the strip's miss figure changes colour.
+MISS_WARN, MISS_ALERT = 0.10, 0.50
+_STRIP_BG = (44, 44, 44)
+_STRIP_FG = (215, 215, 215)
+_STRIP_WARN = (60, 180, 245)     # amber
+_STRIP_ALERT = (80, 80, 245)     # red
+
+
+def miss_color(rate):
+    """Strip colour for a deadline-miss fraction: plain, amber, or red."""
+    try:
+        r = float(rate)
+    except Exception:
+        return _STRIP_FG
+    if r >= MISS_ALERT:
+        return _STRIP_ALERT
+    if r >= MISS_WARN:
+        return _STRIP_WARN
+    return _STRIP_FG
+
+
+def insert_metric_strip(img, segments):
+    """Slot a metric strip between the header and the body, leaving both untouched.
+
+    `segments` is [(text, bgr_or_None), ...], drawn left to right with a divider
+    between them. The body is not drawn over and not rescaled: the strip gets its own
+    rows, so the result is STRIP_H taller than `img`. Never raises.
+    """
+    try:
+        h, w = img.shape[:2]
+        strip = np.full((STRIP_H, w, 3), _STRIP_BG, dtype=np.uint8)
+        x = 8
+        for i, (text, color) in enumerate(segments or [("lat --", None), ("miss --", None)]):
+            if i:
+                cv2.line(strip, (x, 5), (x, STRIP_H - 6), (110, 110, 110), 1)
+                x += 10
+            cv2.putText(strip, str(text), (x, 17), _FONT, 0.48, color or _STRIP_FG, 1, cv2.LINE_AA)
+            (tw, _), _ = cv2.getTextSize(str(text), _FONT, 0.48, 1)
+            x += tw + 10
+        return np.vstack((img[:_HEADER_H], strip, img[_HEADER_H:]))
+    except Exception:
+        return img
+
+
+SUPPORT_W = 320
+
+
+def support_thumb(img):
+    """A supporting tile's picture: the body only, downscaled.
+
+    The header is dropped because at thumbnail size its text is unreadable; the tile
+    carries the model name, device badge and metric in a Qt caption instead.
+    """
+    try:
+        body = img[_HEADER_H:]
+        h, w = body.shape[:2]
+        return cv2.resize(body, (SUPPORT_W, max(1, int(round(h * SUPPORT_W / float(w))))),
+                          interpolation=cv2.INTER_AREA)
+    except Exception:
+        return img
+
+
+def device_color_hex(device):
+    b, g, r = device_color(device)
+    return f"#{r:02x}{g:02x}{b:02x}"

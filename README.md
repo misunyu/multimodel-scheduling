@@ -72,7 +72,11 @@ placement, then launch the executor on the winning combination).
 - `runtime/mobilint_vision.py` — Mobilint NPU vision wrapper (detection/classification).
 - `runtime/llm_engine.py` — LLM/VLM engine on GPU/CPU/NPU (tokens/sec, prefill).
 - `model_processors.py` — per-view worker processes (detection/classification/LLM/VLM × cpu/gpu/npu).
-- `unified_viewer.py` — orchestrates the 4-view run and aggregates per-view stats.
+- `unified_viewer.py` — the Schedule Executor Display: runs every scheduled model,
+  shows four lead tiles (2×2) plus the overall figures in a fixed right-hand column,
+  and aggregates per-view stats. "Show all models" (in the main window and in the
+  display, switchable mid-run) also draws the remaining models as small tiles; it
+  changes rendering only. See `DISPLAY_REDESIGN_REPORT.md`.
 - `profile_models.py` — static per-model per-device profiler.
 - `generate_schedules.py` — enumerates placement combinations.
 - `xgboost_model/deploy_selector_xgb_suite.py` — 3-target trainer/predictor.

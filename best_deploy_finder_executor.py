@@ -11,10 +11,13 @@ Usage:
 
 import os
 import sys
+import json
+import time
 import argparse
+import subprocess
 from pathlib import Path
 from PyQt5 import uic
-from PyQt5.QtCore import Qt, QProcess
+from PyQt5.QtCore import Qt, QProcess, QTimer
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QBrush
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QFileDialog, QDialog, QLabel,
                              QDoubleSpinBox, QWidget, QHBoxLayout, QGridLayout, QMessageBox,
@@ -40,6 +43,27 @@ DEMO_INPUT_DEFAULTS = {
     "DEMO_LLM_PROMPT": "",                          # "" -> the engine's own prompt list
     "DEMO_VLM_PROMPT": "",                          # "" -> the engine's default prompt
 }
+
+
+# Lines the executor prints for us rather than for the log (see schedule_executor_main).
+CTRL_PREFIX = "@@CTRL "
+STATUS_PREFIX = "@@STATUS "
+
+# How long a running set gets to shut itself down (SIGTERM -> its own cleanup, which
+# disposes the models) before it is killed, when another run has been requested.
+STOP_GRACE_MS = 40000
+
+
+def npu_memory_used_mb():
+    """NPU memory in use according to `mobilint-cli status`, or None if unknown."""
+    import re
+    try:
+        out = subprocess.run(["mobilint-cli", "status"], capture_output=True, text=True,
+                             timeout=10).stdout
+        m = re.search(r"(\d+)MB\s*/\s*\d+MB", out)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
 
 
 def discover_file_backed_models(models_root: str):
@@ -189,6 +213,20 @@ class BestDeployFinderApp(QMainWindow):
             self.run_worst_button.clicked.connect(self.on_run_worst_clicked)
         if hasattr(self, 'run_comparison_button'):
             self.run_comparison_button.clicked.connect(self.on_run_comparison_clicked)
+        # Exhibition-mode toggle. Deliberately never disabled: it has to work while a
+        # run is going, which is when the presenter wants it.
+        if hasattr(self, 'show_all_checkbox'):
+            self.show_all_checkbox.toggled.connect(self.on_show_all_toggled)
+
+        # Run-control state.
+        self._executor_procs = set()
+        self._predicted_set = None      # models the current predictions.csv is for
+        self._pending_run = None        # 'best' | 'worst' | 'comparison', queued behind a stop
+        self._stopping = False
+        self._display_geometry = None   # last known display window (x, y, w, h)
+        self.last_restart = None        # record of the most recent stop-then-start
+        self._status_hook = None        # callable(dict) fed the display probe (tests)
+        self._ctrl_hook = None          # callable(dict) fed every executor event (tests)
 
         # Initialize line edits if present
         if hasattr(self, 'deployment_model_input'):
@@ -681,7 +719,9 @@ class BestDeployFinderApp(QMainWindow):
         if not models:
             raise ValueError("No models selected. Check at least one model in the list.")
         if len(models) > 4:
-            self.log(f"[Warn] {len(models)} models selected; the executor renders at most 4 views.")
+            self.log(f"[Info] {len(models)} models selected: four are shown as lead tiles, the "
+                     f"other {len(models) - 4} run and are measured and appear in the display's "
+                     f"right column when 'Show all models' is on.")
 
         platform_devices = list(getattr(self, 'platform_devices', None)
                                 or DEVICE_PROFILES[DEFAULT_DEVICE_PROFILE]["devices"])
@@ -935,6 +975,15 @@ class BestDeployFinderApp(QMainWindow):
                 pass
         if combo_name:
             args += ['--schedule_name', combo_name]
+        # Display mode: the checkbox as it stands NOW is the starting mode; later
+        # changes go down the control channel (the child's stdin).
+        show_all = self._show_all_checked()
+        if show_all:
+            args += ['--show-all']
+        args += ['--control_stdin']
+        # Bring the display back where it last was, at the size it last had.
+        if self._display_geometry:
+            args += ['--window_rect', ','.join(str(int(v)) for v in self._display_geometry)]
 
         proc = QProcess(self)
         proc.setWorkingDirectory(root)
@@ -951,12 +1000,23 @@ class BestDeployFinderApp(QMainWindow):
                 env.insert(key, str(val))
         proc.setProcessEnvironment(env)
         stderr_tail = deque(maxlen=20)
-        seen = {"results": None}
+        seen = {"results": None, "partial": ""}
 
         def _drain_stdout():
-            text = bytes(proc.readAllStandardOutput()).decode('utf-8', 'replace')
-            for line in text.splitlines():
+            # Reassemble whole lines: the control events below are JSON, and a read can
+            # end in the middle of one.
+            text = seen["partial"] + bytes(proc.readAllStandardOutput()).decode('utf-8', 'replace')
+            lines = text.split('\n')
+            seen["partial"] = lines.pop()
+            for line in lines:
+                line = line.rstrip('\r')
                 if not line.strip():
+                    continue
+                if line.startswith(STATUS_PREFIX):
+                    self._on_executor_status(proc, line[len(STATUS_PREFIX):])
+                    continue
+                if line.startswith(CTRL_PREFIX):
+                    self._on_executor_event(proc, line[len(CTRL_PREFIX):])
                     continue
                 if "Initialized results file:" in line:
                     seen["results"] = line.split("Initialized results file:", 1)[1].strip()
@@ -978,14 +1038,19 @@ class BestDeployFinderApp(QMainWindow):
                     self.log(f"[Error]   {line}")
             else:
                 self.log("[Exec] executor exited normally (code 0).")
+            proc.setProperty("exit_code", int(code))
             self._executor_procs.discard(proc)
-            if on_finished is not None:
+            # A run that was stopped to make way for another must not carry on with
+            # whatever it had queued (e.g. the second half of a comparison).
+            if on_finished is not None and not proc.property("superseded"):
                 on_finished(code, seen["results"])
 
         def _error(err):
             self.log(f"[Error] Failed to launch executor: {proc.errorString()} ({err})")
+            if proc.state() != QProcess.NotRunning:
+                return      # e.g. a write error; `finished` will still fire
             self._executor_procs.discard(proc)
-            if on_finished is not None:
+            if on_finished is not None and not proc.property("superseded"):
                 on_finished(-1, None)
 
         proc.readyReadStandardOutput.connect(_drain_stdout)
@@ -994,13 +1059,241 @@ class BestDeployFinderApp(QMainWindow):
         proc.errorOccurred.connect(_error)
 
         # Hold a reference: a QProcess that gets garbage-collected is killed.
-        if not hasattr(self, '_executor_procs'):
-            self._executor_procs = set()
         self._executor_procs.add(proc)
 
-        self.log(f"[Exec] Launching executor (cwd={root}): {program} {' '.join(args)}")
+        self.log(f"[Exec] Launching executor (cwd={root}, display mode="
+                 f"{'exhibition' if show_all else 'measure'}): {program} {' '.join(args)}")
+        proc.setProperty("launch_ts", time.time())
+        proc.setProperty("show_all", bool(show_all))
         proc.start()
         return proc
+
+    # ---- Display mode (measure / exhibition), switchable while running -----------
+
+    def _show_all_checked(self):
+        box = getattr(self, 'show_all_checkbox', None)
+        return bool(box is not None and box.isChecked())
+
+    def _running_executors(self):
+        return [p for p in self._executor_procs if p.state() != QProcess.NotRunning]
+
+    def _send_to_executors(self, message: dict):
+        """One JSON line down each running executor's stdin. Returns how many got it."""
+        data = (json.dumps(message) + "\n").encode('utf-8')
+        sent = 0
+        for proc in self._running_executors():
+            try:
+                if proc.write(data) == len(data):
+                    sent += 1
+            except Exception as e:
+                self.log(f"[Warn] Could not reach the executor: {e}")
+        return sent
+
+    def on_show_all_toggled(self, checked):
+        """The checkbox changed: switch the running display, if there is one.
+
+        With nothing running this only sets the mode the next run starts in.
+        """
+        mode = 'exhibition' if checked else 'measure'
+        if self._send_to_executors({"cmd": "set_show_all", "value": bool(checked),
+                                    "t_sent": time.time()}):
+            self.log(f"[Display] Switching the running display to {mode} mode.")
+        else:
+            self.log(f"[Display] The next run will start in {mode} mode.")
+
+    def _on_executor_event(self, proc, payload):
+        """An event line from the executor (see schedule_executor_main.emit_event)."""
+        try:
+            evt = json.loads(payload)
+        except Exception:
+            return
+        kind = evt.get("evt")
+        if kind == "show_all":
+            # Keep the checkbox agreeing with the display. This is what makes the
+            # display's own toggle show up here; signals are blocked so the echo does
+            # not bounce back down as another command.
+            value = bool(evt.get("value"))
+            box = getattr(self, 'show_all_checkbox', None)
+            if box is not None and box.isChecked() != value and evt.get("source") != "start":
+                box.blockSignals(True)
+                box.setChecked(value)
+                box.blockSignals(False)
+                self.log(f"[Display] Display switched to "
+                         f"{'exhibition' if value else 'measure'} mode from its own toggle.")
+        elif kind == "geometry":
+            try:
+                self._display_geometry = tuple(int(evt[k]) for k in ("x", "y", "w", "h"))
+            except Exception:
+                pass
+        elif kind == "stopped":
+            self.log("[Exec] Stop All: every model stopped; the display keeps its last frames.")
+            self._set_run_status("Stopped (Stop All).")
+        if self._ctrl_hook is not None:
+            self._ctrl_hook(evt)
+
+    def _on_executor_status(self, proc, payload):
+        if self._status_hook is None:
+            return
+        try:
+            self._status_hook(json.loads(payload))
+        except Exception:
+            pass
+
+    # ---- Starting a run while another is going: stop everything first -------------
+
+    def _request_run(self, kind):
+        """Run Best / Run Worst / Run Comparison was pressed.
+
+        If a set is running, ALL of it is stopped first -- leads and supporting views,
+        whatever the display mode -- and only once that is confirmed is the new run
+        started. (The opposite of a display-mode switch, which touches nothing that is
+        running.) Pressing the same button for the same set again is a restart.
+        """
+        self._pending_run = kind                  # the latest request wins
+        if self._stopping:
+            self.log(f"[Run] Still stopping the previous set; '{kind}' will start after it.")
+            return
+        if self._running_executors():
+            self._stop_executors_then_run()
+        else:
+            self.last_restart = None
+            self._begin_pending_run()
+
+    def _stop_executors_then_run(self):
+        import psutil
+        procs = self._running_executors()
+        self._stopping = True
+        trace = {"t_request": time.time(), "pids": [], "exit_codes": [], "killed": False,
+                 "dram_used_before_stop_mb": psutil.virtual_memory().used / 1e6}
+        self.last_restart = trace
+        self._set_run_status("Stopping the running set before starting the next one…")
+        self.log(f"[Run] A set is running: stopping all of it first "
+                 f"({len(procs)} executor process(es)).")
+
+        # Everything that belongs to the running set: the executor and its workers.
+        # Listed NOW, while the parent is alive -- once it exits its children are
+        # re-parented and can no longer be found from it.
+        family = []
+        for proc in procs:
+            proc.setProperty("superseded", True)
+            try:
+                root = psutil.Process(int(proc.processId()))
+                family += [root] + root.children(recursive=True)
+            except Exception:
+                pass
+        trace["pids"] = [p.pid for p in family]
+
+        for proc in procs:
+            proc.terminate()      # SIGTERM -> the executor's own cleanup (disposes models)
+        trace["t_terminate"] = time.time()
+        deadline = time.time() + STOP_GRACE_MS / 1000.0
+
+        def _poll():
+            alive = [p for p in procs if p.state() != QProcess.NotRunning]
+            if alive and time.time() < deadline:
+                QTimer.singleShot(100, _poll)
+                return
+            if alive:
+                trace["killed"] = True
+                self.log(f"[Warning] The running set did not stop in "
+                         f"{STOP_GRACE_MS // 1000}s; killing it.")
+                for p in alive:
+                    p.kill()
+                    p.waitForFinished(5000)
+            trace["t_exit"] = time.time()
+            trace["exit_codes"] = [p.property("exit_code") for p in procs]
+            self._confirm_stopped_then_run(family, trace)
+
+        _poll()
+
+    def _confirm_stopped_then_run(self, family, trace):
+        """Do not start the next set until nothing of the previous one is left.
+
+        Two sets alive at once means a failed NPU load and DRAM that only grows, so
+        this checks rather than assumes: every process of the old set gone, and the NPU
+        reporting its memory released.
+        """
+        import psutil
+
+        def _survivors():
+            out = []
+            for p in family:
+                try:
+                    if p.is_running() and p.status() != psutil.STATUS_ZOMBIE:
+                        out.append(p)
+                except Exception:
+                    pass
+            return out
+
+        left = _survivors()
+        if left:
+            # Give stragglers a moment, then stop asking nicely.
+            _, left = psutil.wait_procs(left, timeout=5)
+            for p in left:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+            if left:
+                trace["killed"] = True
+                _, left = psutil.wait_procs(left, timeout=5)
+        trace["survivors"] = [p.pid for p in left]
+
+        npu_mb = npu_memory_used_mb()
+        waited = 0
+        while npu_mb not in (None, 0) and waited < 10:      # the driver frees on close
+            time.sleep(0.5)
+            waited += 1
+            npu_mb = npu_memory_used_mb()
+        trace["npu_used_mb"] = npu_mb
+        trace["dram_used_after_stop_mb"] = psutil.virtual_memory().used / 1e6
+        trace["t_confirmed"] = time.time()
+        self._stopping = False
+
+        problems = []
+        if left:
+            problems.append(f"{len(left)} process(es) of the previous set are still alive "
+                            f"(pids {', '.join(str(p.pid) for p in left)})")
+        if npu_mb not in (None, 0):
+            problems.append(f"the NPU still reports {npu_mb} MB in use")
+        if problems:
+            trace["ok"] = False
+            self._pending_run = None
+            msg = "Previous set not fully stopped: " + "; ".join(problems) + ". Not starting the next set."
+            self.log(f"[Error] {msg}")
+            self._set_run_status(msg)
+            return
+
+        trace["ok"] = True
+        self.log(f"[Run] Previous set fully stopped in "
+                 f"{trace['t_confirmed'] - trace['t_request']:.1f}s "
+                 f"(exit code(s) {trace['exit_codes']}"
+                 f"{', forced' if trace['killed'] else ''}; 0 processes left; "
+                 f"NPU memory {'n/a' if npu_mb is None else str(npu_mb) + ' MB'}).")
+        self._begin_pending_run()
+
+    def _begin_pending_run(self):
+        """Start the queued run for whatever working set is selected NOW."""
+        kind, self._pending_run = self._pending_run, None
+        if kind is None:
+            return
+        # The predictions on disk must be for the selected set. If another set was
+        # picked since the last Predict, predict for it first -- running the old set's
+        # "best" under the new set's name would be silently wrong.
+        selected = sorted(self._get_selected_model_names())
+        if selected and selected != self._predicted_set:
+            self.log(f"[Run] Selected working set has no current prediction; predicting first.")
+            if not self.on_predict_best_clicked():
+                self._set_run_status("Not started: prediction for the selected set failed.")
+                return
+        if self.last_restart is not None:
+            self.last_restart["t_predicted"] = time.time()
+        started = {'best': self._start_best, 'worst': self._start_worst,
+                   'comparison': self._start_comparison}[kind]()
+        if self.last_restart is not None:
+            self.last_restart["t_launch"] = time.time()
+            self.last_restart["mode_at_launch"] = self._show_all_checked()
+            self.last_restart["started"] = bool(started)
 
     def closeEvent(self, event):
         """Take running executors down with the GUI: terminate, wait, then kill.
@@ -1167,11 +1460,12 @@ class BestDeployFinderApp(QMainWindow):
         except Exception:
             return 60
 
-    def _set_run_buttons_enabled(self, enabled):
-        for name in ('run_worst_button', 'run_comparison_button',
-                     'load_execute_best_button', 'predict_best_button'):
-            if hasattr(self, name):
-                getattr(self, name).setEnabled(enabled)
+    def _set_predict_button_enabled(self, enabled):
+        """Predict is held off for the length of a comparison: it rewrites the schedule
+        file the comparison's second run is about to read. The run buttons are NOT --
+        pressing one mid-run is how a new set (or a restart) is asked for."""
+        if hasattr(self, 'predict_best_button'):
+            self.predict_best_button.setEnabled(enabled)
 
     def _refresh_run_buttons_by_prediction(self):
         """Enable the run row only once a prediction exists (predictions.csv present).
@@ -1194,10 +1488,13 @@ class BestDeployFinderApp(QMainWindow):
             self.run_status_label.setText(text)
 
     def on_run_worst_clicked(self):
+        self._request_run('worst')
+
+    def _start_worst(self):
         picked, reason = self._pick_best_and_worst()
         if picked is None:
             self._compare_unavailable(reason)
-            return
+            return False
         _, worst = picked
         self.log(f"[Compare] Running WORST: {worst['combination']} "
                  f"(predicted score {worst['pred_score']:.4f})")
@@ -1205,8 +1502,12 @@ class BestDeployFinderApp(QMainWindow):
         self._launch_executor_subprocess(self.generated_schedule_path,
                                          combo_name=worst['combination'],
                                          duration=self._run_duration())
+        return True
 
     def on_run_comparison_clicked(self):
+        self._request_run('comparison')
+
+    def _start_comparison(self):
         """Run best, then worst, then show them side by side.
 
         Sequential on purpose: the NPU time-slices between whatever is resident, so
@@ -1216,7 +1517,7 @@ class BestDeployFinderApp(QMainWindow):
         picked, reason = self._pick_best_and_worst()
         if picked is None:
             self._compare_unavailable(reason)
-            return
+            return False
         best, worst = picked
         duration = self._run_duration()
         self._comparison = {'best_row': best, 'worst_row': worst,
@@ -1229,7 +1530,7 @@ class BestDeployFinderApp(QMainWindow):
         self.log(f"[Compare] WORST {worst['combination']}: predicted score {worst['pred_score']:.4f}, "
                  f"placement {self._placement_str(worst['combination'])}")
 
-        self._set_run_buttons_enabled(False)
+        self._set_predict_button_enabled(False)
         self._set_run_status(f"Running: BEST ({best['combination']})  —  1 of 2")
 
         def after_best(code, results_path):
@@ -1238,7 +1539,7 @@ class BestDeployFinderApp(QMainWindow):
             if self._comparison['best'] is None:
                 self.log("[Compare] The best run produced no metrics; aborting the comparison.")
                 self._set_run_status("Comparison aborted: the best run produced no metrics.")
-                self._set_run_buttons_enabled(True)
+                self._set_predict_button_enabled(True)
                 return
             self.log(f"[Compare] BEST measured: {self._fmt_measured(self._comparison['best'])}")
             self._set_run_status(f"Running: WORST ({worst['combination']})  —  2 of 2   "
@@ -1250,7 +1551,7 @@ class BestDeployFinderApp(QMainWindow):
         def after_worst(code, results_path):
             self._comparison['worst'] = self._measured_from_results(
                 results_path, worst['combination'])
-            self._set_run_buttons_enabled(True)
+            self._set_predict_button_enabled(True)
             if self._comparison['worst'] is None:
                 self.log("[Compare] The worst run produced no metrics; nothing to compare.")
                 self._set_run_status("Comparison incomplete: the worst run produced no metrics.")
@@ -1261,6 +1562,7 @@ class BestDeployFinderApp(QMainWindow):
         self._launch_executor_subprocess(self.generated_schedule_path,
                                          combo_name=best['combination'],
                                          duration=duration, on_finished=after_best)
+        return True
 
     def _compare_unavailable(self, reason):
         self.log(f"[Compare] Unavailable: {reason}")
@@ -1408,6 +1710,9 @@ class BestDeployFinderApp(QMainWindow):
         dlg.exec_()
 
     def on_load_execute_best_clicked(self):
+        self._request_run('best')
+
+    def _start_best(self):
         """Load best predicted deployment and start execution.
         If no predictions exist, run all selected models on CPU at user-specified input rates.
         """
@@ -1431,25 +1736,29 @@ class BestDeployFinderApp(QMainWindow):
             selected = self._get_selected_model_names()
             if not selected:
                 self.log("[Error] No models selected. Please check at least one model in the list.")
-                return
+                return False
             try:
                 schedule_path = self._build_cpu_only_schedule(selected, schedule_path)
                 best_combo = 'combination_1'
                 self.log(f"[Build] Created CPU-only schedule: {schedule_path}")
             except Exception as e:
                 self.log(f"[Error] Failed to build CPU-only schedule: {e}")
-                return
+                return False
         # 3) Ensure schedule exists
         if not os.path.exists(schedule_path):
             self.log(f"[Error] Schedule file not found: {schedule_path}")
-            return
+            return False
         duration = self._run_duration()
         # 4) Launch executor in a subprocess with selected combo
         self._set_run_status(f"Running: BEST ({best_combo})")
         self._launch_executor_subprocess(schedule_path, combo_name=best_combo, duration=duration)
+        return True
 
     def on_predict_best_clicked(self):
-        """Handler invoked when predict_best_button is clicked."""
+        """Handler invoked when predict_best_button is clicked.
+
+        Returns True when a prediction for the selected set was produced.
+        """
         models_root = self.deployment_model_input.text() if hasattr(self, 'deployment_model_input') else self.models_root
         pred_model = self.prediction_model_input.text() if hasattr(self, 'prediction_model_input') else ''
 
@@ -1474,7 +1783,7 @@ class BestDeployFinderApp(QMainWindow):
             self.log(f"[Error] {e}")
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
-            return
+            return False
 
         # Step 0a: Preflight. Runs BEFORE the coverage check so a broken environment
         # or a missing artifact never masquerades as an out-of-distribution warning.
@@ -1491,7 +1800,7 @@ class BestDeployFinderApp(QMainWindow):
             box.exec_()
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
-            return
+            return False
 
         # Step 0b: Internal consistency check. The list only offers working sets the
         # predictor was trained on, so this must always pass -- a warning here means
@@ -1512,7 +1821,7 @@ class BestDeployFinderApp(QMainWindow):
             self.log(f"[Error][Step1] {e}")
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
-            return
+            return False
 
         # Step 2: Run prediction using XGBoost model
         try:
@@ -1535,12 +1844,14 @@ class BestDeployFinderApp(QMainWindow):
             except Exception:
                 pass
             # predictions.csv now exists -> the run row can act on it.
+            self._predicted_set = sorted(selected)
             self._refresh_run_buttons_by_prediction()
+            return True
         except Exception as e:
             self.log(f"[Error][Step2] {e}")
             if hasattr(self, 'label_best_deploy_value'):
                 self.label_best_deploy_value.setText('-')
-            return
+            return False
 
 
 def parse_arguments():
