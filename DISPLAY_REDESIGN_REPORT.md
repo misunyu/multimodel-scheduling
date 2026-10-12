@@ -101,7 +101,7 @@ miss는 10% 이상 주황, 50% 이상 빨강(`demo_render.MISS_WARN/MISS_ALERT`)
 2. 4개 미만이면 나머지 실행 모델을 **모델 크기 큰 순**으로 채워 4개.
 3. 실행 모델이 4개 미만이면 남는 칸은 `No display` X (기존 유지).
 
-**크기 기준값 출처.** `model_registry.PARAMS_M` (파라미터 수, 백만 단위) 한 곳:
+**크기 기준값 출처.** `demo_render.PARAMS_M` (파라미터 수, 백만 단위) 한 곳:
 
 | yolo11x | resnet50 | yolo11l | yolo11m | yolo11s | mobilenet_v2 | yolo11n | qwen2_vl | llama1b |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -116,7 +116,7 @@ yolo11l 101.7MB > yolo11m 80.7MB > yolo11s 38MB > mobilenet_v2 14MB > yolo11n 10
 
 ```
 [UnifiedViewer] Leads 4/7: resnet50 -> view1, yolo11s -> view2, yolo11x -> view3, yolo11l -> view4
-[UnifiedViewer] Lead cells filled by model size (largest first, model_registry.PARAMS_M, millions of
+[UnifiedViewer] Lead cells filled by model size (largest first, demo_render.PARAMS_M, millions of
 parameters): yolo11x=56.9M, yolo11l=25.3M. Passed over: mobilenet_v2=3.5M, yolo11m=20.1M, yolo11n=2.6M
 ```
 
@@ -413,8 +413,7 @@ base2는 4모델이라 **조연이 0개** — 전시 모드에서도 추가로 �
 | `info_window.ui` | 삭제 |
 | `unified_viewer.py` | `InfoWindow` 삭제, `select_leads`, 조연 타일, `set_show_all`, 우측 패널 갱신, `display_mode` 기록, 큐 정리 hang 수정, 테스트 프로브 |
 | `view_handlers.py` | 조연용 시그널/emitter, `render_enabled`(런타임 스위치), `render_now`, 지표 띠 삽입, 프레임 카운터 |
-| `demo_render.py` | `insert_metric_strip`, `support_thumb`, miss 색 기준 |
-| `model_registry.py` | `PARAMS_M` (크기순 기준값) |
+| `demo_render.py` | `insert_metric_strip`, `support_thumb`, miss 색 기준, `PARAMS_M` (크기순 기준값) |
 | `schedule_executor_main.py` | `InfoWindow`/`Controller` 삭제, stdin 제어 채널, 이벤트 출력, 모드·창 위치 승계, 런처 소실 대응 |
 | `best_deploy_finder_executor.ui` / `.py` | `show_all_checkbox`, 제어 채널 송수신, 종료→확인→재시작 흐름 |
 | `test_all_sets_display.py` | 기존 15세트 순차 테스트를 PART B(B2 / BIS / B4)로 확장 |

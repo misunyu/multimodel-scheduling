@@ -226,3 +226,22 @@ def support_thumb(img):
 def device_color_hex(device):
     b, g, r = device_color(device)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# Parameter counts in millions -- the "model size" the display uses to rank models
+# that are not on its whitelist (larger first). These are the published figures for
+# each architecture (Ultralytics YOLO11 model table; torchvision ResNet50 /
+# MobileNetV2; the Llama-3.2-1B and Qwen2-VL-2B model cards). They agree in order
+# with the FP32 ONNX file sizes under models/onnx (~4 bytes per parameter), which is
+# the only size metadata the repo itself holds and exists for vision models only.
+# Kept here, not in model_registry.py: that file is hash-pinned by paper.lock.
+PARAMS_M = {
+    "yolo11n": 2.6, "yolo11s": 9.4, "yolo11m": 20.1, "yolo11l": 25.3, "yolo11x": 56.9,
+    "resnet50": 25.6, "mobilenet_v2": 3.5,
+    "llama1b": 1236.0, "qwen2_vl": 2209.0,
+}
+
+
+def params_m(model_name: str) -> float:
+    """Model size in millions of parameters (0.0 when unknown)."""
+    return float(PARAMS_M.get(model_name, 0.0))

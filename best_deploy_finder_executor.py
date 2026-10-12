@@ -28,9 +28,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QFileDialog, QDialog, QL
 # together the XGBoost predictor trained on that platform and the device pair the
 # placement enumeration draws from, so the two can never drift apart.
 DEVICE_PROFILES = {
-    "CPU-NPU": {"prefix": "xgboost_model/artifacts/deploy_cpu_npu",
+    "CPU-NPU": {"prefix": "xgboost_model/artifacts/gkf_cpu_npu",
                 "devices": ["cpu", "npu"]},
-    "CPU-GPU": {"prefix": "xgboost_model/artifacts/deploy_cpu_gpu",
+    "CPU-GPU": {"prefix": "xgboost_model/artifacts/gkf_cpu_gpu",
                 "devices": ["cpu", "gpu"]},
 }
 DEFAULT_DEVICE_PROFILE = "CPU-NPU"
@@ -104,7 +104,7 @@ def discover_hf_backed_models(static_json_path):
 
 
 def _infer_model_prefix(p: Path) -> Path:
-    # Bare prefix (e.g. .../deploy_cpu_npu) whose _y1.json exists.
+    # Bare prefix (e.g. .../gkf_cpu_npu) whose _y1.json exists.
     if not p.is_dir() and Path(str(p) + "_y1.json").exists():
         return p
     if p.is_dir():

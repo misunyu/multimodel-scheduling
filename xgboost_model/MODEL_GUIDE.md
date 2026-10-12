@@ -332,8 +332,8 @@ python xgboost_model/deploy_selector_xgb_suite.py train \
 | `gkf_cpu_{gpu,npu}_{y1,y2,y3}_fold{0,1,2}.json` | 18 | **P1 fold 부스터** — P3 교차 전이가 재학습 없이 소비 | `train_groupkfold.py:75` | 2026-07-29 18:29–18:30 |
 | `gkf_cpu_{gpu,npu}_features.json` | 2 | 37-feature 순서 사이드카 | `train_groupkfold.py:141-142` | 2026-07-29 |
 | `gkf_cpu_{gpu,npu}_coverage.json` | 2 | 학습 분포 커버리지(세트·디바이스·rate) | `write_coverage` (`suite:556`) | 2026-07-29 |
-| `deploy_cpu_{gpu,npu}_{y1,y2,y3}.json` | 6 | **출하 운영 부스터** (GUI/deploy finder용) | `train_gpu.py` / `train_npu.py` → `train_targets` (`suite:617`) | y1·y3 2026-07-17~18, **y2만 2026-07-20** (y2 정규화 재학습) |
-| `deploy_cpu_{gpu,npu}_{features,coverage}.json` | 4 | 동상 사이드카 | 동상 | 2026-07-17~18 |
+| `deploy_cpu_{gpu,npu}_{y1,y2,y3}.json` | 6 → 0 | ~~출하 운영 부스터~~ **2026-10-12 제거** (§6-1 결함). GUI는 `gkf_cpu_*`를 쓴다 | `train_gpu.py` / `train_npu.py` → `train_targets` (`suite:617`) | y1·y3 2026-07-17~18, **y2만 2026-07-20** (y2 정규화 재학습) |
+| `deploy_cpu_{gpu,npu}_{features,coverage}.json` | 4 → 1 | 동상 사이드카. **`deploy_cpu_gpu_features.json`만 남김** — `analysis_common.py`와 `paper.lock`이 참조하는 feature 순서 원본 | 동상 | 2026-07-17~18 |
 | `deploy_conc_cpu_gpu_*` | 5 | 동시성(concurrency) 파일럿 산출물 | 파일럿 경로 | 2026-07-10 |
 | `deploy_xgb_*` | 5 | 초기 파일럿 산출물 (160창) | 파일럿 경로 | 2026-07-09~10 |
 | `train_dataset.csv` | 1 | 파일럿 `--dump_csv` 덤프 | `suite:main --dump_csv` | 2026-07-09 |
@@ -411,6 +411,14 @@ python xgboost_model/deploy_selector_xgb_suite.py train \
 ## 6. 알려진 주의사항
 
 ### 6-1. 출하 `deploy_*` 아티팩트의 `infps = 0` 결함
+
+> **2026-10-12 조치.** 결함 부스터 `deploy_cpu_{gpu,npu}_{y1,y2,y3}.json`과 그 사이드카를
+> 저장소에서 제거하고, GUI(`best_deploy_finder_executor.py`의 `DEVICE_PROFILES`)가
+> `gkf_cpu_{npu,gpu}`를 쓰도록 바꿨다. `deploy_cpu_gpu_features.json` 하나만 남아 있는데,
+> `analysis_common.py`와 `paper.lock`이 feature 순서 원본으로 참조하기 때문이다(내용은
+> `gkf_*_features.json`과 바이트 단위로 같다). **`train_npu.py` / `train_gpu.py`와 §3-3의
+> `deploy_cpu_*` 재학습 CLI는 고쳐지지 않았으므로, 그대로 실행하면 같은 결함의 부스터가
+> 다시 만들어진다.** 아래는 제거 이전 상태의 기록이다.
 
 **증상.** 출하된 운영 부스터는 `view.infps` 계열 feature가 전부 0인 채로 학습됐다.
 예측 경로(GUI `featurize_from_combo`)는 실제 infps를 넣으므로 **train/serve 스큐**다.

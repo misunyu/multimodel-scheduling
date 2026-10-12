@@ -621,7 +621,7 @@ def main():
     app = QApplication(sys.argv)
     finder = BestDeployFinder()
     if hasattr(finder, "device_config_combo"):
-        finder.device_config_combo.setCurrentText("CPU-NPU")  # -> deploy_cpu_npu, [cpu,npu]
+        finder.device_config_combo.setCurrentText("CPU-NPU")  # -> gkf_cpu_npu, [cpu,npu]
     finder.show()
     pred_prefix = finder.prediction_model_input.text()
     h = Harness(app, finder)

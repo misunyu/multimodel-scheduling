@@ -11,7 +11,7 @@
 
 이 GUI는 **CPU + Mobilint NPU(MLA100)** 플랫폼을 대상으로,
 사용자가 체크한 모델들을 CPU/NPU에 배치하는 모든 조합을 열거하고,
-학습된 XGBoost 예측기(`deploy_cpu_npu`)로 각 조합의 점수를 매겨
+학습된 XGBoost 예측기(`gkf_cpu_npu`)로 각 조합의 점수를 매겨
 **최적 조합 번호**를 화면에 표시하고, 그 조합으로 실행기(`schedule_executor_main.py`)를 띄웁니다.
 
 과거의 **CPU + Neubla NPU** 흐름을 대체한 것으로, 플랫폼은 CPU+NPU로 고정되어 있고 두 디바이스 모두
@@ -31,7 +31,7 @@ UI는 `best_deploy_finder_executor.ui`(Qt Designer)로 로드되며, 주요 위�
 | 위젯 | 역할 |
 |------|------|
 | `model_tree_view` | 배치 가능한 **모델 이름(확장자 없음)** 체크리스트 |
-| `prediction_model_input` | 예측기 프리픽스 경로 (기본값 `xgboost_model/artifacts/deploy_cpu_npu`) |
+| `prediction_model_input` | 예측기 프리픽스 경로 (기본값 `xgboost_model/artifacts/gkf_cpu_npu`) |
 | `deployment_model_input` | 모델 루트 경로 (기본 `./models`) |
 | `device_config_input` | (현재는 사용 안 함, CPU+NPU 고정) |
 | `input_rate_button` | 모델별 입력 rate(infps) 설정 다이얼로그 |
@@ -72,7 +72,7 @@ UI는 `best_deploy_finder_executor.ui`(Qt Designer)로 로드되며, 주요 위�
 
 ### Step 0.5 — **OOD(분포 밖) 경고** — `check_selection_coverage`
 예측기 옆의 `<prefix>_coverage.json`을 읽어, 사용자의 선택이 **학습 분포 안에 있는지** 검사합니다.
-`deploy_cpu_npu`는 항상
+`gkf_cpu_npu`는 항상
 `{yolo11 변종 1개, resnet50, llama1b, qwen2_vl}` (4개, rate 1~4x) 조합으로만 학습되었습니다.
 
 - 선택이 학습된 working set 중 하나와 **정확히 일치**하면 → 조용히 통과.
@@ -151,18 +151,18 @@ UI는 `best_deploy_finder_executor.ui`(Qt Designer)로 로드되며, 주요 위�
 ## 7. 예측기 경로 처리 (`_infer_model_prefix`)
 
 `prediction_model_input`은 세 형태를 모두 허용:
-- **bare 프리픽스**: `.../deploy_cpu_npu` (옆에 `_y1.json` 존재)
+- **bare 프리픽스**: `.../gkf_cpu_npu` (옆에 `_y1.json` 존재)
 - **디렉터리**: 안에서 `_y1.json`+`_y2.json` 짝이 맞는 프리픽스 탐색
 - **JSON 파일**: `..._y1.json` 또는 `..._y2.json` → 프리픽스와 짝 파일 존재 확인
 
-기본값은 생성자에서 `xgboost_model/artifacts/deploy_cpu_npu`로 **명시적으로** 세팅
+기본값은 생성자에서 `xgboost_model/artifacts/gkf_cpu_npu`로 **명시적으로** 세팅
 (여러 예측기가 있어 프리픽스가 모호해지지 않도록).
 
 ---
 
 ## 8. 예측기 아티팩트 구조
 
-`xgboost_model/artifacts/deploy_cpu_npu_*`:
+`xgboost_model/artifacts/gkf_cpu_npu_*`:
 
 | 파일 | 내용 |
 |------|------|
@@ -172,8 +172,10 @@ UI는 `best_deploy_finder_executor.ui`(Qt Designer)로 로드되며, 주요 위�
 | `_features.json` | feature 컬럼 순서 (예측 시 정렬용) |
 | `_coverage.json` | **학습 커버리지** — model_sets / models / view_counts / devices / rate_factors (OOD 검사에 사용) |
 
-저장소에는 4개의 예측기가 존재: `deploy_xgb`(3-device), `deploy_cpu_gpu`, `deploy_cpu_npu`, `deploy_conc_cpu_gpu`(N=4~8 동시 실행).
-이 GUI는 그중 **`deploy_cpu_npu`**를 기본으로 사용.
+저장소에는 4개의 예측기가 존재: `deploy_xgb`(3-device), `gkf_cpu_gpu`, `gkf_cpu_npu`, `deploy_conc_cpu_gpu`(N=4~8 동시 실행).
+이 GUI는 그중 **`gkf_cpu_npu`**를 기본으로 사용 (CPU-GPU 선택 시 `gkf_cpu_gpu`).
+이전 기본값이던 `deploy_cpu_{npu,gpu}`는 input rate feature가 0으로 학습된 결함 때문에 제거됨
+(`xgboost_model/MODEL_GUIDE.md` §6-1).
 
 ---
 

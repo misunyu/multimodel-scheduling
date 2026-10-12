@@ -76,7 +76,7 @@ def _asset(name: str) -> str:
 # Lead whitelist: the four models the demo is built around. Whichever of these are
 # running take the 2x2 grid first; the single source of truth, so do not test model
 # names for "lead-ness" anywhere else. Cells still free after that are filled with the
-# largest of the other running models (model_registry.PARAMS_M), so the grid shows
+# largest of the other running models (demo_render.PARAMS_M), so the grid shows
 # four live tiles whenever four models are running.
 LEAD_WHITELIST = ("qwen2_vl", "resnet50", "yolo11s", "llama1b")
 
@@ -109,7 +109,7 @@ def select_leads(view_models):
     n = len(DISPLAY_SLOTS)
     whitelisted = [v for v, m in view_models if m in LEAD_WHITELIST][:n]
     rest = [(v, m) for v, m in view_models if v not in whitelisted]
-    rest.sort(key=lambda vm: -reg.params_m(vm[1]))
+    rest.sort(key=lambda vm: -dr.params_m(vm[1]))
     fill = [v for v, _ in rest[:n - len(whitelisted)]]
     return whitelisted, fill
 
@@ -325,10 +325,10 @@ class UnifiedViewer(QMainWindow):
                  or "none"))
         if fill:
             print("[UnifiedViewer] Lead cells filled by model size (largest first, "
-                  "model_registry.PARAMS_M, millions of parameters): "
-                  + ", ".join(f"{_model(v)}={reg.params_m(_model(v)):g}M" for v in fill)
+                  "demo_render.PARAMS_M, millions of parameters): "
+                  + ", ".join(f"{_model(v)}={dr.params_m(_model(v)):g}M" for v in fill)
                   + (". Passed over: " + ", ".join(
-                      f"{_model(v)}={reg.params_m(_model(v)):g}M" for v in self.support_views)
+                      f"{_model(v)}={dr.params_m(_model(v)):g}M" for v in self.support_views)
                      if self.support_views else "."))
         if self.support_views:
             print(f"[UnifiedViewer] Supporting views (executed and measured; drawn only in "
