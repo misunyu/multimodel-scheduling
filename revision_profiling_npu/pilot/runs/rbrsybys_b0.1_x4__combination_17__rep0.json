@@ -1,0 +1,562 @@
+{
+ "schema": "revision_profiling/v2.2+1b",
+ "run_key": "rbrsybys_b0.1_x4|combination_17|rep0",
+ "execution_id": "20261015T072142_18807",
+ "schedule_file": "rbrsybys_b0.1_x4.yaml",
+ "combination": "combination_17",
+ "repeat": 0,
+ "mode": "open_loop",
+ "meta": {
+  "family": "rbrsybys",
+  "models": [
+   "resnet50_big",
+   "resnet50_small",
+   "yolov3_big",
+   "yolov3_small"
+  ],
+  "n_instances": 4,
+  "beta": 0.1,
+  "multiplier": 4,
+  "rate_rule": "rate = beta * Cmax[model] * multiplier; Cmax = max isolated throughput over (device, variant); placement and variant independent",
+  "rate_source": "revision_profiling_npu/isolated/offline_profile.json",
+  "candidate_source": "gen_schedules_antara/model_schedules_rbrsybys.yaml",
+  "candidates": 21,
+  "family_index": 10
+ },
+ "placement": "resnet50_big:npu0,resnet50_small:npu1,yolov3_big:cpu,yolov3_small:cpu",
+ "timing": {
+  "warmup_sec": 5.0,
+  "window_sec_actual": 30.0,
+  "feeder_start_ns": 4322457253356,
+  "t0_ns": 4327457253356,
+  "t1_ns": 4357457253356,
+  "snapshot_read_lag_ms_max": 0.265115,
+  "queue_capacity": 2,
+  "drop_policy": "drop-newest",
+  "clock": "time.monotonic_ns = CLOCK_MONOTONIC, shared by the executor and the feeder processes",
+  "feeder_mode": "process",
+  "boundary_read": "separate reader process, lock-free shared-memory read"
+ },
+ "instances": [
+  {
+   "name": "resnet50_big",
+   "model": "antara_resnet50_big_npu",
+   "execution": "npu0",
+   "rate": 21.0,
+   "base_rate": 52.5,
+   "beta": 0.1,
+   "multiplier": 4,
+   "onnx": "../multimodel-scheduling/models/resnet50_big/partitions/resnet50_big_neubla_p0.onnx",
+   "files_checked": {
+    "../multimodel-scheduling/models/resnet50_big/partitions/resnet50_big_neubla_p0.onnx": {
+     "sha256": "655a1d54e67cf65479f7f23ab81d93e428b2fc4264fd6e123d1faeb0fc74f37e",
+     "match": true
+    },
+    "../multimodel-scheduling/models/resnet50_big/npu_code/resnet50_big_neubla_p1.o": {
+     "sha256": "80d12c14dfc4055511413ef89695cbfd065ae1433ad55a4a9f4543e6203075fe",
+     "match": true
+    },
+    "../multimodel-scheduling/models/resnet50_big/partitions/resnet50_big_neubla_p2.onnx": {
+     "sha256": "665dc2ff15034df7c42d73a06a5a438667a4c6d2b9c116b1605a0196f51a8877",
+     "match": true
+    },
+    "../lib/NeublaDriver.cpython-38-x86_64-linux-gnu.so": {
+     "sha256": "92ad912c3e223688628ca05731627ea5d979b1690c0f608d28dbd88657433aa8",
+     "match": true
+    },
+    "revision_profiling_npu/registry/resnet50_fc_params.npz": {
+     "sha256": "12016340edabf7ba7e66bdae500fd7cb809ebf1469f9bb889c2c8e08f65250ba",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "npu_resnet50_hostfc_argmax",
+   "load_ms": 422.72108500037575,
+   "first_request_ms": 45.11441799968452,
+   "window": {
+    "generated": 630,
+    "enqueued": 614,
+    "dropped_full": 16,
+    "completed": 613,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 630,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 6.030696,
+    "tick_delay_ms_p95": 0.3760103999999976,
+    "pending_start": 2,
+    "pending_end": 3,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 632,
+    "snapshot_start": {
+     "ts": 4327457509487,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 4357457438648,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 3,
+    "snapshot_pending_end": 3,
+    "snapshot_diff_start": 1,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.256131,
+    "snapshot_read_lag_ms_end": 0.185292,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 119.458562,
+    "latency_ms_p95": 144.9369734,
+    "service_ms_p50": 48.159408,
+    "service_ms_p95": 53.996471799999995,
+    "service_ms_mean": 48.86721037357259,
+    "preprocess_ms_mean": 1.851783990212072,
+    "q_i": 0.025396825396825397
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 736,
+    "enqueued": 719,
+    "completed": 719,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 719
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 1.71
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 18883,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor_npu.py",
+     "__mp_main__": "revision_profiling/code/executor_npu.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 2.266336288,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 94
+  },
+  {
+   "name": "resnet50_small",
+   "model": "antara_resnet50_small_npu",
+   "execution": "npu1",
+   "rate": 21.0,
+   "base_rate": 52.5,
+   "beta": 0.1,
+   "multiplier": 4,
+   "onnx": "../multimodel-scheduling/models/resnet50_small/partitions/resnet50_small_neubla_p0.onnx",
+   "files_checked": {
+    "../multimodel-scheduling/models/resnet50_small/partitions/resnet50_small_neubla_p0.onnx": {
+     "sha256": "655a1d54e67cf65479f7f23ab81d93e428b2fc4264fd6e123d1faeb0fc74f37e",
+     "match": true
+    },
+    "../multimodel-scheduling/models/resnet50_small/npu_code/resnet50_small_neubla_p1.o": {
+     "sha256": "dfd310e8333d2156f94305559ae4af39e9076a7e04e0f896af222c192a29f6dc",
+     "match": true
+    },
+    "../multimodel-scheduling/models/resnet50_small/partitions/resnet50_small_neubla_p2.onnx": {
+     "sha256": "665dc2ff15034df7c42d73a06a5a438667a4c6d2b9c116b1605a0196f51a8877",
+     "match": true
+    },
+    "../lib/NeublaDriver.cpython-38-x86_64-linux-gnu.so": {
+     "sha256": "92ad912c3e223688628ca05731627ea5d979b1690c0f608d28dbd88657433aa8",
+     "match": true
+    },
+    "revision_profiling_npu/registry/resnet50_fc_params.npz": {
+     "sha256": "12016340edabf7ba7e66bdae500fd7cb809ebf1469f9bb889c2c8e08f65250ba",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "npu_resnet50_hostfc_argmax",
+   "load_ms": 866.7253769999661,
+   "first_request_ms": 41.7291709991332,
+   "window": {
+    "generated": 630,
+    "enqueued": 629,
+    "dropped_full": 1,
+    "completed": 628,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 630,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 10.013651,
+    "tick_delay_ms_p95": 0.7074264499999994,
+    "pending_start": 0,
+    "pending_end": 1,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 630,
+    "snapshot_start": {
+     "ts": 4327457515124,
+     "qsize": 0,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 4357457444714,
+     "qsize": 1,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 1,
+    "snapshot_pending_end": 2,
+    "snapshot_diff_start": 1,
+    "snapshot_diff_end": 1,
+    "snapshot_read_lag_ms_start": 0.261768,
+    "snapshot_read_lag_ms_end": 0.191358,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 45.9822805,
+    "latency_ms_p95": 75.96353334999999,
+    "service_ms_p50": 45.227406,
+    "service_ms_p95": 50.6926887,
+    "service_ms_mean": 45.80226042515923,
+    "preprocess_ms_mean": 1.9501930477707008,
+    "q_i": 0.0015873015873015873
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 736,
+    "enqueued": 735,
+    "completed": 735,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 735
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 1.87
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 18903,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor_npu.py",
+     "__mp_main__": "revision_profiling/code/executor_npu.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 2.122095953,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 95
+  },
+  {
+   "name": "yolov3_big",
+   "model": "antara_yolov3_cpu",
+   "execution": "cpu",
+   "rate": 5.706666666666667,
+   "base_rate": 14.266666666666667,
+   "beta": 0.1,
+   "multiplier": 4,
+   "onnx": "../multimodel-scheduling/models/yolov3_big/model/yolov3_big.onnx",
+   "files_checked": {
+    "../multimodel-scheduling/models/yolov3_big/model/yolov3_big.onnx": {
+     "sha256": "a083bccf94f1b84c2168280eb296bbe9b7d438870d956ed7861f8b91f124d228",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "yolo_letterbox_div255",
+   "postprocess": "yolov3_keras_nms_count",
+   "load_ms": 612.595321000299,
+   "first_request_ms": 285.0500899994586,
+   "window": {
+    "generated": 171,
+    "enqueued": 28,
+    "dropped_full": 143,
+    "completed": 28,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 171,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 2.838489,
+    "tick_delay_ms_p95": 0.19682349999999998,
+    "pending_start": 3,
+    "pending_end": 3,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 174,
+    "snapshot_start": {
+     "ts": 4327457516901,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 4357457446708,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 3,
+    "snapshot_pending_end": 3,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.263545,
+    "snapshot_read_lag_ms_end": 0.193352,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 3192.4906345,
+    "latency_ms_p95": 3542.13665855,
+    "service_ms_p50": 1091.9481700000001,
+    "service_ms_p95": 1237.5916300499998,
+    "service_ms_mean": 1075.07105175,
+    "preprocess_ms_mean": 4.8884789642857145,
+    "q_i": 0.8362573099415205
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 200,
+    "enqueued": 35,
+    "completed": 33,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 2,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 33
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 23.35
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 18923,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor_npu.py",
+     "__mp_main__": "revision_profiling/code/executor_npu.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 2.21460137,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 12
+  },
+  {
+   "name": "yolov3_small",
+   "model": "antara_yolov3_cpu",
+   "execution": "cpu",
+   "rate": 5.706666666666667,
+   "base_rate": 14.266666666666667,
+   "beta": 0.1,
+   "multiplier": 4,
+   "onnx": "../multimodel-scheduling/models/yolov3_big/model/yolov3_big.onnx",
+   "files_checked": {
+    "../multimodel-scheduling/models/yolov3_big/model/yolov3_big.onnx": {
+     "sha256": "a083bccf94f1b84c2168280eb296bbe9b7d438870d956ed7861f8b91f124d228",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "yolo_letterbox_div255",
+   "postprocess": "yolov3_keras_nms_count",
+   "load_ms": 447.06429799953185,
+   "first_request_ms": 286.1773209997409,
+   "window": {
+    "generated": 171,
+    "enqueued": 23,
+    "dropped_full": 148,
+    "completed": 23,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 171,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 2.754895,
+    "tick_delay_ms_p95": 0.24802249999999998,
+    "pending_start": 3,
+    "pending_end": 3,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 174,
+    "snapshot_start": {
+     "ts": 4327457518471,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 4357457448193,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 3,
+    "snapshot_pending_end": 3,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.265115,
+    "snapshot_read_lag_ms_end": 0.194837,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 3547.909542,
+    "latency_ms_p95": 5061.6174267999995,
+    "service_ms_p50": 1209.500972,
+    "service_ms_p95": 1768.4856507999998,
+    "service_ms_mean": 1296.9553987391305,
+    "preprocess_ms_mean": 5.838938478260869,
+    "q_i": 0.8654970760233918
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 200,
+    "enqueued": 30,
+    "completed": 28,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 2,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 28
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 19.88
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 18943,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor_npu.py",
+     "__mp_main__": "revision_profiling/code/executor_npu.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 2.274492505,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 11
+  }
+ ],
+ "system": {
+  "completed": 1292,
+  "dropped_full": 308,
+  "generated": 1602,
+  "failed": 0,
+  "window_sec_actual": 30.0,
+  "throughput_fps": 43.06666666666667,
+  "drop_rate_fps": 10.266666666666667,
+  "generated_rate_fps": 53.4,
+  "drop_macro": 0.4321846282372598,
+  "drop_max": 0.8654970760233918,
+  "service_rate_sum_legacy": 43.99781071914164
+ },
+ "gpu_samples": {
+  "n": 0,
+  "util_mean": null,
+  "util_max": null,
+  "mem_used_mib_max": null,
+  "series": []
+ },
+ "process_cpu_sec_in_window": 588.58,
+ "inputs": {
+  "imagenet": {
+   "n": 128,
+   "first": "n01440764_tench.JPEG",
+   "last": "n02002556_white_stork.JPEG"
+  },
+  "video": {
+   "n": 64,
+   "file": "stockholm_1280x720.mp4",
+   "shape": [
+    720,
+    1280,
+    3
+   ]
+  }
+ },
+ "loaded_modules": {
+  "__main__": "revision_profiling/code/executor_npu.py",
+  "executor": "revision_profiling/code/executor.py",
+  "image_processing": "revision_profiling/code/image_processing.py",
+  "worker_base": "revision_profiling/code/worker_base.py",
+  "worker_cls": "revision_profiling/code/worker_cls.py",
+  "worker_npu": "revision_profiling/code/worker_npu.py",
+  "counters": "revision_profiling/code/counters.py",
+  "__mp_main__": "revision_profiling/code/executor_npu.py",
+  "feeder": "revision_profiling/code/feeder.py",
+  "shmqueue": "revision_profiling/code/shmqueue.py",
+  "npu_server": "revision_profiling/code/npu_server.py"
+ },
+ "module_violations": [],
+ "workers_alive_after_join": [],
+ "git_commit": "",
+ "env": {
+  "python": "3.8.18",
+  "onnxruntime": "1.19.2",
+  "numpy": "1.24.4",
+  "platform": "Linux-6.8.0-48-generic-x86_64-with-glibc2.34",
+  "cpu_count": 20,
+  "host": "tb2",
+  "switch_interval": 0.005,
+  "inference_nice": 0,
+  "intra_op_num_threads": 4,
+  "intra_op_allow_spinning": "0",
+  "inference_sched_idle": false,
+  "main_thread_nice": 0,
+  "loadavg_before": [
+   22.46044921875,
+   18.89306640625,
+   15.18310546875
+  ],
+  "dont_write_bytecode": true,
+  "process_layout": "executor process: one worker thread per instance + drainer; one feeder process per instance (spawn)"
+ },
+ "invalid_reasons": [],
+ "valid": true
+}

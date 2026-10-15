@@ -1,0 +1,338 @@
+{
+ "schema": "revision_profiling/v2.2+1b",
+ "run_key": "rsyb_x3|combination_6|rep0",
+ "execution_id": "20261015T105904_41008",
+ "schedule_file": "rsyb_x3.yaml",
+ "combination": "combination_6",
+ "repeat": 0,
+ "mode": "open_loop",
+ "meta": {
+  "family": "rsyb",
+  "models": [
+   "resnet50_small",
+   "yolov3_big"
+  ],
+  "n_instances": 2,
+  "beta": 0.25,
+  "multiplier": 3,
+  "rate_rule": "rate = beta * Cmax[model] * multiplier; Cmax = max isolated throughput over (device, variant); placement and variant independent",
+  "rate_source": "revision_profiling_npu/isolated/offline_profile.json",
+  "candidate_source": "gen_schedules_antara/model_schedules_rsyb.yaml",
+  "candidates": 7,
+  "family_index": 5
+ },
+ "placement": "resnet50_small:cpu,yolov3_big:npu1",
+ "timing": {
+  "warmup_sec": 5.0,
+  "window_sec_actual": 30.0,
+  "feeder_start_ns": 17366178314479,
+  "t0_ns": 17371178314479,
+  "t1_ns": 17401178314479,
+  "snapshot_read_lag_ms_max": 0.367811,
+  "queue_capacity": 2,
+  "drop_policy": "drop-newest",
+  "clock": "time.monotonic_ns = CLOCK_MONOTONIC, shared by the executor and the feeder processes",
+  "feeder_mode": "process",
+  "boundary_read": "separate reader process, lock-free shared-memory read"
+ },
+ "instances": [
+  {
+   "name": "resnet50_small",
+   "model": "antara_resnet50_cpu",
+   "execution": "cpu",
+   "rate": 39.375,
+   "base_rate": 52.5,
+   "beta": 0.25,
+   "multiplier": 3,
+   "onnx": "../multimodel-scheduling/models/resnet50_big/model/resnet50_big.onnx",
+   "files_checked": {
+    "../multimodel-scheduling/models/resnet50_big/model/resnet50_big.onnx": {
+     "sha256": "c7451ac210993d155f6eec6f3ec6260aa5055987d6747aa125f85913d858abcb",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "cls_argmax",
+   "load_ms": 195.9413679978752,
+   "first_request_ms": 25.73350500097149,
+   "window": {
+    "generated": 1182,
+    "enqueued": 1182,
+    "dropped_full": 0,
+    "completed": 1181,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 1182,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 0.343313,
+    "tick_delay_ms_p95": 0.21207990000000004,
+    "pending_start": 0,
+    "pending_end": 1,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 1182,
+    "snapshot_start": {
+     "ts": 17371178669576,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "snapshot_end": {
+     "ts": 17401178535006,
+     "qsize": 0,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 0,
+    "snapshot_pending_end": 1,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.355097,
+    "snapshot_read_lag_ms_end": 0.220527,
+    "snapshot_flag": false,
+    "inflight_start": 0,
+    "inflight_end": 1,
+    "latency_ms_p50": 18.068797,
+    "latency_ms_p95": 20.168439,
+    "service_ms_p50": 17.984553,
+    "service_ms_p95": 20.112553,
+    "service_ms_mean": 18.33402656900931,
+    "preprocess_ms_mean": 0.7269202142252329,
+    "q_i": 0.0
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 1379,
+    "enqueued": 1379,
+    "completed": 1379,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 1379
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 21.67
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 41084,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor_npu.py",
+     "__mp_main__": "revision_profiling/code/executor_npu.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 2.550085376,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 98
+  },
+  {
+   "name": "yolov3_big",
+   "model": "antara_yolov3_big_npu",
+   "execution": "npu1",
+   "rate": 10.700000000000001,
+   "base_rate": 14.266666666666667,
+   "beta": 0.25,
+   "multiplier": 3,
+   "onnx": "../multimodel-scheduling/models/yolov3_big/partitions/yolov3_big_neubla_p0.onnx",
+   "files_checked": {
+    "../multimodel-scheduling/models/yolov3_big/partitions/yolov3_big_neubla_p0.onnx": {
+     "sha256": "3a21b4fb2b98ea00c426b72584ac4aaebb275e244baf0001b56b4505f6c50a19",
+     "match": true
+    },
+    "../multimodel-scheduling/models/yolov3_big/npu_code/yolov3_big_neubla_p1.o": {
+     "sha256": "c855b2b5c312f61ee70ded587d9488080ffd05616930f9e90bfc235461ee7278",
+     "match": true
+    },
+    "../multimodel-scheduling/models/yolov3_big/partitions/yolov3_big_neubla_p2.onnx": {
+     "sha256": "4c34e06e8184eb7e4dca4f1c667bf2759500d1f0f8e6a0b6c73a96be96b2fa33",
+     "match": true
+    },
+    "../lib/NeublaDriver.cpython-38-x86_64-linux-gnu.so": {
+     "sha256": "92ad912c3e223688628ca05731627ea5d979b1690c0f608d28dbd88657433aa8",
+     "match": true
+    },
+    "revision_profiling_npu/registry/yolov3_dequant.json": {
+     "sha256": "c55966b15cd064ed4e2888efa52c6f520f94ea4fe1b1db350decf8fc4355f974",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "yolo_letterbox_div255",
+   "postprocess": "npu_yolov3_nms_count",
+   "load_ms": 4744.179681998503,
+   "first_request_ms": 110.03167499802657,
+   "window": {
+    "generated": 321,
+    "enqueued": 277,
+    "dropped_full": 44,
+    "completed": 277,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 321,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 0.290295,
+    "tick_delay_ms_p95": 0.215628,
+    "pending_start": 2,
+    "pending_end": 2,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 323,
+    "snapshot_start": {
+     "ts": 17371178682290,
+     "qsize": 1,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 17401178537804,
+     "qsize": 1,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 2,
+    "snapshot_pending_end": 2,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.367811,
+    "snapshot_read_lag_ms_end": 0.223325,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 278.190335,
+    "latency_ms_p95": 319.72661819999996,
+    "service_ms_p50": 108.23174,
+    "service_ms_p95": 111.07364820000001,
+    "service_ms_mean": 108.19435507220217,
+    "preprocess_ms_mean": 2.401112844765343,
+    "q_i": 0.13707165109034267
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 375,
+    "enqueued": 325,
+    "completed": 324,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 1,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 324
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 2.93
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 41104,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor_npu.py",
+     "__mp_main__": "revision_profiling/code/executor_npu.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 2.548735676,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 8
+  }
+ ],
+ "system": {
+  "completed": 1458,
+  "dropped_full": 44,
+  "generated": 1503,
+  "failed": 0,
+  "window_sec_actual": 30.0,
+  "throughput_fps": 48.6,
+  "drop_rate_fps": 1.4666666666666666,
+  "generated_rate_fps": 50.1,
+  "drop_macro": 0.06853582554517133,
+  "drop_max": 0.13707165109034267,
+  "service_rate_sum_legacy": 63.786018480771276
+ },
+ "gpu_samples": {
+  "n": 0,
+  "util_mean": null,
+  "util_max": null,
+  "mem_used_mib_max": null,
+  "series": []
+ },
+ "process_cpu_sec_in_window": 86.44,
+ "inputs": {
+  "imagenet": {
+   "n": 128,
+   "first": "n01440764_tench.JPEG",
+   "last": "n02002556_white_stork.JPEG"
+  },
+  "video": {
+   "n": 64,
+   "file": "stockholm_1280x720.mp4",
+   "shape": [
+    720,
+    1280,
+    3
+   ]
+  }
+ },
+ "loaded_modules": {
+  "__main__": "revision_profiling/code/executor_npu.py",
+  "executor": "revision_profiling/code/executor.py",
+  "image_processing": "revision_profiling/code/image_processing.py",
+  "worker_base": "revision_profiling/code/worker_base.py",
+  "worker_cls": "revision_profiling/code/worker_cls.py",
+  "worker_npu": "revision_profiling/code/worker_npu.py",
+  "counters": "revision_profiling/code/counters.py",
+  "__mp_main__": "revision_profiling/code/executor_npu.py",
+  "feeder": "revision_profiling/code/feeder.py",
+  "shmqueue": "revision_profiling/code/shmqueue.py",
+  "npu_server": "revision_profiling/code/npu_server.py"
+ },
+ "module_violations": [],
+ "workers_alive_after_join": [],
+ "git_commit": "",
+ "env": {
+  "python": "3.8.18",
+  "onnxruntime": "1.19.2",
+  "numpy": "1.24.4",
+  "platform": "Linux-6.8.0-48-generic-x86_64-with-glibc2.34",
+  "cpu_count": 20,
+  "host": "tb2",
+  "switch_interval": 0.005,
+  "inference_nice": 0,
+  "intra_op_num_threads": 4,
+  "intra_op_allow_spinning": "0",
+  "inference_sched_idle": false,
+  "main_thread_nice": 0,
+  "loadavg_before": [
+   0.71533203125,
+   4.9111328125,
+   12.00732421875
+  ],
+  "dont_write_bytecode": true,
+  "process_layout": "executor process: one worker thread per instance + drainer; one feeder process per instance (spawn)"
+ },
+ "invalid_reasons": [],
+ "valid": true
+}

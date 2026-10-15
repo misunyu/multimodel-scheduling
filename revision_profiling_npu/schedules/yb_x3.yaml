@@ -1,0 +1,56 @@
+meta:
+  family: yb
+  models:
+  - yolov3_big
+  n_instances: 1
+  beta: 0.25
+  multiplier: 3
+  rate_rule: rate = beta * Cmax[model] * multiplier; Cmax = max isolated throughput
+    over (device, variant); placement and variant independent
+  rate_source: revision_profiling_npu/isolated/offline_profile.json
+  candidate_source: gen_schedules_antara/model_schedules_yb.yaml
+  candidates: 3
+  family_index: 2
+combinations:
+  combination_1:
+    placement: yolov3_big:cpu
+    instances:
+      yolov3_big:
+        model: antara_yolov3_cpu
+        logical_model: yolov3
+        variant: big
+        execution: cpu
+        base_rate: 14.266666666666667
+        beta: 0.25
+        multiplier: 3
+        rate: 10.700000000000001
+        infps: 10.700000000000001
+        legacy_infps_x1: 6
+  combination_2:
+    placement: yolov3_big:npu0
+    instances:
+      yolov3_big:
+        model: antara_yolov3_big_npu
+        logical_model: yolov3
+        variant: big
+        execution: npu0
+        base_rate: 14.266666666666667
+        beta: 0.25
+        multiplier: 3
+        rate: 10.700000000000001
+        infps: 10.700000000000001
+        legacy_infps_x1: 11
+  combination_3:
+    placement: yolov3_big:npu1
+    instances:
+      yolov3_big:
+        model: antara_yolov3_big_npu
+        logical_model: yolov3
+        variant: big
+        execution: npu1
+        base_rate: 14.266666666666667
+        beta: 0.25
+        multiplier: 3
+        rate: 10.700000000000001
+        infps: 10.700000000000001
+        legacy_infps_x1: 10
