@@ -1,0 +1,275 @@
+{
+ "schema": "revision_profiling/v2.2+1b",
+ "run_key": "gpt2_x4|combination_000|rep0",
+ "execution_id": "20261013T234842_2405658",
+ "schedule_file": "gpt2_x4.yaml",
+ "combination": "combination_000",
+ "repeat": 0,
+ "mode": "open_loop",
+ "meta": {
+  "family": "gpt2",
+  "models": [
+   "gpt2"
+  ],
+  "n_instances": 1,
+  "beta": 0.1,
+  "multiplier": 4,
+  "rate_rule": "rate = beta * gpu_isolated_throughput * multiplier (placement independent)",
+  "rate_source": "revision_profiling/offline_profile/offline_profile.json",
+  "family_index": 1,
+  "candidates": 2
+ },
+ "placement": "C",
+ "timing": {
+  "warmup_sec": 5.0,
+  "window_sec_actual": 10.0,
+  "feeder_start_ns": 635902613536200,
+  "t0_ns": 635907613536200,
+  "t1_ns": 635917613536200,
+  "snapshot_read_lag_ms_max": 0.342712,
+  "queue_capacity": 2,
+  "drop_policy": "drop-newest",
+  "clock": "time.monotonic_ns = CLOCK_MONOTONIC, shared by the executor and the feeder processes",
+  "feeder_mode": "process",
+  "boundary_read": "separate reader process, lock-free shared-memory read"
+ },
+ "instances": [
+  {
+   "name": "gpt2",
+   "model": "gpt2",
+   "execution": "cpu",
+   "rate": 8.48,
+   "base_rate": 21.2,
+   "beta": 0.1,
+   "multiplier": 4,
+   "onnx": "models_onnx/gpt2.onnx",
+   "files_checked": {
+    "models_onnx/gpt2.onnx": {
+     "sha256": "c9de47f885e969a5e532455a6feac679d785fb067d2e287eb81b7ee592d2cb20",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "lm_prompt",
+   "preprocess": "lm_fixed_prompt",
+   "postprocess": "lm_greedy",
+   "load_ms": 882.1991479489952,
+   "first_request_ms": 424.6388738974929,
+   "window": {
+    "generated": 85,
+    "enqueued": 22,
+    "dropped_full": 63,
+    "completed": 22,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 85,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 1.50163,
+    "tick_delay_ms_p95": 0.3687595999999998,
+    "pending_start": 3,
+    "pending_end": 3,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 88,
+    "snapshot_start": {
+     "ts": 635907613758622,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 635917613878912,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 3,
+    "snapshot_pending_end": 3,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.222422,
+    "snapshot_read_lag_ms_end": 0.342712,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 1341.102756,
+    "latency_ms_p95": 1426.2744618499999,
+    "service_ms_p50": 463.7906285,
+    "service_ms_p95": 500.4886363,
+    "service_ms_mean": 460.85048986363637,
+    "preprocess_ms_mean": 0.005342272727272727,
+    "q_i": 0.7411764705882353
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 128,
+    "enqueued": 35,
+    "completed": 33,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 2,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 33
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 9.99
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 2405683,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.740731552,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": [
+    4683,
+    1323,
+    3951,
+    13,
+    198,
+    198,
+    464,
+    1748,
+    6745,
+    635,
+    7052,
+    284,
+    14762,
+    257,
+    720,
+    16
+   ]
+  }
+ ],
+ "system": {
+  "completed": 22,
+  "dropped_full": 63,
+  "generated": 85,
+  "failed": 0,
+  "window_sec_actual": 10.0,
+  "throughput_fps": 2.2,
+  "drop_rate_fps": 6.3,
+  "generated_rate_fps": 8.5,
+  "drop_macro": 0.7411764705882353,
+  "drop_max": 0.7411764705882353,
+  "service_rate_sum_legacy": 2.16990113278581
+ },
+ "gpu_samples": {
+  "n": 10,
+  "util_mean": 1.5,
+  "util_max": 15.0,
+  "mem_used_mib_max": 865.0,
+  "series": [
+   [
+    0.828,
+    0.0,
+    865.0
+   ],
+   [
+    1.829,
+    0.0,
+    865.0
+   ],
+   [
+    2.829,
+    0.0,
+    865.0
+   ],
+   [
+    3.829,
+    0.0,
+    865.0
+   ],
+   [
+    4.829,
+    0.0,
+    865.0
+   ],
+   [
+    5.829,
+    0.0,
+    865.0
+   ],
+   [
+    6.829,
+    15.0,
+    865.0
+   ],
+   [
+    7.83,
+    0.0,
+    865.0
+   ],
+   [
+    8.83,
+    0.0,
+    865.0
+   ],
+   [
+    9.83,
+    0.0,
+    865.0
+   ]
+  ]
+ },
+ "process_cpu_sec_in_window": 30.39,
+ "inputs": {
+  "prompt": {
+   "file": "revision_profiling/code/lm_assets/prompts.json",
+   "P": 32,
+   "K": 16
+  }
+ },
+ "loaded_modules": {
+  "__main__": "revision_profiling/code/executor.py",
+  "counters": "revision_profiling/code/counters.py",
+  "__mp_main__": "revision_profiling/code/executor.py",
+  "feeder": "revision_profiling/code/feeder.py",
+  "shmqueue": "revision_profiling/code/shmqueue.py",
+  "worker_base": "revision_profiling/code/worker_base.py",
+  "lm_runner": "revision_profiling/code/lm_runner.py",
+  "worker_cls": "revision_profiling/code/worker_cls.py",
+  "image_processing": "revision_profiling/code/image_processing.py",
+  "worker_yolo": "revision_profiling/code/worker_yolo.py"
+ },
+ "module_violations": [],
+ "workers_alive_after_join": [],
+ "git_commit": "1f7e6bc1e4c49d40c2d8148e05a91efe86b2deb6",
+ "env": {
+  "python": "3.10.12",
+  "onnxruntime": "1.23.2",
+  "numpy": "2.2.6",
+  "platform": "Linux-6.8.0-83-generic-x86_64-with-glibc2.35",
+  "cpu_count": 24,
+  "host": "5090pc",
+  "switch_interval": 0.005,
+  "inference_nice": 0,
+  "intra_op_num_threads": 4,
+  "intra_op_allow_spinning": "0",
+  "inference_sched_idle": false,
+  "main_thread_nice": 0,
+  "loadavg_before": [
+   3.0654296875,
+   3.37646484375,
+   5.2109375
+  ],
+  "dont_write_bytecode": true,
+  "process_layout": "executor process: one worker thread per instance + drainer; one feeder process per instance (spawn)"
+ },
+ "invalid_reasons": [],
+ "valid": true
+}

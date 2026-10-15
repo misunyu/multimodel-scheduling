@@ -1,0 +1,265 @@
+{
+ "schema": "revision_profiling/v2.2",
+ "run_key": "single_gpt2_b0.5_x1|combination_001|rep0",
+ "execution_id": "20261013T152002_1753387",
+ "schedule_file": "single_gpt2_b0.5_x1.yaml",
+ "combination": "combination_001",
+ "repeat": 0,
+ "mode": "open_loop",
+ "meta": {
+  "family": "gpt2",
+  "models": [
+   "gpt2"
+  ],
+  "n_instances": 1,
+  "beta": 0.5,
+  "multiplier": 1.0,
+  "rate_rule": "rate = beta * gpu_isolated_throughput * multiplier (placement independent)",
+  "rate_source": "revision_profiling/offline_profile/offline_profile.json"
+ },
+ "placement": "G",
+ "timing": {
+  "warmup_sec": 5.0,
+  "window_sec_actual": 10.0,
+  "feeder_start_ns": 605382514811674,
+  "t0_ns": 605387514811674,
+  "t1_ns": 605397514811674,
+  "pending_read_lag_ms_max": 0.455643,
+  "queue_capacity": 2,
+  "drop_policy": "drop-newest",
+  "clock": "time.monotonic_ns = CLOCK_MONOTONIC, shared by the executor and the feeder processes",
+  "feeder_mode": "process",
+  "boundary_read": "separate reader process, lock-free shared-memory read"
+ },
+ "instances": [
+  {
+   "name": "gpt2",
+   "model": "gpt2",
+   "execution": "gpu",
+   "rate": 10.0,
+   "base_rate": 20.0,
+   "beta": 0.5,
+   "multiplier": 1.0,
+   "onnx": "models_onnx/gpt2.onnx",
+   "files_checked": {
+    "models_onnx/gpt2.onnx": {
+     "sha256": "c9de47f885e969a5e532455a6feac679d785fb067d2e287eb81b7ee592d2cb20",
+     "match": true
+    }
+   },
+   "providers": [
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "lm_prompt",
+   "preprocess": "lm_fixed_prompt",
+   "postprocess": "lm_greedy",
+   "load_ms": 942.5614490173757,
+   "first_request_ms": 206.75245393067598,
+   "window": {
+    "generated": 100,
+    "enqueued": 100,
+    "dropped_full": 0,
+    "completed": 100,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 100,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 0.406716,
+    "tick_delay_ms_p95": 0.3244854,
+    "pending_start": 1,
+    "pending_end": 1,
+    "pending_start_read": {
+     "ts": 605387515267317,
+     "qsize": 0,
+     "inflight": 1
+    },
+    "pending_end_read": {
+     "ts": 605397515181828,
+     "qsize": 0,
+     "inflight": 1
+    },
+    "pending_start_from_ts": 0,
+    "pending_end_from_ts": 0,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "latency_ms_p50": 48.151410999999996,
+    "latency_ms_p95": 48.4719452,
+    "service_ms_p50": 48.033791,
+    "service_ms_p95": 48.38013075,
+    "service_ms_mean": 48.092373679999994,
+    "preprocess_ms_mean": 0.018024379999999996,
+    "q_i": 0.0
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 151,
+    "enqueued": 151,
+    "completed": 151,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 151
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 4.8
+   },
+   "worker_nice": 10,
+   "feeder": {
+    "pid": 1753437,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.658216758,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": [
+    4683,
+    1323,
+    3951,
+    13,
+    198,
+    198,
+    464,
+    1748,
+    6745,
+    635,
+    7052,
+    284,
+    14762,
+    257,
+    720,
+    16
+   ]
+  }
+ ],
+ "system": {
+  "completed": 100,
+  "dropped_full": 0,
+  "generated": 100,
+  "failed": 0,
+  "window_sec_actual": 10.0,
+  "throughput_fps": 10.0,
+  "drop_rate_fps": 0.0,
+  "generated_rate_fps": 10.0,
+  "drop_macro": 0.0,
+  "drop_max": 0.0,
+  "service_rate_sum_legacy": 20.793317598625134
+ },
+ "gpu_samples": {
+  "n": 10,
+  "util_mean": 38.0,
+  "util_max": 38.0,
+  "mem_used_mib_max": 2953.0,
+  "series": [
+   [
+    0.815,
+    38.0,
+    2953.0
+   ],
+   [
+    1.816,
+    38.0,
+    2953.0
+   ],
+   [
+    2.816,
+    38.0,
+    2953.0
+   ],
+   [
+    3.816,
+    38.0,
+    2953.0
+   ],
+   [
+    4.816,
+    38.0,
+    2942.0
+   ],
+   [
+    5.816,
+    38.0,
+    2942.0
+   ],
+   [
+    6.817,
+    38.0,
+    2942.0
+   ],
+   [
+    7.817,
+    38.0,
+    2942.0
+   ],
+   [
+    8.817,
+    38.0,
+    2942.0
+   ],
+   [
+    9.817,
+    38.0,
+    2942.0
+   ]
+  ]
+ },
+ "process_cpu_sec_in_window": 4.98,
+ "inputs": {
+  "prompt": {
+   "file": "revision_profiling/code/lm_assets/prompts.json",
+   "P": 32,
+   "K": 16
+  }
+ },
+ "loaded_modules": {
+  "__main__": "revision_profiling/code/executor.py",
+  "counters": "revision_profiling/code/counters.py",
+  "__mp_main__": "revision_profiling/code/executor.py",
+  "feeder": "revision_profiling/code/feeder.py",
+  "shmqueue": "revision_profiling/code/shmqueue.py",
+  "worker_base": "revision_profiling/code/worker_base.py",
+  "lm_runner": "revision_profiling/code/lm_runner.py",
+  "worker_cls": "revision_profiling/code/worker_cls.py",
+  "image_processing": "revision_profiling/code/image_processing.py",
+  "worker_yolo": "revision_profiling/code/worker_yolo.py"
+ },
+ "module_violations": [],
+ "workers_alive_after_join": [],
+ "git_commit": "1f7e6bc1e4c49d40c2d8148e05a91efe86b2deb6",
+ "env": {
+  "python": "3.10.12",
+  "onnxruntime": "1.23.2",
+  "numpy": "2.2.6",
+  "platform": "Linux-6.8.0-83-generic-x86_64-with-glibc2.35",
+  "cpu_count": 24,
+  "host": "5090pc",
+  "switch_interval": 0.005,
+  "inference_nice": 10,
+  "inference_sched_idle": false,
+  "main_thread_nice": 0,
+  "loadavg_before": [
+   22.814453125,
+   30.65283203125,
+   28.5185546875
+  ],
+  "dont_write_bytecode": true,
+  "process_layout": "executor process: one worker thread per instance + drainer; one feeder process per instance (spawn)"
+ },
+ "invalid_reasons": [],
+ "valid": true
+}

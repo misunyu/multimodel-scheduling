@@ -1,0 +1,13 @@
+# 3x hold-out, all N (29 workloads), alpha=0.3
+
+| strategy | set | min_N | workloads | avg_score | avg_score_std | top1 | top5 | regret | mae_T | mae_D | sample_contains_oracle | selected_all_gpu | not_evaluated |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Latency-based | x3 | 1 | 29 | 0.7969 |  | 12/29 (0.41) | N/A | 0.1948 |  |  |  | 10 |  |
+| Ours (retrained) | x3 | 1 | 29 | 0.9623 |  | 20/29 (0.69) | 28/29 (0.97) | 0.0295 | 0.0598 | 0.0903 |  | 25 |  |
+| Ours (existing artifact + new evaluator) | x3 | 1 | 29 | 0.9608 |  | 21/29 (0.72) | 28/29 (0.97) | 0.0309 | 0.06 | 0.0904 |  | 27 |  |
+| Best-of-5 (1,000 trials) | x3 | 1 | 29 | 0.8324 | 0.0241 | 0.570 (mean rate) | N/A | 0.1594 |  |  | 0.57 |  |  |
+| All-GPU | x3 | 1 | 28 | 0.9598 |  | 21/28 (0.75) | N/A | 0.0317 |  |  |  | 28 | model_schedules_g_m_t_x3.yaml |
+| Oracle | x3 | 1 | 29 | 0.9918 |  | 29/29 (1.00) | 29/29 (1.00) | 0.0 |  |  |  | 21 |  |
+| All-CPU | x3 | 1 | 29 | 0.0123 |  | 2/29 (0.07) | N/A | 0.9795 |  |  |  | 0 |  |
+| Latency-based (stored rule replay) | x3 | 1 | 29 | 0.7067 |  | 9/29 (0.31) | N/A | 0.285 |  |  |  | 5 |  |
+| Ours (retrained, D without weight) | x3 | 1 | 29 | 0.9608 |  | 21/29 (0.72) | 28/29 (0.97) | 0.0309 | 0.0598 | 0.0901 |  | 27 |  |

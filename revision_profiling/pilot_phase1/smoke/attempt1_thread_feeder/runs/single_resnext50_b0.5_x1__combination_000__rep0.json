@@ -1,0 +1,225 @@
+{
+ "schema": "revision_profiling/v2.2",
+ "run_key": "single_resnext50_b0.5_x1|combination_000|rep0",
+ "execution_id": "20261013T145934_1725722",
+ "schedule_file": "single_resnext50_b0.5_x1.yaml",
+ "combination": "combination_000",
+ "repeat": 0,
+ "mode": "open_loop",
+ "meta": {
+  "family": "resnext50",
+  "models": [
+   "resnext50"
+  ],
+  "n_instances": 1,
+  "beta": 0.5,
+  "multiplier": 1.0,
+  "rate_rule": "rate = beta * gpu_isolated_throughput * multiplier (placement independent)",
+  "rate_source": "revision_profiling/offline_profile/offline_profile.json"
+ },
+ "placement": "C",
+ "timing": {
+  "warmup_sec": 5.0,
+  "window_sec_actual": 10.0,
+  "feeder_start_ns": 604153680762112,
+  "t0_ns": 604158680762112,
+  "t1_ns": 604168680762112,
+  "pending_read_lag_ms_max": 0.218737,
+  "queue_capacity": 2,
+  "drop_policy": "drop-newest",
+  "clock": "time.monotonic_ns (single process)"
+ },
+ "instances": [
+  {
+   "name": "resnext50",
+   "model": "resnext50",
+   "execution": "cpu",
+   "rate": 213.7,
+   "base_rate": 427.4,
+   "beta": 0.5,
+   "multiplier": 1.0,
+   "onnx": "models_onnx/resnext50.onnx",
+   "files_checked": {
+    "models_onnx/resnext50.onnx": {
+     "sha256": "9ba107b69b9f646e14e9469b81c50708b949d85070beb418ae3d027d18b3e4be",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "cls_argmax",
+   "load_ms": 182.0976270828396,
+   "first_request_ms": 10.521206073462963,
+   "window": {
+    "generated": 2135,
+    "enqueued": 1432,
+    "dropped_full": 703,
+    "completed": 1432,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 2137,
+    "missed_ticks": 2,
+    "realization": 0.9990641085634067,
+    "tick_delay_ms_max": 3.70315,
+    "tick_delay_ms_p95": 0.0768184,
+    "pending_start": 3,
+    "pending_end": 3,
+    "pending_start_read": {
+     "ts": 604158680980849,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "pending_end_read": {
+     "ts": 604168680959127,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "pending_start_from_ts": 3,
+    "pending_end_from_ts": 3,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "latency_ms_p50": 17.3292455,
+    "latency_ms_p95": 29.233596150000007,
+    "service_ms_p50": 6.1835165,
+    "service_ms_p95": 11.233258900000001,
+    "service_ms_mean": 6.977959206005586,
+    "preprocess_ms_mean": 0.6632664134078211,
+    "q_i": 0.32927400468384077
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 3204,
+    "enqueued": 2192,
+    "completed": 2190,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 2,
+    "missed_ticks": 2,
+    "consumed_by_drainer": 2190
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "feeder_thread": 0.05,
+    "worker_thread": 9.68
+   },
+   "last_result": 3
+  }
+ ],
+ "system": {
+  "completed": 1432,
+  "dropped_full": 703,
+  "generated": 2135,
+  "failed": 0,
+  "window_sec_actual": 10.0,
+  "throughput_fps": 143.2,
+  "drop_rate_fps": 70.3,
+  "generated_rate_fps": 213.5,
+  "drop_macro": 0.32927400468384077,
+  "drop_max": 0.32927400468384077,
+  "service_rate_sum_legacy": 143.30837576971635
+ },
+ "gpu_samples": {
+  "n": 10,
+  "util_mean": 13.7,
+  "util_max": 15.0,
+  "mem_used_mib_max": 916.0,
+  "series": [
+   [
+    0.81,
+    15.0,
+    916.0
+   ],
+   [
+    1.81,
+    12.0,
+    916.0
+   ],
+   [
+    2.815,
+    13.0,
+    916.0
+   ],
+   [
+    3.812,
+    14.0,
+    916.0
+   ],
+   [
+    4.812,
+    14.0,
+    916.0
+   ],
+   [
+    5.812,
+    14.0,
+    916.0
+   ],
+   [
+    6.812,
+    14.0,
+    916.0
+   ],
+   [
+    7.812,
+    14.0,
+    916.0
+   ],
+   [
+    8.812,
+    14.0,
+    916.0
+   ],
+   [
+    9.813,
+    13.0,
+    916.0
+   ]
+  ]
+ },
+ "process_cpu_sec_in_window": 236.82,
+ "inputs": {
+  "imagenet": {
+   "n": 128,
+   "first": "n01440764_tench.JPEG",
+   "last": "n02002556_white_stork.JPEG"
+  }
+ },
+ "loaded_modules": {
+  "__main__": "revision_profiling/code/executor.py",
+  "counters": "revision_profiling/code/counters.py",
+  "feeder": "revision_profiling/code/feeder.py",
+  "worker_base": "revision_profiling/code/worker_base.py",
+  "lm_runner": "revision_profiling/code/lm_runner.py",
+  "worker_cls": "revision_profiling/code/worker_cls.py",
+  "image_processing": "revision_profiling/code/image_processing.py",
+  "worker_yolo": "revision_profiling/code/worker_yolo.py"
+ },
+ "module_violations": [],
+ "workers_alive_after_join": [],
+ "git_commit": "1f7e6bc1e4c49d40c2d8148e05a91efe86b2deb6",
+ "env": {
+  "python": "3.10.12",
+  "onnxruntime": "1.23.2",
+  "numpy": "2.2.6",
+  "platform": "Linux-6.8.0-83-generic-x86_64-with-glibc2.35",
+  "cpu_count": 24,
+  "host": "5090pc",
+  "switch_interval": 0.005,
+  "loadavg_before": [
+   10.44384765625,
+   9.48193359375,
+   4.93212890625
+  ],
+  "dont_write_bytecode": true,
+  "process_layout": "single process; feeder thread + worker thread per instance"
+ },
+ "invalid_reasons": [],
+ "valid": true
+}

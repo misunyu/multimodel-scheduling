@@ -1,0 +1,243 @@
+{
+ "schema": "revision_profiling/v2.2",
+ "run_key": "single_gpt2_b0.5_x1|combination_001|rep0",
+ "execution_id": "20261013T145814_1724224",
+ "schedule_file": "single_gpt2_b0.5_x1.yaml",
+ "combination": "combination_001",
+ "repeat": 0,
+ "mode": "open_loop",
+ "meta": {
+  "family": "gpt2",
+  "models": [
+   "gpt2"
+  ],
+  "n_instances": 1,
+  "beta": 0.5,
+  "multiplier": 1.0,
+  "rate_rule": "rate = beta * gpu_isolated_throughput * multiplier (placement independent)",
+  "rate_source": "revision_profiling/offline_profile/offline_profile.json"
+ },
+ "placement": "G",
+ "timing": {
+  "warmup_sec": 5.0,
+  "window_sec_actual": 10.0,
+  "feeder_start_ns": 604074302867773,
+  "t0_ns": 604079302867773,
+  "t1_ns": 604089302867773,
+  "pending_read_lag_ms_max": 0.321236,
+  "queue_capacity": 2,
+  "drop_policy": "drop-newest",
+  "clock": "time.monotonic_ns (single process)"
+ },
+ "instances": [
+  {
+   "name": "gpt2",
+   "model": "gpt2",
+   "execution": "gpu",
+   "rate": 10.25,
+   "base_rate": 20.5,
+   "beta": 0.5,
+   "multiplier": 1.0,
+   "onnx": "models_onnx/gpt2.onnx",
+   "files_checked": {
+    "models_onnx/gpt2.onnx": {
+     "sha256": "c9de47f885e969a5e532455a6feac679d785fb067d2e287eb81b7ee592d2cb20",
+     "match": true
+    }
+   },
+   "providers": [
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "lm_prompt",
+   "preprocess": "lm_fixed_prompt",
+   "postprocess": "lm_greedy",
+   "load_ms": 896.4690839638934,
+   "first_request_ms": 180.26455608196557,
+   "window": {
+    "generated": 102,
+    "enqueued": 102,
+    "dropped_full": 0,
+    "completed": 103,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 102,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 0.336377,
+    "tick_delay_ms_p95": 0.2814961499999999,
+    "pending_start": 1,
+    "pending_end": 0,
+    "pending_start_read": {
+     "ts": 604079303102368,
+     "qsize": 0,
+     "inflight": 1
+    },
+    "pending_end_read": {
+     "ts": 604089303189009,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "pending_start_from_ts": 1,
+    "pending_end_from_ts": 0,
+    "inflight_start": 1,
+    "inflight_end": 0,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "latency_ms_p50": 46.778538,
+    "latency_ms_p95": 57.1467435,
+    "service_ms_p50": 46.643139,
+    "service_ms_p95": 57.0196939,
+    "service_ms_mean": 49.41318087378641,
+    "preprocess_ms_mean": 0.018696990291262133,
+    "q_i": 0.0
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 154,
+    "enqueued": 154,
+    "completed": 154,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 154
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "feeder_thread": 0.0,
+    "worker_thread": 5.04
+   },
+   "last_result": [
+    4683,
+    1323,
+    3951,
+    13,
+    198,
+    198,
+    464,
+    1748,
+    6745,
+    635,
+    7052,
+    284,
+    14762,
+    257,
+    720,
+    16
+   ]
+  }
+ ],
+ "system": {
+  "completed": 103,
+  "dropped_full": 0,
+  "generated": 102,
+  "failed": 0,
+  "window_sec_actual": 10.0,
+  "throughput_fps": 10.3,
+  "drop_rate_fps": 0.0,
+  "generated_rate_fps": 10.2,
+  "drop_macro": 0.0,
+  "drop_max": 0.0,
+  "service_rate_sum_legacy": 20.23751521996225
+ },
+ "gpu_samples": {
+  "n": 10,
+  "util_mean": 52.5,
+  "util_max": 55.0,
+  "mem_used_mib_max": 2980.0,
+  "series": [
+   [
+    0.813,
+    49.0,
+    2980.0
+   ],
+   [
+    1.813,
+    55.0,
+    2980.0
+   ],
+   [
+    2.814,
+    52.0,
+    2980.0
+   ],
+   [
+    3.814,
+    53.0,
+    2980.0
+   ],
+   [
+    4.814,
+    55.0,
+    2980.0
+   ],
+   [
+    5.814,
+    49.0,
+    2980.0
+   ],
+   [
+    6.814,
+    54.0,
+    2980.0
+   ],
+   [
+    7.815,
+    53.0,
+    2980.0
+   ],
+   [
+    8.815,
+    50.0,
+    2980.0
+   ],
+   [
+    9.815,
+    55.0,
+    2980.0
+   ]
+  ]
+ },
+ "process_cpu_sec_in_window": 5.21,
+ "inputs": {
+  "prompt": {
+   "file": "revision_profiling/code/lm_assets/prompts.json",
+   "P": 32,
+   "K": 16
+  }
+ },
+ "loaded_modules": {
+  "__main__": "revision_profiling/code/executor.py",
+  "counters": "revision_profiling/code/counters.py",
+  "feeder": "revision_profiling/code/feeder.py",
+  "worker_base": "revision_profiling/code/worker_base.py",
+  "lm_runner": "revision_profiling/code/lm_runner.py",
+  "worker_cls": "revision_profiling/code/worker_cls.py",
+  "image_processing": "revision_profiling/code/image_processing.py",
+  "worker_yolo": "revision_profiling/code/worker_yolo.py"
+ },
+ "module_violations": [],
+ "workers_alive_after_join": [],
+ "git_commit": "1f7e6bc1e4c49d40c2d8148e05a91efe86b2deb6",
+ "env": {
+  "python": "3.10.12",
+  "onnxruntime": "1.23.2",
+  "numpy": "2.2.6",
+  "platform": "Linux-6.8.0-83-generic-x86_64-with-glibc2.35",
+  "cpu_count": 24,
+  "host": "5090pc",
+  "switch_interval": 0.005,
+  "loadavg_before": [
+   12.95947265625,
+   9.3828125,
+   4.4931640625
+  ],
+  "dont_write_bytecode": true,
+  "process_layout": "single process; feeder thread + worker thread per instance"
+ },
+ "invalid_reasons": [],
+ "valid": true
+}

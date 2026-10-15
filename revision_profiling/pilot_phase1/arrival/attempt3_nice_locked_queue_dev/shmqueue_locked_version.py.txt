@@ -1,0 +1,58 @@
+"""Input queue shared between a feeder process and a worker thread: capacity 2, drop-newest.
+
+State lives in shared memory; every transition (put / drop, dequeue, finish) takes the per-queue lock and reads the
+shared monotonic clock inside it, so (queue length, in-flight) read under the same lock is a consistent snapshot.
+"""
+import sys
+
+sys.dont_write_bytecode = True
+
+import time
+
+_HEAD, _COUNT, _INFLIGHT, _HDR = 0, 1, 2, 3
+
+
+class ShmQueue:
+    def __init__(self, ctx, capacity=2):
+        self.cap = capacity
+        self.lock = ctx.Lock()
+        self.items = ctx.Semaphore(0)
+        self.s = ctx.RawArray("q", _HDR + 2 * capacity)
+
+    def put_nowait(self, idx):
+        """Returns (ok, ts). ok = 0 means the queue was full and the request was dropped."""
+        s = self.s
+        with self.lock:
+            ts = time.monotonic_ns()
+            n = s[_COUNT]
+            if n >= self.cap:
+                return 0, ts
+            slot = _HDR + 2 * ((s[_HEAD] + n) % self.cap)
+            s[slot] = idx
+            s[slot + 1] = ts
+            s[_COUNT] = n + 1
+        self.items.release()
+        return 1, ts
+
+    def get(self, timeout):
+        """Returns (idx, t_enqueue, t_dequeue) or None on timeout. Marks the request in-flight."""
+        if not self.items.acquire(timeout=timeout):
+            return None
+        s = self.s
+        with self.lock:
+            slot = _HDR + 2 * s[_HEAD]
+            idx, t_enq = s[slot], s[slot + 1]
+            s[_HEAD] = (s[_HEAD] + 1) % self.cap
+            s[_COUNT] -= 1
+            s[_INFLIGHT] += 1
+            return idx, t_enq, time.monotonic_ns()
+
+    def finish(self):
+        """Called once per dequeued request, right after it completed or failed. Returns the event timestamp."""
+        with self.lock:
+            self.s[_INFLIGHT] -= 1
+            return time.monotonic_ns()
+
+    def snapshot(self):
+        with self.lock:
+            return {"ts": time.monotonic_ns(), "qsize": int(self.s[_COUNT]), "inflight": int(self.s[_INFLIGHT])}

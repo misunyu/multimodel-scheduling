@@ -1,0 +1,225 @@
+{
+ "schema": "revision_profiling/v2.2",
+ "run_key": "single_resnet50_b0.5_x1|combination_000|rep0",
+ "execution_id": "20261013T145902_1725099",
+ "schedule_file": "single_resnet50_b0.5_x1.yaml",
+ "combination": "combination_000",
+ "repeat": 0,
+ "mode": "open_loop",
+ "meta": {
+  "family": "resnet50",
+  "models": [
+   "resnet50"
+  ],
+  "n_instances": 1,
+  "beta": 0.5,
+  "multiplier": 1.0,
+  "rate_rule": "rate = beta * gpu_isolated_throughput * multiplier (placement independent)",
+  "rate_source": "revision_profiling/offline_profile/offline_profile.json"
+ },
+ "placement": "C",
+ "timing": {
+  "warmup_sec": 5.0,
+  "window_sec_actual": 10.0,
+  "feeder_start_ns": 604121744074905,
+  "t0_ns": 604126744074905,
+  "t1_ns": 604136744074905,
+  "pending_read_lag_ms_max": 0.227106,
+  "queue_capacity": 2,
+  "drop_policy": "drop-newest",
+  "clock": "time.monotonic_ns (single process)"
+ },
+ "instances": [
+  {
+   "name": "resnet50",
+   "model": "resnet50",
+   "execution": "cpu",
+   "rate": 222.1,
+   "base_rate": 444.2,
+   "beta": 0.5,
+   "multiplier": 1.0,
+   "onnx": "models_onnx/resnet50.onnx",
+   "files_checked": {
+    "models_onnx/resnet50.onnx": {
+     "sha256": "1e80e8a7c8eec8e8b20c440d7dd7f2f8590779c7c2859dc4514870dc463845d3",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "cls_argmax",
+   "load_ms": 210.8324950095266,
+   "first_request_ms": 6.961070001125336,
+   "window": {
+    "generated": 2221,
+    "enqueued": 1358,
+    "dropped_full": 863,
+    "completed": 1358,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 2221,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 3.955874,
+    "tick_delay_ms_p95": 0.078149,
+    "pending_start": 3,
+    "pending_end": 3,
+    "pending_start_read": {
+     "ts": 604126744302011,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "pending_end_read": {
+     "ts": 604136744279870,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "pending_start_from_ts": 3,
+    "pending_end_from_ts": 3,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "latency_ms_p50": 18.565103,
+    "latency_ms_p95": 29.28525795,
+    "service_ms_p50": 6.5776495,
+    "service_ms_p95": 11.563784549999996,
+    "service_ms_mean": 7.356934186303388,
+    "preprocess_ms_mean": 0.6838783431516937,
+    "q_i": 0.3885637100405223
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 3332,
+    "enqueued": 2065,
+    "completed": 2064,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 1,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 2064
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "feeder_thread": 0.05,
+    "worker_thread": 9.53
+   },
+   "last_result": 1
+  }
+ ],
+ "system": {
+  "completed": 1358,
+  "dropped_full": 863,
+  "generated": 2221,
+  "failed": 0,
+  "window_sec_actual": 10.0,
+  "throughput_fps": 135.8,
+  "drop_rate_fps": 86.3,
+  "generated_rate_fps": 222.1,
+  "drop_macro": 0.3885637100405223,
+  "drop_max": 0.3885637100405223,
+  "service_rate_sum_legacy": 135.92618537511567
+ },
+ "gpu_samples": {
+  "n": 10,
+  "util_mean": 12.4,
+  "util_max": 15.0,
+  "mem_used_mib_max": 916.0,
+  "series": [
+   [
+    0.809,
+    15.0,
+    916.0
+   ],
+   [
+    1.813,
+    14.0,
+    916.0
+   ],
+   [
+    2.813,
+    12.0,
+    916.0
+   ],
+   [
+    3.813,
+    8.0,
+    916.0
+   ],
+   [
+    4.813,
+    7.0,
+    916.0
+   ],
+   [
+    5.814,
+    12.0,
+    916.0
+   ],
+   [
+    6.814,
+    13.0,
+    916.0
+   ],
+   [
+    7.814,
+    15.0,
+    916.0
+   ],
+   [
+    8.814,
+    14.0,
+    916.0
+   ],
+   [
+    9.814,
+    14.0,
+    916.0
+   ]
+  ]
+ },
+ "process_cpu_sec_in_window": 236.81,
+ "inputs": {
+  "imagenet": {
+   "n": 128,
+   "first": "n01440764_tench.JPEG",
+   "last": "n02002556_white_stork.JPEG"
+  }
+ },
+ "loaded_modules": {
+  "__main__": "revision_profiling/code/executor.py",
+  "counters": "revision_profiling/code/counters.py",
+  "feeder": "revision_profiling/code/feeder.py",
+  "worker_base": "revision_profiling/code/worker_base.py",
+  "lm_runner": "revision_profiling/code/lm_runner.py",
+  "worker_cls": "revision_profiling/code/worker_cls.py",
+  "image_processing": "revision_profiling/code/image_processing.py",
+  "worker_yolo": "revision_profiling/code/worker_yolo.py"
+ },
+ "module_violations": [],
+ "workers_alive_after_join": [],
+ "git_commit": "1f7e6bc1e4c49d40c2d8148e05a91efe86b2deb6",
+ "env": {
+  "python": "3.10.12",
+  "onnxruntime": "1.23.2",
+  "numpy": "2.2.6",
+  "platform": "Linux-6.8.0-83-generic-x86_64-with-glibc2.35",
+  "cpu_count": 24,
+  "host": "5090pc",
+  "switch_interval": 0.005,
+  "loadavg_before": [
+   10.07568359375,
+   9.19384765625,
+   4.6865234375
+  ],
+  "dont_write_bytecode": true,
+  "process_layout": "single process; feeder thread + worker thread per instance"
+ },
+ "invalid_reasons": [],
+ "valid": true
+}

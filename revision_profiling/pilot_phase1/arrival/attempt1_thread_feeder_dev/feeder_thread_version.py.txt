@@ -1,0 +1,75 @@
+"""Per-instance request generator (spec v2.2 section 2.3).
+
+Open loop: absolute-time grid start + k/r. A tick that is late beyond the next grid point is skipped
+(missed_ticks), and the feeder realigns to the next grid point after "now". No catch-up bursts.
+Closed loop (offline profile only): blocking put, so the worker is never idle.
+The feeder only puts an index into the pre-decoded input list.
+"""
+import sys
+
+sys.dont_write_bytecode = True
+
+import queue
+import threading
+import time
+
+
+class Feeder(threading.Thread):
+    def __init__(self, log, in_queue, rate, n_inputs, start_ns, closed_loop=False):
+        super().__init__(name=f"feeder:{log.name}", daemon=True)
+        self.log = log
+        self.q = in_queue
+        self.rate = float(rate)
+        self.period_ns = 1e9 / self.rate if not closed_loop else None
+        self.n_inputs = n_inputs
+        self.start_ns = start_ns
+        self.closed_loop = closed_loop
+        self.stop_flag = False
+
+    def run(self):
+        if self.closed_loop:
+            return self._run_closed()
+        log, q, period, start = self.log, self.q, self.period_ns, self.start_ns
+        mono = time.monotonic_ns
+        k = 0
+        while not self.stop_flag:
+            g = start + int(k * period)
+            now = mono()
+            if now < g:
+                time.sleep(min((g - now) / 1e9, 0.05))
+                continue
+            if now >= start + int((k + 1) * period):
+                # late beyond the next grid point: skip every grid point that is already due
+                k_now = int((now - start) / period)
+                while start + int(k_now * period) > now:
+                    k_now -= 1
+                for j in range(k, k_now + 1):
+                    log.missed_grid.append(start + int(j * period))
+                k = k_now + 1
+                continue
+            try:
+                q.put_nowait((k % self.n_inputs, now))
+                ok = 1
+            except queue.Full:
+                ok = 0
+            log.gen_ts.append(now)
+            log.gen_ok.append(ok)
+            log.gen_delay.append(now - g)
+            k += 1
+
+    def _run_closed(self):
+        log, q = self.log, self.q
+        mono = time.monotonic_ns
+        k = 0
+        while mono() < self.start_ns:
+            time.sleep(0.001)
+        while not self.stop_flag:
+            now = mono()
+            try:
+                q.put((k % self.n_inputs, now), timeout=0.05)
+            except queue.Full:
+                continue
+            log.gen_ts.append(now)
+            log.gen_ok.append(1)
+            log.gen_delay.append(0)
+            k += 1

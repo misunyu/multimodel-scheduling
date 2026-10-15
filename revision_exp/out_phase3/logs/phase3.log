@@ -1,0 +1,97 @@
+[2026-10-14 17:23:44 +    0.0s] start | env {'python': '3.10.12', 'sklearn': '1.7.2', 'xgboost': '3.0.5', 'numpy': '2.2.6', 'pandas': '2.3.3'}
+[2026-10-14 17:23:47 +    2.7s] [Ridge] T: best={'alpha': 100} cv_mae=0.1053 (0.1s, conv.warn cv=0 refit=0)
+[2026-10-14 17:23:47 +    2.8s] [Ridge] D: best={'alpha': 100} cv_mae=0.1099 (0.1s, conv.warn cv=0 refit=0)
+[2026-10-14 17:24:00 +   15.8s] [Random Forest] T: best={'max_depth': None, 'min_samples_leaf': 1, 'n_estimators': 300} cv_mae=0.0324 (13.0s, conv.warn cv=0 refit=0)
+[2026-10-14 17:24:13 +   28.7s] [Random Forest] D: best={'max_depth': None, 'min_samples_leaf': 1, 'n_estimators': 600} cv_mae=0.0403 (13.0s, conv.warn cv=0 refit=0)
+[2026-10-14 17:24:15 +   30.4s] [MLP (small)] T: best={'alpha': 0.01, 'hidden_layer_sizes': (64,), 'learning_rate_init': 0.001} cv_mae=0.4884 (1.7s, conv.warn cv=0 refit=0)
+[2026-10-14 17:24:16 +   32.1s] [MLP (small)] D: best={'alpha': 0.01, 'hidden_layer_sizes': (64, 32), 'learning_rate_init': 0.001} cv_mae=0.4563 (1.7s, conv.warn cv=0 refit=0)
+[2026-10-14 17:24:25 +   40.8s] [XGBoost -P] T: best={'learning_rate': 0.05, 'max_depth': 4, 'n_estimators': 1000, 'subsample': 1.0} cv_mae=0.0314 (8.7s)
+[2026-10-14 17:24:35 +   50.3s] [XGBoost -P] D: best={'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0333 (9.5s)
+[2026-10-14 17:24:42 +   57.7s] [XGBoost -I] T: best={'learning_rate': 0.01, 'max_depth': 6, 'n_estimators': 500, 'subsample': 0.8} cv_mae=0.0486 (7.4s)
+[2026-10-14 17:24:49 +   65.0s] [XGBoost -I] D: best={'learning_rate': 0.01, 'max_depth': 6, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0459 (7.3s)
+[2026-10-14 17:25:03 +   79.0s] [per-instance] t_ratio: best={'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0120 (12.0s)
+[2026-10-14 17:25:15 +   90.9s] [per-instance] q_i: best={'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 1000, 'subsample': 1.0} cv_mae=0.0134 (11.9s)
+[2026-10-14 17:25:15 +   90.9s] instance training rows: {'rows': 8880, 't_ratio_min': 0.0434628348412276, 't_ratio_max': 1.0141509433962264, 't_ratio_rows_above_1': 2908, 'q_i_max': 0.9565410199556541, 'q_i_rows_above_0.01': 3291}
+[2026-10-14 17:25:15 +   90.9s] configuration frozen
+[2026-10-14 17:25:16 +   91.6s] per-instance selection done (no 3x label read)
+[2026-10-14 17:25:17 +   93.0s] 
+predictors
+       method  workloads  MAE(T)  MAE(D)  Avg score  regret Top-1 Top-5  Ours-All-GPU paired mean (ref.)
+ XGBoost Full         12  0.0273  0.0300     0.9930  0.0044  7/12 11/12                           0.0203
+        Ridge         12  0.0300  0.0214     0.9941  0.0033  7/12 11/12                           0.0214
+Random Forest         12  0.0307  0.0410     0.9948  0.0026  8/12 11/12                           0.0221
+  MLP (small)         12  0.0597  0.0474     0.9729  0.0245  5/12  9/12                           0.0002
+[2026-10-14 17:25:17 +   93.0s] 
+ablation
+      method  features removed (non-zero in train)  workloads  MAE(T)  MAE(D)  Avg score  regret Top-1 Top-5  Ours-All-GPU paired mean (ref.)
+XGBoost Full       204                           0         12  0.0273  0.0300      0.993  0.0044  7/12 11/12                           0.0203
+  XGBoost -P       148                     56 (56)         12  0.0262  0.0447      0.992  0.0054  6/12 10/12                           0.0193
+  XGBoost -I        96                    108 (54)         12  0.0310  0.0347      0.996  0.0014  8/12 12/12                           0.0233
+[2026-10-14 17:25:17 +   93.0s] 
+baseline
+                                method  workloads  MAE(T)  MAE(D)  Avg score  regret                                      Top-1 Top-5 Ours-All-GPU paired mean (ref.)
+             Latency-based (= All-GPU)         12     N/A     N/A     0.9727  0.0247                                       6/12   N/A                                
+Per-instance predictor ([14]-inspired)         12  0.0276  0.0236     0.9868  0.0106                                       6/12 11/12                          0.0141
+                          XGBoost Full         12  0.0273    0.03     0.9930  0.0044                                       7/12 11/12                          0.0203
+                             Best-of-5         12     N/A     N/A     0.9404  0.0570 0.402 (mean hit rate over 1,000 samplings)   N/A                                
+                                Oracle         12     N/A     N/A     0.9974  0.0000                                      12/12   N/A                                
+[2026-10-14 17:25:17 +   93.0s] 
+         features        split  workloads  workloads_with_collision  colliding_sets  colliding_candidates  max_S_range
+               -I      test 3x         22                         2               2                     4     0.641348
+               -I train 1,2,4x         66                         6               6                    12     0.663109
+               -P      test 3x         22                         0               0                     0     0.000000
+               -P train 1,2,4x         66                         0               0                     0     0.000000
+             Full      test 3x         22                         0               0                     0     0.000000
+             Full train 1,2,4x         66                         0               0                     0     0.000000
+per-instance rows      test 3x         22                         0               0                     0     0.000000
+[2026-10-14 17:25:18 +   93.4s] baseline diagnostics: {'reconstruction_candidates': 504, 'reconstruction_max_abs_D': 1.6653345369377348e-16, 'reconstruction_max_abs_F': 2.2737367544323206e-13, 'reconstruction_max_abs_per_repeat_F': 0.0, 'reconstruction_max_abs_per_repeat_D': 9.71445146547012e-17, 'reconstruction_exact(1e-9)': True, 'alt_rule_mean_d_over_mean_g_max_abs_diff': 9.85942884235147e-06, 'alt_rule_candidates_differing(>1e-9)': 411, 'instance_rows_N>=3': 2928, 'instance_mae_t_ratio': 0.0389181890311138, 'instance_mae_q_i': 0.0516816936141263, 'instance_mae_q_i_where_q>0.01': 0.09266885908902334, 'x3_t_ratio_true_max': 1.0062893081761006, 'x3_t_ratio_true_rows_above_1': 395, 'F_hat_abs_rel_err_mean': 0.03585019630246895, 'mae_T_select(primary)': 0.027552437083888, 'mae_T_eval(measured-normalisation diagnostic)': 0.0281175908816136, 'workloads_selection_changes_with_measured_normalisation': 0, 'note_T_eval': 'T_hat_eval uses the measured F_max of the 3x workload: post-hoc diagnostic only, not used for selection or the primary results'}
+[2026-10-14 17:25:18 +   93.4s] done in 93.4 s
+--- rerun 2026. 10. 14. (수) 17:53:18 KST clip=False
+[2026-10-14 17:53:18 +    0.0s] start | env {'python': '3.10.12', 'sklearn': '1.7.2', 'xgboost': '3.0.5', 'numpy': '2.2.6', 'pandas': '2.3.3'}
+[2026-10-14 17:53:21 +    2.7s] [Ridge] T: best={'alpha': 100} cv_mae=0.1053 (0.1s, conv.warn cv=0 refit=0)
+[2026-10-14 17:53:21 +    2.8s] [Ridge] D: best={'alpha': 100} cv_mae=0.1099 (0.1s, conv.warn cv=0 refit=0)
+[2026-10-14 17:53:34 +   15.7s] [Random Forest] T: best={'max_depth': None, 'min_samples_leaf': 1, 'n_estimators': 300} cv_mae=0.0324 (12.9s, conv.warn cv=0 refit=0)
+[2026-10-14 17:53:47 +   29.0s] [Random Forest] D: best={'max_depth': None, 'min_samples_leaf': 1, 'n_estimators': 600} cv_mae=0.0403 (13.3s, conv.warn cv=0 refit=0)
+[2026-10-14 17:53:49 +   30.7s] [MLP (small)] T: best={'alpha': 0.01, 'hidden_layer_sizes': (64,), 'learning_rate_init': 0.001} cv_mae=0.4884 (1.7s, conv.warn cv=0 refit=0)
+[2026-10-14 17:53:50 +   32.3s] [MLP (small)] D: best={'alpha': 0.01, 'hidden_layer_sizes': (64, 32), 'learning_rate_init': 0.001} cv_mae=0.4563 (1.7s, conv.warn cv=0 refit=0)
+[2026-10-14 17:53:59 +   41.3s] [XGBoost -P] T: best={'learning_rate': 0.05, 'max_depth': 4, 'n_estimators': 1000, 'subsample': 1.0} cv_mae=0.0314 (9.0s)
+[2026-10-14 17:54:09 +   51.2s] [XGBoost -P] D: best={'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0333 (9.9s)
+[2026-10-14 17:54:16 +   58.3s] [XGBoost -I] T: best={'learning_rate': 0.01, 'max_depth': 6, 'n_estimators': 500, 'subsample': 0.8} cv_mae=0.0486 (7.1s)
+[2026-10-14 17:54:24 +   65.7s] [XGBoost -I] D: best={'learning_rate': 0.01, 'max_depth': 6, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0459 (7.4s)
+[2026-10-14 17:54:38 +   79.9s] [per-instance] t_ratio: best={'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0120 (12.2s)
+[2026-10-14 17:54:50 +   91.9s] [per-instance] q_i: best={'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 1000, 'subsample': 1.0} cv_mae=0.0134 (12.0s)
+[2026-10-14 17:54:50 +   91.9s] instance training rows: {'rows': 8880, 't_ratio_min': 0.0434628348412276, 't_ratio_max': 1.0141509433962264, 't_ratio_rows_above_1': 2908, 'q_i_max': 0.9565410199556541, 'q_i_rows_above_0.01': 3291}
+[2026-10-14 17:54:50 +   91.9s] configuration frozen
+[2026-10-14 17:54:50 +   92.6s] per-instance selection done (no 3x label read)
+[2026-10-14 17:54:52 +   93.9s] 
+predictors
+       method  workloads  MAE(T)  MAE(D)  Avg score  regret Top-1 Top-5  Ours-All-GPU paired mean (ref.)
+ XGBoost Full         12  0.0273  0.0300     0.9930  0.0044  7/12 11/12                           0.0203
+        Ridge         12  0.0300  0.0214     0.9941  0.0033  7/12 11/12                           0.0214
+Random Forest         12  0.0307  0.0410     0.9948  0.0026  8/12 11/12                           0.0221
+  MLP (small)         12  0.0597  0.0474     0.9729  0.0245  6/12  9/12                           0.0002
+[2026-10-14 17:54:52 +   93.9s] 
+ablation
+      method  features removed (non-zero in train)  workloads  MAE(T)  MAE(D)  Avg score  regret Top-1 Top-5  Ours-All-GPU paired mean (ref.)
+XGBoost Full       204                           0         12  0.0273  0.0300     0.9930  0.0044  7/12 11/12                           0.0203
+  XGBoost -P       148                     56 (56)         12  0.0262  0.0447     0.9918  0.0056  6/12 10/12                           0.0191
+  XGBoost -I        96                    108 (54)         12  0.0310  0.0347     0.9960  0.0014  8/12 12/12                           0.0233
+[2026-10-14 17:54:52 +   93.9s] 
+baseline
+                                method  workloads  MAE(T)  MAE(D)  Avg score  regret                                      Top-1 Top-5 Ours-All-GPU paired mean (ref.)
+             Latency-based (= All-GPU)         12     N/A     N/A     0.9727  0.0247                                       6/12   N/A                                
+Per-instance predictor ([14]-inspired)         12  0.0276  0.0236     0.9868  0.0106                                       6/12 11/12                          0.0141
+                          XGBoost Full         12  0.0273    0.03     0.9930  0.0044                                       7/12 11/12                          0.0203
+                             Best-of-5         12     N/A     N/A     0.9404  0.0570 0.402 (mean hit rate over 1,000 samplings)   N/A                                
+                                Oracle         12     N/A     N/A     0.9974  0.0000                                      12/12   N/A                                
+[2026-10-14 17:54:52 +   94.0s] 
+         features        split  workloads  workloads_with_collision  colliding_sets  colliding_candidates  max_S_range
+               -I      test 3x         22                         2               2                     4     0.641348
+               -I train 1,2,4x         66                         6               6                    12     0.663109
+               -P      test 3x         22                         0               0                     0     0.000000
+               -P train 1,2,4x         66                         0               0                     0     0.000000
+             Full      test 3x         22                         0               0                     0     0.000000
+             Full train 1,2,4x         66                         0               0                     0     0.000000
+per-instance rows      test 3x         22                         0               0                     0     0.000000
+[2026-10-14 17:54:52 +   94.4s] baseline diagnostics: {'reconstruction_candidates': 504, 'reconstruction_max_abs_D': 1.6653345369377348e-16, 'reconstruction_max_abs_F': 2.2737367544323206e-13, 'reconstruction_max_abs_per_repeat_F': 0.0, 'reconstruction_max_abs_per_repeat_D': 9.71445146547012e-17, 'reconstruction_exact(1e-9)': True, 'alt_rule_mean_d_over_mean_g_max_abs_diff': 9.85942884235147e-06, 'alt_rule_candidates_differing(>1e-9)': 411, 'instance_rows_N>=3': 2928, 'instance_mae_t_ratio': 0.0389181890311138, 'instance_mae_q_i': 0.0516816936141263, 'instance_mae_q_i_where_q>0.01': 0.09266885908902334, 'x3_t_ratio_true_max': 1.0062893081761006, 'x3_t_ratio_true_rows_above_1': 395, 'F_hat_abs_rel_err_mean': 0.03585019630246895, 'mae_T_select(primary)': 0.027552437083888, 'mae_T_eval(measured-normalisation diagnostic)': 0.0281175908816136, 'workloads_selection_changes_with_measured_normalisation': 0, 'note_T_eval': 'T_hat_eval uses the measured F_max of the 3x workload: post-hoc diagnostic only, not used for selection or the primary results'}
+[2026-10-14 17:54:52 +   94.4s] done in 94.4 s
