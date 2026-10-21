@@ -1,0 +1,908 @@
+{
+ "schema": "revision_profiling/v2.2+1b",
+ "run_key": "gpt2+mnasnet+resnet50+resnext50+shufflenet-v2-12+squeezenet1.0-12+vgg19_x2.5|combination_113|rep1",
+ "execution_id": "20261020T200852_2011440",
+ "schedule_file": "gpt2+mnasnet+resnet50+resnext50+shufflenet-v2-12+squeezenet1.0-12+vgg19_x2.5.yaml",
+ "combination": "combination_113",
+ "repeat": 1,
+ "mode": "open_loop",
+ "meta": {
+  "family": "gpt2+mnasnet+resnet50+resnext50+shufflenet-v2-12+squeezenet1.0-12+vgg19",
+  "models": [
+   "gpt2",
+   "mnasnet",
+   "resnet50",
+   "resnext50",
+   "shufflenet-v2-12",
+   "squeezenet1.0-12",
+   "vgg19"
+  ],
+  "n_instances": 7,
+  "beta": 0.1,
+  "multiplier": 2.5,
+  "rate_rule": "rate = beta * gpu_isolated_throughput * multiplier (placement independent)",
+  "rate_source": "revision_profiling/offline_profile/offline_profile.json",
+  "family_index": 21,
+  "candidates": 128
+ },
+ "placement": "GCCCGGG",
+ "timing": {
+  "warmup_sec": 5.0,
+  "window_sec_actual": 10.0,
+  "feeder_start_ns": 1227513983732558,
+  "t0_ns": 1227518983732558,
+  "t1_ns": 1227528983732558,
+  "snapshot_read_lag_ms_max": 0.561955,
+  "queue_capacity": 2,
+  "drop_policy": "drop-newest",
+  "clock": "time.monotonic_ns = CLOCK_MONOTONIC, shared by the executor and the feeder processes",
+  "feeder_mode": "process",
+  "boundary_read": "separate reader process, lock-free shared-memory read"
+ },
+ "instances": [
+  {
+   "name": "gpt2",
+   "model": "gpt2",
+   "execution": "gpu",
+   "rate": 5.300000000000001,
+   "base_rate": 21.2,
+   "beta": 0.1,
+   "multiplier": 2.5,
+   "onnx": "models_onnx/gpt2.onnx",
+   "files_checked": {
+    "models_onnx/gpt2.onnx": {
+     "sha256": "c9de47f885e969a5e532455a6feac679d785fb067d2e287eb81b7ee592d2cb20",
+     "match": true
+    }
+   },
+   "providers": [
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "lm_prompt",
+   "preprocess": "lm_fixed_prompt",
+   "postprocess": "lm_greedy",
+   "load_ms": 878.1750139314681,
+   "first_request_ms": 210.23160801269114,
+   "window": {
+    "generated": 53,
+    "enqueued": 53,
+    "dropped_full": 0,
+    "completed": 53,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 53,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 1.104136,
+    "tick_delay_ms_p95": 0.6605083999999997,
+    "pending_start": 0,
+    "pending_end": 0,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 53,
+    "snapshot_start": {
+     "ts": 1227518984287138,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "snapshot_end": {
+     "ts": 1227528984097766,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "snapshot_pending_start": 0,
+    "snapshot_pending_end": 0,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.55458,
+    "snapshot_read_lag_ms_end": 0.365208,
+    "snapshot_flag": false,
+    "inflight_start": 0,
+    "inflight_end": 0,
+    "latency_ms_p50": 68.582675,
+    "latency_ms_p95": 75.5062264,
+    "service_ms_p50": 68.554471,
+    "service_ms_p95": 75.2769042,
+    "service_ms_mean": 68.84640609433963,
+    "preprocess_ms_mean": 0.013541886792452829,
+    "q_i": 0.0
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 80,
+    "enqueued": 80,
+    "completed": 80,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 80
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 2.78
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 2011479,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.511575085,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": [
+    4683,
+    1323,
+    3951,
+    13,
+    198,
+    198,
+    464,
+    1748,
+    6745,
+    635,
+    7052,
+    284,
+    14762,
+    257,
+    720,
+    16
+   ]
+  },
+  {
+   "name": "mnasnet",
+   "model": "mnasnet",
+   "execution": "cpu",
+   "rate": 197.675,
+   "base_rate": 790.7,
+   "beta": 0.1,
+   "multiplier": 2.5,
+   "onnx": "models_onnx/mnasnet.onnx",
+   "files_checked": {
+    "models_onnx/mnasnet.onnx": {
+     "sha256": "cd91a1ac963484df9f4cc666b2019916387816c13dfedb22d908f058224f3d9d",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "cls_argmax",
+   "load_ms": 11.617535958066583,
+   "first_request_ms": 3.1058909371495247,
+   "window": {
+    "generated": 1977,
+    "enqueued": 1977,
+    "dropped_full": 0,
+    "completed": 1977,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 1977,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 3.091878,
+    "tick_delay_ms_p95": 0.3696223999999995,
+    "pending_start": 1,
+    "pending_end": 1,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 1978,
+    "snapshot_start": {
+     "ts": 1227518984289724,
+     "qsize": 0,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 1227528984100556,
+     "qsize": 0,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 1,
+    "snapshot_pending_end": 1,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.557166,
+    "snapshot_read_lag_ms_end": 0.367998,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 4.126211,
+    "latency_ms_p95": 5.782085599999999,
+    "service_ms_p50": 3.99616,
+    "service_ms_p95": 5.323892999999999,
+    "service_ms_mean": 4.089770756702073,
+    "preprocess_ms_mean": 0.6042400794132524,
+    "q_i": 0.0
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 2967,
+    "enqueued": 2967,
+    "completed": 2967,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 2967
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 7.79
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 2011503,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.509005956,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 22
+  },
+  {
+   "name": "resnet50",
+   "model": "resnet50",
+   "execution": "cpu",
+   "rate": 109.90000000000002,
+   "base_rate": 439.6,
+   "beta": 0.1,
+   "multiplier": 2.5,
+   "onnx": "models_onnx/resnet50.onnx",
+   "files_checked": {
+    "models_onnx/resnet50.onnx": {
+     "sha256": "1e80e8a7c8eec8e8b20c440d7dd7f2f8590779c7c2859dc4514870dc463845d3",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "cls_argmax",
+   "load_ms": 157.52514591440558,
+   "first_request_ms": 28.813970973715186,
+   "window": {
+    "generated": 1099,
+    "enqueued": 390,
+    "dropped_full": 709,
+    "completed": 390,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 1099,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 6.601523,
+    "tick_delay_ms_p95": 0.38071139999999876,
+    "pending_start": 3,
+    "pending_end": 3,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 1102,
+    "snapshot_start": {
+     "ts": 1227518984290707,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 1227528984101131,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 3,
+    "snapshot_pending_end": 3,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.558149,
+    "snapshot_read_lag_ms_end": 0.368573,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 72.3217195,
+    "latency_ms_p95": 80.3765864,
+    "service_ms_p50": 25.6704325,
+    "service_ms_p95": 29.2472784,
+    "service_ms_mean": 25.6201017025641,
+    "preprocess_ms_mean": 0.5768339102564102,
+    "q_i": 0.6451319381255687
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 1650,
+    "enqueued": 587,
+    "completed": 587,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 587
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 9.93
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 2011527,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.593484159,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 112
+  },
+  {
+   "name": "resnext50",
+   "model": "resnext50",
+   "execution": "cpu",
+   "rate": 105.90000000000002,
+   "base_rate": 423.6,
+   "beta": 0.1,
+   "multiplier": 2.5,
+   "onnx": "models_onnx/resnext50.onnx",
+   "files_checked": {
+    "models_onnx/resnext50.onnx": {
+     "sha256": "9ba107b69b9f646e14e9469b81c50708b949d85070beb418ae3d027d18b3e4be",
+     "match": true
+    }
+   },
+   "providers": [
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "cls_argmax",
+   "load_ms": 81.41575078479946,
+   "first_request_ms": 26.0910470969975,
+   "window": {
+    "generated": 1059,
+    "enqueued": 376,
+    "dropped_full": 683,
+    "completed": 375,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 1059,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 3.373162,
+    "tick_delay_ms_p95": 0.5033445999999991,
+    "pending_start": 2,
+    "pending_end": 3,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 1061,
+    "snapshot_start": {
+     "ts": 1227518984291691,
+     "qsize": 1,
+     "inflight": 1
+    },
+    "snapshot_end": {
+     "ts": 1227528984101981,
+     "qsize": 2,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 2,
+    "snapshot_pending_end": 3,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.559133,
+    "snapshot_read_lag_ms_end": 0.369423,
+    "snapshot_flag": false,
+    "inflight_start": 1,
+    "inflight_end": 1,
+    "latency_ms_p50": 74.903134,
+    "latency_ms_p95": 84.67362010000001,
+    "service_ms_p50": 26.665592,
+    "service_ms_p95": 29.784199900000004,
+    "service_ms_mean": 26.60351693333333,
+    "preprocess_ms_mean": 0.5708429013333334,
+    "q_i": 0.6449480642115203
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 1590,
+    "enqueued": 571,
+    "completed": 571,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 571
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 9.96
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 2011551,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.43617781,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 53
+  },
+  {
+   "name": "shufflenet-v2-12",
+   "model": "shufflenet-v2-12",
+   "execution": "gpu",
+   "rate": 211.95,
+   "base_rate": 847.8,
+   "beta": 0.1,
+   "multiplier": 2.5,
+   "onnx": "models_onnx/shufflenet-v2-12.onnx",
+   "files_checked": {
+    "models_onnx/shufflenet-v2-12.onnx": {
+     "sha256": "ea69821b4dd374ae2f33f9710dd1229ac263d0ee5b5a46ca3521f6483e1ba035",
+     "match": true
+    }
+   },
+   "providers": [
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_imagenet_norm",
+   "postprocess": "cls_argmax",
+   "load_ms": 13.234006939455867,
+   "first_request_ms": 228.20132598280907,
+   "window": {
+    "generated": 2120,
+    "enqueued": 2120,
+    "dropped_full": 0,
+    "completed": 2119,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 2120,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 3.605441,
+    "tick_delay_ms_p95": 0.30177934999999995,
+    "pending_start": 0,
+    "pending_end": 1,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 2120,
+    "snapshot_start": {
+     "ts": 1227518984292459,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "snapshot_end": {
+     "ts": 1227528984102763,
+     "qsize": 0,
+     "inflight": 1
+    },
+    "snapshot_pending_start": 0,
+    "snapshot_pending_end": 1,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.559901,
+    "snapshot_read_lag_ms_end": 0.370205,
+    "snapshot_flag": false,
+    "inflight_start": 0,
+    "inflight_end": 1,
+    "latency_ms_p50": 2.266341,
+    "latency_ms_p95": 6.035033699999999,
+    "service_ms_p50": 2.108173,
+    "service_ms_p95": 4.913334999999999,
+    "service_ms_mean": 2.5361976602170837,
+    "preprocess_ms_mean": 0.6676287253421426,
+    "q_i": 0.0
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 3181,
+    "enqueued": 3181,
+    "completed": 3181,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 3181
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 3.39
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 2011575,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.285844325,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 108
+  },
+  {
+   "name": "squeezenet1.0-12",
+   "model": "squeezenet1.0-12",
+   "execution": "gpu",
+   "rate": 335.95,
+   "base_rate": 1343.8,
+   "beta": 0.1,
+   "multiplier": 2.5,
+   "onnx": "models_onnx/squeezenet1.0-12.onnx",
+   "files_checked": {
+    "models_onnx/squeezenet1.0-12.onnx": {
+     "sha256": "dec81a8684617770b3cf13fadc1d92565d1d453d23935fc6388b792d99c992bd",
+     "match": true
+    }
+   },
+   "providers": [
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_caffe_bgr_mean",
+   "postprocess": "cls_argmax",
+   "load_ms": 7.7305149752646685,
+   "first_request_ms": 26.578753953799605,
+   "window": {
+    "generated": 3352,
+    "enqueued": 3241,
+    "dropped_full": 111,
+    "completed": 3240,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 3360,
+    "missed_ticks": 8,
+    "realization": 0.9976190476190476,
+    "tick_delay_ms_max": 2.858946,
+    "tick_delay_ms_p95": 0.3806197499999995,
+    "pending_start": 0,
+    "pending_end": 1,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 3352,
+    "snapshot_start": {
+     "ts": 1227518984293286,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "snapshot_end": {
+     "ts": 1227528984103640,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "snapshot_pending_start": 0,
+    "snapshot_pending_end": 0,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": -1,
+    "snapshot_read_lag_ms_start": 0.560728,
+    "snapshot_read_lag_ms_end": 0.371082,
+    "snapshot_flag": false,
+    "inflight_start": 0,
+    "inflight_end": 0,
+    "latency_ms_p50": 1.715507,
+    "latency_ms_p95": 9.254394049999997,
+    "service_ms_p50": 1.296637,
+    "service_ms_p95": 4.693404449999999,
+    "service_ms_mean": 1.9289307762345678,
+    "preprocess_ms_mean": 0.42799653765432105,
+    "q_i": 0.0331145584725537
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 5032,
+    "enqueued": 4860,
+    "completed": 4860,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 10,
+    "consumed_by_drainer": 4860
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 3.14
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 2011599,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.280106895,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 49
+  },
+  {
+   "name": "vgg19",
+   "model": "vgg19",
+   "execution": "gpu",
+   "rate": 140.925,
+   "base_rate": 563.7,
+   "beta": 0.1,
+   "multiplier": 2.5,
+   "onnx": "models_onnx/vgg19.onnx",
+   "files_checked": {
+    "models_onnx/vgg19.onnx": {
+     "sha256": "639ce28961555254d0726c6bb7b2ae7bb9665233d00e04d1add3425aae86cb87",
+     "match": true
+    }
+   },
+   "providers": [
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider"
+   ],
+   "request_unit": "image",
+   "preprocess": "cls_resize256_crop224_caffe_bgr_mean",
+   "postprocess": "cls_argmax",
+   "load_ms": 648.7625311128795,
+   "first_request_ms": 13.811798999086022,
+   "window": {
+    "generated": 1409,
+    "enqueued": 1409,
+    "dropped_full": 0,
+    "completed": 1409,
+    "failed": 0,
+    "failed_output_put": 0,
+    "consumer_failed": 0,
+    "scheduled_ticks": 1409,
+    "missed_ticks": 0,
+    "realization": 1.0,
+    "tick_delay_ms_max": 3.33722,
+    "tick_delay_ms_p95": 0.40414239999999974,
+    "pending_start": 0,
+    "pending_end": 0,
+    "conservation_gen": 0,
+    "conservation_flow": 0,
+    "trace_check": "ok",
+    "trace_population": 1409,
+    "snapshot_start": {
+     "ts": 1227518984294513,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "snapshot_end": {
+     "ts": 1227528984104774,
+     "qsize": 0,
+     "inflight": 0
+    },
+    "snapshot_pending_start": 0,
+    "snapshot_pending_end": 0,
+    "snapshot_diff_start": 0,
+    "snapshot_diff_end": 0,
+    "snapshot_read_lag_ms_start": 0.561955,
+    "snapshot_read_lag_ms_end": 0.372216,
+    "snapshot_flag": false,
+    "inflight_start": 0,
+    "inflight_end": 0,
+    "latency_ms_p50": 2.488065,
+    "latency_ms_p95": 5.5163268,
+    "service_ms_p50": 2.374665,
+    "service_ms_p95": 5.140183999999999,
+    "service_ms_mean": 2.8669229985805535,
+    "preprocess_ms_mean": 0.44782962171753016,
+    "q_i": 0.0
+   },
+   "inflight_sequential_ok": true,
+   "total": {
+    "generated": 2115,
+    "enqueued": 2115,
+    "completed": 2115,
+    "failed": 0,
+    "leftover_in_queue_at_stop": 0,
+    "missed_ticks": 0,
+    "consumed_by_drainer": 2115
+   },
+   "total_identity_ok": true,
+   "consumer_failed_total": 0,
+   "fail_kinds": [],
+   "cpu_sec_in_window": {
+    "worker_thread": 2.74
+   },
+   "worker_nice": 0,
+   "feeder": {
+    "pid": 2011623,
+    "clock": "clock_gettime(CLOCK_MONOTONIC)",
+    "clock_shared_ok": true,
+    "modules": {
+     "__main__": "revision_profiling/code/executor.py",
+     "__mp_main__": "revision_profiling/code/executor.py",
+     "feeder": "revision_profiling/code/feeder.py",
+     "shmqueue": "revision_profiling/code/shmqueue.py"
+    },
+    "violations": [],
+    "cpu_sec_total": 1.497050593,
+    "dont_write_bytecode": true,
+    "exitcode": 0
+   },
+   "last_result": 60
+  }
+ ],
+ "system": {
+  "completed": 9563,
+  "dropped_full": 1503,
+  "generated": 11069,
+  "failed": 0,
+  "window_sec_actual": 10.0,
+  "throughput_fps": 956.3,
+  "drop_rate_fps": 150.3,
+  "generated_rate_fps": 1106.9,
+  "drop_macro": 0.18902779440137749,
+  "drop_max": 0.6451319381255687,
+  "service_rate_sum_legacy": 1597.1774115644912
+ },
+ "gpu_samples": {
+  "n": 10,
+  "util_mean": 63.0,
+  "util_max": 75.0,
+  "mem_used_mib_max": 4937.0,
+  "series": [
+   [
+    0.815,
+    50.0,
+    4937.0
+   ],
+   [
+    1.815,
+    71.0,
+    4937.0
+   ],
+   [
+    2.815,
+    69.0,
+    4937.0
+   ],
+   [
+    3.816,
+    50.0,
+    4937.0
+   ],
+   [
+    4.816,
+    69.0,
+    4937.0
+   ],
+   [
+    5.817,
+    74.0,
+    4937.0
+   ],
+   [
+    6.817,
+    55.0,
+    4937.0
+   ],
+   [
+    7.817,
+    56.0,
+    4937.0
+   ],
+   [
+    8.817,
+    75.0,
+    4937.0
+   ],
+   [
+    9.817,
+    61.0,
+    4937.0
+   ]
+  ]
+ },
+ "process_cpu_sec_in_window": 77.41,
+ "inputs": {
+  "imagenet": {
+   "n": 128,
+   "first": "n01440764_tench.JPEG",
+   "last": "n02002556_white_stork.JPEG"
+  },
+  "prompt": {
+   "file": "revision_profiling/code/lm_assets/prompts.json",
+   "P": 32,
+   "K": 16
+  }
+ },
+ "loaded_modules": {
+  "__main__": "revision_profiling/code/executor.py",
+  "counters": "revision_profiling/code/counters.py",
+  "__mp_main__": "revision_profiling/code/executor.py",
+  "feeder": "revision_profiling/code/feeder.py",
+  "shmqueue": "revision_profiling/code/shmqueue.py",
+  "worker_base": "revision_profiling/code/worker_base.py",
+  "lm_runner": "revision_profiling/code/lm_runner.py",
+  "worker_cls": "revision_profiling/code/worker_cls.py",
+  "image_processing": "revision_profiling/code/image_processing.py",
+  "worker_yolo": "revision_profiling/code/worker_yolo.py"
+ },
+ "module_violations": [],
+ "workers_alive_after_join": [],
+ "git_commit": "38111dde57742821688516de87b226234cda57ec",
+ "env": {
+  "python": "3.10.12",
+  "onnxruntime": "1.23.2",
+  "numpy": "2.2.6",
+  "platform": "Linux-6.8.0-83-generic-x86_64-with-glibc2.35",
+  "cpu_count": 24,
+  "host": "5090pc",
+  "switch_interval": 0.005,
+  "inference_nice": 0,
+  "intra_op_num_threads": 4,
+  "intra_op_allow_spinning": "0",
+  "inference_sched_idle": false,
+  "main_thread_nice": 0,
+  "loadavg_before": [
+   10.69482421875,
+   10.80322265625,
+   10.6025390625
+  ],
+  "dont_write_bytecode": true,
+  "process_layout": "executor process: one worker thread per instance + drainer; one feeder process per instance (spawn)"
+ },
+ "invalid_reasons": [],
+ "valid": true
+}

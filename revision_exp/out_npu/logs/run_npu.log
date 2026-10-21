@@ -1,0 +1,35 @@
+[2026-10-16 00:26:28 +    0.0s] command: revision_exp_adapter/run_npu.py | data=/home/msyu/PycharmProjects/mms_npu_results/revision_profiling_npu/dataset | out=/home/msyu/PycharmProjects/multimodel-scheduling/revision_exp/out_npu
+[2026-10-16 00:26:29 +    1.0s] input pinned: commit 4070ce2e7c7924f50c5c96d9c3c6e513d7f61081, sha16 {'labels_train.csv': '7f5acf8534fd58e4', 'labels_test.csv': 'fed522320da95488'}, worktree clean=True
+[2026-10-16 00:26:29 +    1.0s] evaluate.self_test: 5 checks passed
+[2026-10-16 00:26:30 +    1.4s] features: {'feature_columns': 94, 'npu_columns': 36, 'npu0_columns': 18, 'npu1_columns': 18, 'gpu_columns': 18, 'rows_exec_npu0_nonzero': 177, 'rows_exec_npu1_nonzero': 177, 'rows_exec_npu0_ne_npu1': 138, 'rows': 279, 'npu0_npu1_columns_identical': False, 'instance_hash_buckets': {'resnet50_big': 38, 'resnet50_small': 101, 'yolov3_big': 32, 'yolov3_small': 64}, 'instance_hash_buckets_distinct': True}
+[2026-10-16 00:26:38 +    9.5s] [multi] T: best={'learning_rate': 0.05, 'max_depth': 4, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0888 cv=7.9s refit=0.2s
+[2026-10-16 00:26:46 +   17.6s] [multi] D: best={'learning_rate': 0.05, 'max_depth': 4, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0975 cv=7.9s refit=0.1s
+[2026-10-16 00:26:53 +   24.8s] [multi] D_noweight: best={'learning_rate': 0.05, 'max_depth': 4, 'n_estimators': 1000, 'subsample': 0.8} cv_mae=0.0933 cv=7.1s refit=0.2s
+[2026-10-16 00:27:03 +   34.6s] [per-instance] t_ratio: best={'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 500, 'subsample': 1.0} cv_mae=0.0242 (9.5s)
+[2026-10-16 00:27:11 +   42.2s] [per-instance] q_i: best={'learning_rate': 0.05, 'max_depth': 6, 'n_estimators': 500, 'subsample': 0.8} cv_mae=0.0289 (7.6s)
+[2026-10-16 00:27:11 +   42.3s] configuration frozen
+[2026-10-16 00:27:11 +   42.5s] blind 3x predictions and selections written: {'predictions_x3_blind.csv': 'e9c729c54dc0f1711668eb663926fe8d6618e4604f7b14e185cebb3fd94f63d0', 'selections_x3_blind.csv': 'e4bcad3833e598581cfce86babca5f2d36bc3088b6d3eb6fefc8951627761ab2'}
+[2026-10-16 00:27:11 +   42.6s] 3x labels read; blind features == loader features; label reconstruction max diff 2.22e-16
+[2026-10-16 00:27:11 +   42.7s] 
+                method  workloads  avg_score avg_score_std_over_trials  regret                  top1 top5   mae_T   mae_D sample_contains_oracle
+                Oracle          4     0.9898                            0.0000                   4/4  4/4     N/A     N/A                       
+     Predictive (Ours)          4     0.9898                            0.0000                   4/4  4/4  0.1372    0.11                       
+         Latency-based          4     0.9898                            0.0000                   4/4  N/A     N/A     N/A                       
+Per-instance predictor          4     0.7930                            0.1968                   1/4  1/4  0.2309  0.1333                       
+             Best-of-5          4     0.8277                    0.1017  0.1621 0.350 (mean hit rate)  N/A     N/A     N/A                   0.35
+   All-CPU (reference)          4     0.3666                            0.6232                   0/4  N/A     N/A     N/A                       
+[2026-10-16 00:27:11 +   42.7s] 
+                method  workloads  avg_score avg_score_std_over_trials  regret                  top1  top5   mae_T   mae_D sample_contains_oracle
+                Oracle         11     0.9934                            0.0000                 11/11 11/11     N/A     N/A                       
+     Predictive (Ours)         11     0.9890                            0.0044                 10/11 11/11  0.1405  0.1158                       
+         Latency-based         11     0.9934                            0.0000                 11/11   N/A     N/A     N/A                       
+Per-instance predictor         11     0.9174                            0.0759                  7/11  8/11  0.1979  0.1369                       
+             Best-of-5         11     0.9174                    0.0438  0.0760 0.688 (mean hit rate)   N/A     N/A     N/A                  0.688
+   All-CPU (reference)         11     0.4989                            0.4945                  3/11   N/A     N/A     N/A                       
+[2026-10-16 00:27:11 +   42.7s] 
+          comparison  workloads  mean_diff  se_across_workloads  n_positive  n_zero  n_negative
+Ours - Latency-based          4   0.000000             0.000000           0       4           0
+       Ours - Oracle          4   0.000000             0.000000           0       4           0
+ Ours - Per-instance          4   0.196829             0.083869           3       1           0
+[2026-10-16 00:27:11 +   42.8s] {"top1_ties": {"gap_le_0.0002": 0, "repeat_oracle_disagree_own_norm": 0, "repeat_oracle_disagree_mean_Fmax": 0, "gaps": [0.0133, 0.0095, 0.0187, 0.0185]}, "best_of_5_top1_primary": 0.35, "latency_vs_oracle_3x_primary": 4, "latency_vs_oracle_training_mismatch_by_rate": {"x1": 0, "x2": 0, "x4": 4}}
+[2026-10-16 00:27:11 +   42.8s] total wall time 42.8s
