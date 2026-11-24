@@ -51,7 +51,7 @@ import matplotlib.pyplot as plt
 def reap_lingering_executors(cooldown_sec: float = 5.0) -> None:
     """Kill any leftover executor/worker processes from the previous scenario
     and wait for the OS/GPU to settle before launching the next one."""
-    for patt in ("schedule_executor_main.py", "headless_inference_worker.py"):
+    for patt in ("boundguard.py", "headless_inference_worker.py"):
         subprocess.run(["pkill", "-9", "-f", patt], check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(cooldown_sec)
@@ -98,7 +98,7 @@ def _cmd_for(mode, label, schedule, csv_path):
     cycle; Static (mode 3) runs only p1_low + an extended p1_high so that
     its wall-clock matches BoundGuard's run."""
     common = [
-        PYTHON, os.path.join(PROJECT_DIR, "schedule_executor_main.py"),
+        PYTHON, os.path.join(PROJECT_DIR, "boundguard.py"),
         "--schedule", schedule,
         "--adaptive-mode", str(mode),
         "--metrics-csv", csv_path,

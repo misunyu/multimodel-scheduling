@@ -26,10 +26,10 @@ python scripts/dynamic_load_validation.py --no-run --epsilon 50
 ```
 
 The script:
-- runs `schedule_executor_main.py --adaptive-mode 1` to produce
+- runs `boundguard.py --adaptive-mode 1` to produce
   the BoundGuard trace (`AdaptiveDeployManager` hot-swap, continuous
   service),
-- runs `schedule_executor_main.py --adaptive-mode 3` to produce
+- runs `boundguard.py --adaptive-mode 3` to produce
   the Static trace,
 - loads both CSVs, computes the windowed `V(t)` (T = 3 s) from the
   per-tick `v_score` column,
@@ -62,7 +62,7 @@ Schedule file: `tests/dynamic_load_views_schedule.yaml`
 |   B   | `combination_p1_high` | all CPU (same as A) | mnasnet 400 / resnet50 60 / resnext50 60 / yolov4 10 | 6 s |
 |   C   | `combination_p2_high` | all GPU  | mnasnet 400 / resnet50 60 / resnext50 60 / yolov4 10 | 22 s |
 
-Phase A → Phase B is processed by `schedule_executor_main.py`'s
+Phase A → Phase B is processed by `boundguard.py`'s
 same-placement detection: the placement signature is identical, so
 no workers are stopped — only the per-view `infps` is swapped in
 place. This is what makes the load-change event appear as a clean,
@@ -205,7 +205,7 @@ the executor and not a property of the adaptation algorithm.
   `combination_p2_high` to put a different subset of models on the
   GPU.
 - **Compare a different mode as "BoundGuard".** Pass a different
-  `--adaptive-mode` value when calling `schedule_executor_main.py`
+  `--adaptive-mode` value when calling `boundguard.py`
   inside `run_scenario()` (e.g. mode 2 for the reactive
   hot-swap+rollback path or mode 4 for stop-and-restart with rollback).
   Note that on this scenario mode 2's rollback validator currently

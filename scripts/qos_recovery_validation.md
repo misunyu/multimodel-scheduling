@@ -161,11 +161,11 @@ spike가 없어야** 한다. 이는 same-placement detection으로 해결되지�
 qos_recovery_validation.py main()
     │
     ├── run_scenario(mode=0, label="stop-and-restart")
-    │      └── schedule_executor_main.py --adaptive-mode 0 --combo-duration ...
+    │      └── boundguard.py --adaptive-mode 0 --combo-duration ...
     │             └── results/qos_recovery_<ts>.csv
     │
     ├── run_scenario(mode=3, label="static")
-    │      └── schedule_executor_main.py --adaptive-mode 3 --combo-duration ...
+    │      └── boundguard.py --adaptive-mode 3 --combo-duration ...
     │             └── results/qos_recovery_static_<ts>.csv
     │
     └── (CSV 두 개 로드 → V(t) 계산 → 정렬 → make_plot)
@@ -175,7 +175,7 @@ qos_recovery_validation.py main()
 각 subprocess 내부:
 
 ```
-schedule_executor_main.py
+boundguard.py
    - mode 0: 매 phase transition마다 placement signature 비교
        · 같으면 → apply_static_phase (in-place infps 업데이트)
        · 다르면 → 워커 stop → re-init → start (cold-start)
@@ -204,7 +204,7 @@ figure에 회색 hatched 영역으로 표시한다.
 다음 네 가지가 mode 0/3 흐름에서 본 시나리오를 위해 명시적으로 구현되어
 있다 — 일반적인 mode 0 동작과 다르므로 주의:
 
-1. **Mode 0의 same-placement detection** (`schedule_executor_main.py`)
+1. **Mode 0의 same-placement detection** (`boundguard.py`)
    - `_placement_signature(combo_name)`이 combo의 `(display, model, execution)`
      세트를 hashable tuple로 반환. **infps는 시그니처에 포함하지 않는다.**
    - `_run_next`에서 직전 combo와 새 combo의 signature가 같으면 워커 restart
@@ -216,7 +216,7 @@ figure에 회색 hatched 영역으로 표시한다.
      cold-start spike가 사라져 stop-and-start 곡선이 static 곡선과 거의
      동일한 형태로 ε까지 상승한다.
 
-2. **Mode 3 (static)** (`schedule_executor_main.py`, `unified_viewer.py`)
+2. **Mode 3 (static)** (`boundguard.py`, `unified_viewer.py`)
    - `--adaptive-mode 3`. mode 0/1/2 어느 경로와도 독립적으로 구현되어 있다.
    - executor는 첫 combo만 정상 시작하고, 이후 combo부터는 항상
      `apply_static_phase`를 호출.
@@ -382,7 +382,7 @@ python scripts/qos_recovery_validation.py --epsilon 50 \
 python scripts/qos_recovery_validation.py --no-run --epsilon 30
 ```
 
-내부적으로는 `schedule_executor_main.py`의 `--combo-duration COMBO=SECONDS`
+내부적으로는 `boundguard.py`의 `--combo-duration COMBO=SECONDS`
 옵션으로 단일 subprocess 안에서 phase별 duration을 다르게 적용한다.
 
 ### 6.5 다른 스케줄로 실행
@@ -468,7 +468,7 @@ offload)로 해석된다. PDF 라벨은 스크립트 상단의 `PHASE_DISPLAY` �
 | `scripts/qos_recovery_validation.py` | 메인 측정/플롯 스크립트. 두 시나리오(mode 0, mode 3)를 차례로 실행하고 두 곡선을 한 figure에 그림 |
 | `scripts/qos_recovery_validation.md` | 본 문서 |
 | `tests/qos_recovery_schedule.yaml` | 3-phase 스케줄 정의. infps만 phase 별로 다르고 phase 1·2의 placement는 동일 |
-| `schedule_executor_main.py` | mode 0/1/2/3 실행기. **mode 3 (static)** 과 **mode 0의 same-placement detection** (`_placement_signature`, `_next_transition_is_inplace`, `_run_next` 안의 in-place 분기) 이 본 figure를 위해 추가됨 |
+| `boundguard.py` | mode 0/1/2/3 실행기. **mode 3 (static)** 과 **mode 0의 same-placement detection** (`_placement_signature`, `_next_transition_is_inplace`, `_run_next` 안의 in-place 분기) 이 본 figure를 위해 추가됨 |
 | `unified_viewer.py` | per-tick 메트릭 CSV 기록. **`apply_static_phase`** 메서드(mode 3 / mode 0 in-place 양쪽이 사용), feeder persistence, Option A v(t), wait_ms 포함이 본 figure를 위한 변경 |
 | `model_processors.py` | ResNet 워커가 `wait_ms`를 4-tuple로 핸들러에 전달하도록 변경 |
 | `view_handlers.py` | `ResNetViewHandler`가 4-tuple을 받아 `avg_wait_ms` 누적 |
@@ -496,7 +496,7 @@ offload)로 해석된다. PDF 라벨은 스크립트 상단의 `PHASE_DISPLAY` �
 ### 9.3 stop-and-start 곡선이 phase 2에서 V(t) ~ 80을 찍은 뒤 dip 후 다시 peak
 - 옛 동작(spurious cold-start spike) 흔적. mode 0의 same-placement detection이
   비활성화된 채로 phase 1 → phase 2에서 워커를 재시작하면 발생한다.
-- 대응: `schedule_executor_main.py`의 `_placement_signature` /
+- 대응: `boundguard.py`의 `_placement_signature` /
   `_next_transition_is_inplace` 코드가 살아있는지 확인. `_run_next` 로그에
   `Mode 0: same placement combination_initial -> combination_overload; applying
   infps in-place (no restart)` 메시지가 출력되어야 정상.

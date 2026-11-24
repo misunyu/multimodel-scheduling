@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 
 
 def reap_lingering_executors(cooldown_sec: float = 5.0) -> None:
-    for patt in ("schedule_executor_main.py", "headless_inference_worker.py"):
+    for patt in ("boundguard.py", "headless_inference_worker.py"):
         subprocess.run(["pkill", "-9", "-f", patt], check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(cooldown_sec)
@@ -38,7 +38,7 @@ from qos_recovery_validation import (
 
 PYTHON = os.path.join(PROJECT_DIR, ".venv", "bin", "python3")
 if not os.path.exists(PYTHON): PYTHON = sys.executable
-EXECUTOR = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
+EXECUTOR = os.path.join(PROJECT_DIR, "boundguard.py")
 SCHEDULE = os.path.join(PROJECT_DIR, "tests", "ml_misprediction_rtvy_schedule.yaml")
 RESULTS  = os.path.join(PROJECT_DIR, "results")
 OUT_PDF  = os.path.join(RESULTS, "ml_misprediction_alternative.pdf")

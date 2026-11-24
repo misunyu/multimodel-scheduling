@@ -29,7 +29,7 @@ python scripts/bounded_recovery_validation.py --from-json results/bounded_sweep/
 
 The sweep driver automatically:
 - launches background ONNX workers per scenario,
-- runs `schedule_executor_main.py` against the 4-view schedule with
+- runs `boundguard.py` against the 4-view schedule with
   mode 0 (stop-and-restart),
 - stops background workers,
 - parses each per-run CSV through the same windowed-V(t) helpers as
@@ -78,7 +78,7 @@ Three phases (combo names are referenced by all scripts):
 1. `combination_initial`  — all four view models on CPU at low input
    rates. V(t) ≈ 0.07.
 2. `combination_overload` — same models, **same placement**. The
-   schedule_executor_main same-placement detection performs an in-place
+   boundguard same-placement detection performs an in-place
    `infps` swap (no worker restart). V(t) climbs above ε.
 3. `combination_offload`  — all four view models moved to GPU. The
    stop-and-restart between phase 2 and phase 3 produces the cold-start

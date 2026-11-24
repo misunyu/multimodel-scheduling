@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-# Runs schedule_executor_main.py sequentially for each YAML file under the given directory (default: tests/) using --schedule option.
+# Runs boundguard.py sequentially for each YAML file under the given directory (default: tests/) using --schedule option.
 # After each run completes, forcibly ensures the application is fully terminated before proceeding.
 # Usage: ./run_tests_schedules.sh [--timeout SECONDS] [SCHEDULE_DIR]
 # Notes:
 # - Iterates over SCHEDULE_DIR/*.yaml in sorted order (defaults to tests/ under project root).
-# - Uses schedule_executor_main.sh if present (to keep consistent invocation), otherwise calls python directly.
-# - After each run, kills any lingering schedule_executor_main.py processes and waits a bit to ensure clean shutdown.
+# - Uses boundguard.sh if present (to keep consistent invocation), otherwise calls python directly.
+# - After each run, kills any lingering boundguard.py processes and waits a bit to ensure clean shutdown.
 
 set -euo pipefail
 
@@ -85,18 +85,18 @@ invoke_one() {
   echo "Running schedule with file: $schedule_file"
   echo "Start: $(date '+%Y-%m-%d %H:%M:%S')"
 
-  if [[ -x "$ROOT_DIR/schedule_executor_main.sh" ]]; then
+  if [[ -x "$ROOT_DIR/boundguard.sh" ]]; then
     if (( TIMEOUT_SECS > 0 )); then
-      timeout "$TIMEOUT_SECS" bash -c '"$0" -schedule "$1" --duration 30 --auto_start_all' "$ROOT_DIR/schedule_executor_main.sh" "$schedule_file"
+      timeout "$TIMEOUT_SECS" bash -c '"$0" -schedule "$1" --duration 30 --auto_start_all' "$ROOT_DIR/boundguard.sh" "$schedule_file"
     else
-      "$ROOT_DIR/schedule_executor_main.sh" -schedule "$schedule_file" --duration 10 --auto_start_all
+      "$ROOT_DIR/boundguard.sh" -schedule "$schedule_file" --duration 10 --auto_start_all
     fi
   else
     # Direct python invocation without sudo
     if (( TIMEOUT_SECS > 0 )); then
-      timeout "$TIMEOUT_SECS" "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 10 --auto_start_all
+      timeout "$TIMEOUT_SECS" "$PY" "$ROOT_DIR/boundguard.py" --schedule "$schedule_file" --duration 10 --auto_start_all
     else
-      "$PY" "$ROOT_DIR/schedule_executor_main.py" --schedule "$schedule_file" --duration 10 --auto_start_all
+      "$PY" "$ROOT_DIR/boundguard.py" --schedule "$schedule_file" --duration 10 --auto_start_all
     fi
   fi
 
@@ -152,8 +152,8 @@ wait_for_results_file() {
 
 force_cleanup() {
   echo "Ensuring application fully terminated..."
-  # Kill python processes running schedule_executor_main.py (current user)
-  pkill -f -u "$USER" "schedule_executor_main.py" >/dev/null 2>&1 || true
+  # Kill python processes running boundguard.py (current user)
+  pkill -f -u "$USER" "boundguard.py" >/dev/null 2>&1 || true
   # If the helper shell script remains, nothing to kill explicitly beyond above.
   # Give the system a moment to release resources
   sleep 2

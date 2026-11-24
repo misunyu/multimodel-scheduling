@@ -17,7 +17,7 @@ To reproduce the raw metrics (CSV), the following commands were used:
 
 ```bash
 # Mode 1: Adaptive Hot-swap (Static Limitation)
-python3 schedule_executor_main.py \
+python3 boundguard.py \
     --schedule tests/model_schedules_test.yaml \
     --duration 30 \
     --adaptive-mode 1 \
@@ -25,7 +25,7 @@ python3 schedule_executor_main.py \
     --auto_start_all
 
 # Mode 2: BoundGuard (Rollback Recovery)
-python3 schedule_executor_main.py \
+python3 boundguard.py \
     --schedule tests/model_schedules_test.yaml \
     --duration 30 \
     --adaptive-mode 2 \

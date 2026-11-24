@@ -198,7 +198,7 @@ def _assignment_to_schedule(assignment: dict, infps_map: dict, combo_name: str) 
 class ReactiveDeployManager:
     """Mode 2 deploy manager: adaptive hot-swap + reactive rollback/fallback.
 
-    Usage (from unified_viewer.py or schedule_executor_main.py):
+    Usage (from unified_viewer.py or boundguard.py):
         mgr = ReactiveDeployManager(viewer)
         mgr.execute(schedule_file, combination_name,
                      prev_combo_name=..., prev_model_set=...)

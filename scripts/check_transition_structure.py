@@ -41,7 +41,7 @@ BENIGN = {
     "adaptive_deploy.py": "queue-depth comment ('everything fits')",
     "runtime/bg_entry.py": "dummy-frame comment",
     "runtime/llm_engine.py": "LLM prompt text",
-    "best_deploy_finder_executor.py": "'insufficient score history' log",
+    "deploy_recovery_main.py": "'insufficient score history' log",
     "unified_viewer.py": "'insufficient data' trigger status",
     "scripts/run_bounded_recovery_sweep.py": "'insufficient data' docstring",
     "fig/plot_overhead_v11.py": "axis margin comment",

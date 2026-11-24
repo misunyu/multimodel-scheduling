@@ -319,7 +319,7 @@ class UnifiedViewer(QMainWindow):
                     pass
             
             # When created internally, we don't show it by default to avoid unexpected InfoWindows
-            # especially for direct execution modes like best_deploy_finder_executor.
+            # especially for direct execution modes like deploy_recovery_main.
             # If the user wants to see it, they should pass an InfoWindow instance.
             try:
                 self.info_window.hide()

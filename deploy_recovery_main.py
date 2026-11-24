@@ -2,11 +2,11 @@
 """
 Best Deploy Finder & Executor
 This script launches the Best Deploy Finder GUI application, loading
-best_deploy_finder_executor.ui and showing the models folder structure
+deploy_recovery_main.ui and showing the models folder structure
 in the model_tree_view. Top-level folders under the root are checkable.
 
 Usage:
-    python best_deploy_finder_executor.py [--models-root MODELS_DIR]
+    python deploy_recovery_main.py [--models-root MODELS_DIR]
 """
 
 import os
@@ -21,7 +21,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QDialog, QLabel, QSpinBox, QWidget, QHBoxLayout, QGridLayout, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem, QLineEdit
 
 from schedule_generator.file_manager import FileManager
-from schedule_executor_main import ScheduleExecutor, InfoWindow
+from boundguard import ScheduleExecutor, InfoWindow
 from unified_viewer import UnifiedViewer
 
 # Local modules
@@ -100,7 +100,7 @@ def _infer_model_prefix(p: Path) -> Path:
 class BestDeployFinderApp(QMainWindow):
     def __init__(self, models_root=None):
         super().__init__()
-        uic.loadUi(os.path.join(os.path.dirname(__file__), 'best_deploy_finder_executor.ui'), self)
+        uic.loadUi(os.path.join(os.path.dirname(__file__), 'deploy_recovery_main.ui'), self)
 
         # Initialize business logic modules
         self.schedule_generator = ScheduleGenerator(log_callback=self.log)
@@ -1482,11 +1482,11 @@ class BestDeployFinderApp(QMainWindow):
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Best Deploy Finder GUI')
     parser.add_argument('--models-root', type=str, help='Path to the models root folder (default: ./models)')
-    # D5: this GUI's mode numbering differs from schedule_executor_main.py's
+    # D5: this GUI's mode numbering differs from boundguard.py's
     # (which also has 3=Static and 4=Stop-restart+rollback). Here: 0=off,
     # 1=Adaptive hot-swap, 2=reactive (BoundGuard). Analysis scripts that drive this
     # GUI therefore run "BoundGuard" as mode 1 or 2 depending on how they invoke it —
-    # see schedule_executor_main.MODE_METHOD_MAP for the executor-side canonical table.
+    # see boundguard.MODE_METHOD_MAP for the executor-side canonical table.
     parser.add_argument('--adaptive-mode', type=int, default=0, choices=[0, 1, 2],
                         help='Adaptive deploy mode: 0=off, 1=adaptive hot-swap, 2=reactive (default: 0)')
     return parser.parse_args()

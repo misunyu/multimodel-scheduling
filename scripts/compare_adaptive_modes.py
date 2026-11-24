@@ -51,7 +51,7 @@ REACTIVE_EXTRA_SEC = 15  # extra seconds Mode 2 gets for rollback observation
 
 
 def run_mode(mode: int, schedule: str, duration: int, csv_path: str):
-    """Run schedule_executor_main.py with ALL combos in one process.
+    """Run boundguard.py with ALL combos in one process.
 
     For Mode 0 and 1, the per-combo duration is extended by REACTIVE_EXTRA_SEC
     so that combination_2 runs as long as Mode 2's total (duration + rollback window).
@@ -70,7 +70,7 @@ def run_mode(mode: int, schedule: str, duration: int, csv_path: str):
     print(f"{'='*60}")
 
     cmd = [
-        PYTHON, os.path.join(PROJECT_DIR, "schedule_executor_main.py"),
+        PYTHON, os.path.join(PROJECT_DIR, "boundguard.py"),
         "--schedule", schedule,
         "--duration", str(effective_duration),
         "--adaptive-mode", str(mode),

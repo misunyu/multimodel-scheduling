@@ -35,7 +35,7 @@ The driver:
    `deploy_predictor_logic.DeployPredictor` with the
    `xgb_model_x3_double` prefix and `alpha=0.2`. The full ranking and
    the top pick are saved to the JSON output.
-2. Runs `schedule_executor_main.py` twice:
+2. Runs `boundguard.py` twice:
    - **mode 1** (`AdaptiveDeployManager` hot-swap) on
      `tests/ml_misprediction_mlonly_runtime.yaml` — labelled
      "Adaptive (ML-only)". The YAML contains a single combination
@@ -148,7 +148,7 @@ continuous-service behaviour the figure is meant to illustrate.
 The bounded-recovery and runtime-overhead figures still use mode 2
 because they are explicitly about the validator's behaviour.
 
-Note: a related fix was made in `schedule_executor_main.py` so the
+Note: a related fix was made in `boundguard.py` so the
 `prev_vscore` passed to mode-2 / mode-4 managers reflects the
 *terminal* V(t) of the previous combo (sampled live at the moment of
 transition) rather than the cached value from when the previous combo

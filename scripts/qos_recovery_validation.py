@@ -118,7 +118,7 @@ def run_scenario(schedule: str, baseline_dur: int, failure_dur: int,
         os.remove(csv_path)
 
     cmd = [
-        PYTHON, os.path.join(PROJECT_DIR, "schedule_executor_main.py"),
+        PYTHON, os.path.join(PROJECT_DIR, "boundguard.py"),
         "--schedule", schedule,
         "--duration", str(max(baseline_dur, failure_dur, recovery_dur)),
         "--adaptive-mode", str(mode),

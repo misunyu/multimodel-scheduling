@@ -5,7 +5,7 @@ Bounded-recovery sweep driver.
 For each workload scenario:
   1. Launch a fixed set of *background* (non-displayed) ONNX inference
      workers via scripts/headless_inference_worker.py.
-  2. Run the qos_recovery 3-phase scenario through schedule_executor_main
+  2. Run the qos_recovery 3-phase scenario through boundguard
      with the four-view schedule (mnasnet/resnet50/resnext50/yolov4).
   3. Parse the resulting CSV, extract t_0, t_detect, t_recover, and
      compute T_detect, T_post, T_total.
@@ -48,7 +48,7 @@ PYTHON = os.path.join(PROJECT_DIR, ".venv", "bin", "python3")
 if not os.path.exists(PYTHON):
     PYTHON = sys.executable
 
-EXECUTOR = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
+EXECUTOR = os.path.join(PROJECT_DIR, "boundguard.py")
 WORKER   = os.path.join(SCRIPT_DIR, "headless_inference_worker.py")
 SCHEDULE = os.path.join(PROJECT_DIR, "tests", "bounded_recovery_views_schedule.yaml")
 

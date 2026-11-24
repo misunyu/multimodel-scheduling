@@ -326,7 +326,7 @@ def main():
             "Execution (scripts/compare_adaptive_modes.py):",
             "  - Each mode runs in an independent process (subprocess)",
             "  - Process fully terminates before the next mode starts",
-            "  - schedule_executor_main.py --auto_start_all --adaptive-mode M",
+            "  - boundguard.py --auto_start_all --adaptive-mode M",
             "  - Headless rendering (QT_QPA_PLATFORM=offscreen)",
             "  - Metrics CSV records 1 row/second after warmup",
             "  - Transition artifacts (FPS=0 ticks) are filtered out",

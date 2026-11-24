@@ -16,10 +16,10 @@ pip install -r requirements.txt
 python schedule_generator_main.py [--target-device target_device.yaml]
 
 # Run the deploy finder/executor (end-to-end: generate schedules, predict best, execute)
-python best_deploy_finder_executor.py [--models-root ./models]
+python deploy_recovery_main.py [--models-root ./models]
 
 # Run schedule executor on a single YAML schedule
-python schedule_executor_main.py --schedule <schedule.yaml> --duration 30 --auto_start_all
+python boundguard.py --schedule <schedule.yaml> --duration 30 --auto_start_all
 
 # Run all test schedules sequentially (each YAML in tests/ directory)
 ./run_tests_schedules.sh [--timeout SECONDS] [SCHEDULE_DIR]
@@ -45,9 +45,9 @@ schema, the two wiring traps, and the open β question.
 
 | Module | Role |
 |--------|------|
-| `best_deploy_finder_executor.py` | Main app: integrates generation, prediction, and execution in one GUI |
+| `deploy_recovery_main.py` | Main app: integrates generation, prediction, and execution in one GUI |
 | `unified_viewer.py` | Execution viewer: coordinates model processors, view handlers, and live metrics |
-| `schedule_executor_main.py` | Headless sequential executor: loads YAML, runs each combination via `UnifiedViewer` |
+| `boundguard.py` | Headless sequential executor: loads YAML, runs each combination via `UnifiedViewer` |
 | `schedule_generator_app.py` | GUI for ONNX model profiling (CPU/NPU latency) and schedule YAML generation |
 | `model_processors.py` | Per-device inference functions (`run_yolo_gpu_process`, `run_resnet_cpu_process`, etc.) |
 | `view_handlers.py` | Display handlers (`YoloViewHandler`, `ResNetViewHandler`) with FPS/latency tracking |

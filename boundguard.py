@@ -21,8 +21,8 @@ from PyQt5.QtCore import QTimer, Qt
 from unified_viewer import UnifiedViewer, InfoWindow
 
 
-# D5: single mode->method mapping for THIS entry point (schedule_executor_main).
-# best_deploy_finder_executor.py uses a different, smaller numbering (see its header
+# D5: single mode->method mapping for THIS entry point (boundguard).
+# deploy_recovery_main.py uses a different, smaller numbering (see its header
 # and the note on ScheduleExecutor.adaptive_mode). Reused by docs/runbooks.
 MODE_METHOD_MAP = {
     0: "Stop-and-restart",
@@ -56,7 +56,7 @@ class ScheduleExecutor:
         #   2 = reactive == BoundGuard (validation window + rollback/fallback)
         #   3 = Static
         #   4 = Stop-and-restart + rollback (baseline)
-        # NOTE (D5): this numbering is NOT shared by best_deploy_finder_executor.py,
+        # NOTE (D5): this numbering is NOT shared by deploy_recovery_main.py,
         # whose GUI --adaptive-mode uses {0,1,2} with 1=Adaptive, 2=reactive and no
         # static/mode-4. Some analysis scripts therefore drive "BoundGuard" as mode 1
         # (the hot-swap manager) rather than mode 2. Always read the mapping for the

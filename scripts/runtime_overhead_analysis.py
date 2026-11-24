@@ -58,7 +58,7 @@ PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
 OVERHEAD_DIR = os.path.join(RESULTS_DIR, "runtime_overhead")
 SCHEDULE = os.path.join(PROJECT_DIR, "tests", "steady_state_views_schedule.yaml")
-EXECUTOR = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
+EXECUTOR = os.path.join(PROJECT_DIR, "boundguard.py")
 PYTHON = os.path.join(PROJECT_DIR, ".venv", "bin", "python3")
 if not os.path.exists(PYTHON):
     PYTHON = sys.executable
@@ -77,7 +77,7 @@ def _now_iso():
 
 
 def run_one(mode_int, csv_path, duration_s, sample_period=0.5):
-    """Run schedule_executor_main once and sample the process tree CPU."""
+    """Run boundguard once and sample the process tree CPU."""
     if os.path.exists(csv_path):
         os.remove(csv_path)
     cmd = [
@@ -287,10 +287,10 @@ def _reaggregate_drop_first(per_mode):
 
 
 def _reap(settle_sec=6.0):
-    """Kill any lingering schedule_executor_main.py / worker processes so
+    """Kill any lingering boundguard.py / worker processes so
     the next mode starts from a clean slate (no residual CUDA contexts,
     ONNX sessions, or Qt windows)."""
-    for patt in ("schedule_executor_main.py",
+    for patt in ("boundguard.py",
                  "headless_inference_worker.py"):
         subprocess.run(["pkill", "-9", "-f", patt], check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

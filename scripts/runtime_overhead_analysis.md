@@ -24,7 +24,7 @@ python scripts/runtime_overhead_analysis.py --duration 30 --reps 3
 python scripts/runtime_overhead_analysis.py --replot
 ```
 
-The script wraps `schedule_executor_main.py`, captures both the
+The script wraps `boundguard.py`, captures both the
 executor's metrics CSV and the process tree's CPU usage via psutil
 (sampled every 0.5 s), and aggregates across repetitions.
 
@@ -88,7 +88,7 @@ practice, very little).
 For each `(mode, rep)` pair the runner:
 
 1. Removes any leftover CSV at the target path.
-2. Spawns `schedule_executor_main.py` as a subprocess with
+2. Spawns `boundguard.py` as a subprocess with
    `QT_QPA_PLATFORM=offscreen` and `--auto_start_all`.
 3. Polls the process tree CPU and RSS via psutil every 0.5 s.
    The first 3 s of samples are dropped as warm-up.

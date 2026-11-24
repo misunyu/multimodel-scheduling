@@ -81,7 +81,7 @@ xgb_alpha_trained_sweep, xgb_best_selector, recompute_comparison_baselines}.py`.
 ## 3. 배선에서 잡은 함정 두 가지
 
 **(a) 아티팩트 디렉터리 분리** — GUI는 예측기에 **디렉터리 경로**를 넘긴다
-(`best_deploy_finder_executor.py`가 `pred_model = base_dir`로 설정). 두 플랫폼 모델을
+(`deploy_recovery_main.py`가 `pred_model = base_dir`로 설정). 두 플랫폼 모델을
 `artifacts/` 한 곳에 두면 prefix glob이 알파벳순으로 `deploy_cpu_gpu`를 잡아, NPU를
 선택해도 GPU 모델로 조용히 예측한다. 그래서 `artifacts/cpu_npu`와 `artifacts/cpu_gpu`로
 분리했다. **이 구조를 평탄화하지 말 것.**

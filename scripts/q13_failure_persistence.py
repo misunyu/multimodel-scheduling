@@ -58,7 +58,7 @@ from qos_recovery_validation import (                        # noqa: E402
 PYTHON   = os.path.join(PROJECT_DIR, ".venv", "bin", "python3")
 if not os.path.exists(PYTHON):
     PYTHON = sys.executable
-EXECUTOR = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
+EXECUTOR = os.path.join(PROJECT_DIR, "boundguard.py")
 WORKER   = os.path.join(SCRIPT_DIR, "headless_inference_worker.py")
 XGB_PREFIX = os.path.join(PROJECT_DIR, "xgboost_model", "artifacts", "gpu",
                           "xgb_model_x3_double")
@@ -136,7 +136,7 @@ METHOD_HATCH = {
 
 
 def reap():
-    for patt in ("schedule_executor_main.py", "headless_inference_worker.py"):
+    for patt in ("boundguard.py", "headless_inference_worker.py"):
         subprocess.run(["pkill", "-9", "-f", patt], check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(4.0)

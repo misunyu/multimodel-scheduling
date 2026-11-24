@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PYTHON = os.path.join(PROJECT, ".venv", "bin", "python3")
-EXECUTOR = os.path.join(PROJECT, "schedule_executor_main.py")
+EXECUTOR = os.path.join(PROJECT, "boundguard.py")
 RUNS = os.path.join(PROJECT, "runs")
 
 

@@ -53,7 +53,7 @@ PYTHON = os.path.join(PROJECT_DIR, ".venv", "bin", "python3")
 if not os.path.exists(PYTHON):
     PYTHON = sys.executable
 
-EXECUTOR   = os.path.join(PROJECT_DIR, "schedule_executor_main.py")
+EXECUTOR   = os.path.join(PROJECT_DIR, "boundguard.py")
 XGB_PREFIX = os.path.join(PROJECT_DIR, "xgboost_model", "artifacts", "gpu",
                            "xgb_model_x3_double")
 ML_YAML    = os.path.join(PROJECT_DIR, "tests", "ml_misprediction_runtime_ml.yaml")
